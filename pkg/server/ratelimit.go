@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,14 +19,24 @@ type clientRateLimiter struct {
 	lastSeen  atomic.Int64
 }
 
-func (s *Server) startCleanupStaleLimiters() {
-	// Start background goroutine to clean up stale limiters
-	go func() {
-		for {
-			time.Sleep(time.Minute)
-			s.cleanupStaleLimiters()
-		}
-	}()
+// canonicalizeLimiterKey returns the /64 prefix for IPv6 addresses,
+// canonical IPv4 string for IPv4/IPv4-mapped addresses, or key unchanged for user keys.
+func canonicalizeLimiterKey(key string) string {
+	if strings.HasPrefix(key, "user:") {
+		return key
+	}
+	addr, err := netip.ParseAddr(key)
+	if err != nil {
+		return key
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	if prefix, err := addr.Prefix(64); err == nil {
+		return prefix.Masked().String()
+	}
+	return addr.String()
 }
 
 func (s *Server) cleanupStaleLimiters() {
@@ -39,9 +50,11 @@ func (s *Server) cleanupStaleLimiters() {
 	})
 }
 
-func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
+func (s *Server) getClientLimiter(rawKey string) *clientRateLimiter {
+	key := canonicalizeLimiterKey(rawKey)
+
 	// Optimistic load
-	if val, ok := s.clientLimiters.Load(ip); ok {
+	if val, ok := s.clientLimiters.Load(key); ok {
 		limiter := val.(*clientRateLimiter)
 		limiter.lastSeen.Store(time.Now().UnixNano())
 		return limiter
@@ -55,7 +68,7 @@ func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 	newLimiter.lastSeen.Store(time.Now().UnixNano())
 
 	// Try to store, but handle the case where another goroutine beat us to it
-	actual, loaded := s.clientLimiters.LoadOrStore(ip, newLimiter)
+	actual, loaded := s.clientLimiters.LoadOrStore(key, newLimiter)
 	if loaded {
 		limiter := actual.(*clientRateLimiter)
 		limiter.lastSeen.Store(time.Now().UnixNano())
@@ -195,8 +208,8 @@ func getClientIP(r *http.Request) string {
 			ip := net.ParseIP(ipStr)
 			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
 				remoteIP = ipStr
-				if behindGCPLB || behindCloudRun {
-					// we trust the last IP since it was set by Google/Cloud Run
+				if (behindGCPLB || behindCloudRun) && i == len(ips)-1 {
+					// we trust only the exact rightmost hop appended by Google/Cloud Run
 					trustedRemoteIP = ipStr
 				}
 				found = true
@@ -209,11 +222,11 @@ func getClientIP(r *http.Request) string {
 	}
 
 	// Only trust the CF-Connecting-IP header if the direct connecting IP (trustedRemoteIP)
-	// is identified as a Cloudflare proxy IP.
-	if isCloudflareIP(trustedRemoteIP) {
-		cfIP := r.Header.Get("CF-Connecting-IP")
-		if cfIP != "" {
-			return strings.TrimSpace(cfIP)
+	// is identified as a Cloudflare proxy IP and CF-Connecting-IP is a single valid IP.
+	if isCloudflareIP(trustedRemoteIP) && len(r.Header.Values("CF-Connecting-IP")) == 1 {
+		cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))
+		if net.ParseIP(cfIP) != nil {
+			return cfIP
 		}
 	}
 
@@ -223,6 +236,12 @@ func getClientIP(r *http.Request) string {
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+
+		if xffHeaders := r.Header.Values("X-Forwarded-For"); len(xffHeaders) > 1 {
+			log.Ctx(ctx).ErrorContext(ctx, "rejected request with multiple X-Forwarded-For headers", slog.Int("headerCount", len(xffHeaders)), slog.String("remoteAddr", r.RemoteAddr), slog.String("path", r.URL.Path))
+			writeJSONError(w, "invalid X-Forwarded-For header", http.StatusBadRequest)
+			return
+		}
 
 		ip := getClientIP(r)
 		limiterKey := ip
@@ -257,6 +276,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			r.URL.Path == "/api/tesla/register" ||
 			r.URL.Path == "/api/ess/stage" ||
 			r.URL.Path == "/api/apps/new" ||
+			r.URL.Path == "/api/oauth/client" ||
 			r.URL.Path == "/api/oauth/approve" ||
 			r.URL.Path == "/oauth/register" ||
 			r.URL.Path == "/oauth/token"

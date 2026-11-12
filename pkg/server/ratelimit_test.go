@@ -535,7 +535,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		}
 		handler := s.rateLimitMiddleware(dummyHandler)
 
-		for idx, path := range []string{"/api/apps/new", "/api/oauth/approve", "/oauth/register", "/oauth/token"} {
+		for idx, path := range []string{"/api/apps/new", "/api/oauth/client", "/api/oauth/approve", "/oauth/register", "/oauth/token"} {
 			ip := fmt.Sprintf("198.51.100.%d:12345", 60+idx)
 
 			req1 := httptest.NewRequest("POST", path, nil)
@@ -550,6 +550,46 @@ func TestRateLimitMiddleware(t *testing.T) {
 			handler.ServeHTTP(w2, req2)
 			assert.Equal(t, http.StatusTooManyRequests, w2.Code, "second request to %s should hit sensitive limit", path)
 		}
+	})
+
+	t.Run("Rejects Multiple X-Forwarded-For Headers", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/api/settings", nil)
+		req.Header.Add("X-Forwarded-For", "203.0.113.1")
+		req.Header.Add("X-Forwarded-For", "198.51.100.1")
+		req.RemoteAddr = "127.0.0.1:8080"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("IPv6 Same /64 Prefix Shares Limiter", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 1),
+			generalBurst:       1,
+			sensitiveRateLimit: rate.Every(time.Minute / 1),
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req1 := httptest.NewRequest("GET", "/api/settings", nil)
+		req1.RemoteAddr = "[2606:4700:4700:1234::1]:12345"
+		w1 := httptest.NewRecorder()
+		handler.ServeHTTP(w1, req1)
+		assert.Equal(t, http.StatusOK, w1.Code)
+
+		req2 := httptest.NewRequest("GET", "/api/settings", nil)
+		req2.RemoteAddr = "[2606:4700:4700:1234:abcd:ef01:2345:6789]:12345"
+		w2 := httptest.NewRecorder()
+		handler.ServeHTTP(w2, req2)
+		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
 	})
 }
 
@@ -703,5 +743,37 @@ func TestGetClientIP(t *testing.T) {
 
 		ip := getClientIP(req)
 		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("Invalid CF-Connecting-IP ignored when RemoteAddr is a Cloudflare IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("CF-Connecting-IP", "not-a-valid-ip")
+		req.Header.Set("X-Forwarded-For", "198.51.100.10")
+		req.RemoteAddr = "103.21.244.5:8080" // Cloudflare IP
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+}
+
+func TestCleanupStaleLimiters(t *testing.T) {
+	t.Run("EvictsStaleClientLimiters", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+
+		staleLimiter := s.getClientLimiter("198.51.100.1")
+		staleLimiter.lastSeen.Store(time.Now().Add(-15 * time.Minute).UnixNano())
+		_ = s.getClientLimiter("198.51.100.2")
+
+		s.cleanupStaleLimiters()
+
+		_, staleOK := s.clientLimiters.Load("198.51.100.1")
+		assert.False(t, staleOK)
+		_, freshOK := s.clientLimiters.Load("198.51.100.2")
+		assert.True(t, freshOK)
 	})
 }

@@ -488,7 +488,7 @@ function AppContent() {
                             </Route>
                             <Route path="/oauth/authorize">
                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    <OAuthAuthorizePage sites={effectiveSites} selectedSiteID={effectiveSiteID} />
+                                    <OAuthAuthorizePage sites={sites} selectedSiteID={selectedSiteID} />
                                 </ProtectedRoute>
                             </Route>
 

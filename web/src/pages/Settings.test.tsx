@@ -2962,12 +2962,13 @@ describe('App & Settings', () => {
                 features: { connectedApps: true },
             });
             (api.fetchApps as any).mockResolvedValue([
-                { id: 'app-1', siteID: 'site1', type: 2, name: 'Claude Desktop', tsCreated: '2026-01-01T00:00:00Z' },
+                { id: 'app-1', siteID: 'site1', type: 2, name: 'Claude', clientDomain: 'claude.ai', tsCreated: '2026-01-01T00:00:00Z' },
             ]);
 
             await navigateToSettings();
             expect(await screen.findByTestId('connected-apps-section')).toBeInTheDocument();
-            expect(screen.getByText('Claude Desktop')).toBeInTheDocument();
+            expect(screen.getByText('Claude')).toBeInTheDocument();
+            expect(screen.getByText('claude.ai')).toBeInTheDocument();
             expect(screen.getByText('OAuth')).toBeInTheDocument();
         });
 

@@ -42,12 +42,13 @@ const (
 
 // UserApp represents a site-scoped API key or OAuth-connected application belonging to a user.
 type UserApp struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Type      AppType   `json:"type"`
-	SiteID    string    `json:"siteID"`
-	TSCreated time.Time `json:"tsCreated"`
-	TokenHash string    `json:"tokenHash,omitempty"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Type         AppType   `json:"type"`
+	SiteID       string    `json:"siteID"`
+	ClientDomain string    `json:"clientDomain,omitempty"`
+	TSCreated    time.Time `json:"tsCreated"`
+	TokenHash    string    `json:"tokenHash,omitempty"`
 
 	// Pending OAuth authorization code fields (cleared atomically upon token exchange).
 	PendingCodeHash  string    `json:"pendingCodeHash,omitempty"`
@@ -58,21 +59,23 @@ type UserApp struct {
 
 // PublicUserApp represents the public-facing fields of a UserApp returned by the API.
 type PublicUserApp struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Type      AppType   `json:"type"`
-	SiteID    string    `json:"siteID"`
-	TSCreated time.Time `json:"tsCreated"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Type         AppType   `json:"type"`
+	SiteID       string    `json:"siteID"`
+	ClientDomain string    `json:"clientDomain,omitempty"`
+	TSCreated    time.Time `json:"tsCreated"`
 }
 
 // Public returns a PublicUserApp containing only the fields safe to expose to the frontend.
 func (a UserApp) Public() PublicUserApp {
 	return PublicUserApp{
-		ID:        a.ID,
-		Name:      a.Name,
-		Type:      a.Type,
-		SiteID:    a.SiteID,
-		TSCreated: a.TSCreated,
+		ID:           a.ID,
+		Name:         a.Name,
+		Type:         a.Type,
+		SiteID:       a.SiteID,
+		ClientDomain: a.ClientDomain,
+		TSCreated:    a.TSCreated,
 	}
 }
 

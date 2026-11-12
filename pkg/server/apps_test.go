@@ -284,6 +284,124 @@ func TestHandleNewApp(t *testing.T) {
 		assert.Equal(t, storedTokenHash, sha256Hex(tokenData.Secret))
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("RejectsMultiSiteAdminWithoutDirectSitePermission", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		srv.adminEmails = []string{"admin@example.com"}
+
+		sessionToken, err := srv.createSessionToken("admin-1", "admin@example.com", "sec-admin", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "admin-1").Return(types.User{
+			ID:            "admin-1",
+			Email:         "admin@example.com",
+			SessionSecret: "sec-admin",
+			Sites:         []types.UserSite{{ID: "admin-site", Name: "Admin Home"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "customer-site").Return(types.Site{
+			ID:          "customer-site",
+			Permissions: []types.SitePermissions{{UserID: "customer-1"}},
+		}, nil).Once()
+
+		handler := srv.setupHandler()
+		body := `{"siteID":"customer-site","name":"Confused Deputy Key"}`
+		reqNew := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(body))
+		reqNew.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wNew := httptest.NewRecorder()
+		handler.ServeHTTP(wNew, reqNew)
+		assert.Equal(t, http.StatusForbidden, wNew.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("AllowsMultiSiteAdminWithDirectSitePermission", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		srv.adminEmails = []string{"admin@example.com"}
+
+		sessionToken, err := srv.createSessionToken("admin-1", "admin@example.com", "sec-admin", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "admin-1").Return(types.User{
+			ID:            "admin-1",
+			Email:         "admin@example.com",
+			SessionSecret: "sec-admin",
+			Sites:         []types.UserSite{{ID: "admin-site", Name: "Admin Home"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "admin-site").Return(types.Site{
+			ID:          "admin-site",
+			Permissions: []types.SitePermissions{{UserID: "admin-1"}},
+		}, nil).Once()
+		mockS.On("AddUserApp", mock.Anything, "admin-1", mock.MatchedBy(func(app types.UserApp) bool {
+			return app.Name == "Admin Key" && app.SiteID == "admin-site" && app.Type == types.AppTypeAPIKey
+		})).Return(nil).Once()
+
+		handler := srv.setupHandler()
+		body := `{"siteID":"admin-site","name":"Admin Key"}`
+		reqNew := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(body))
+		reqNew.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wNew := httptest.NewRecorder()
+		handler.ServeHTTP(wNew, reqNew)
+		require.Equal(t, http.StatusOK, wNew.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RejectsInvalidBodyNameAndMaxApps", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+
+		sessionToken, err := srv.createSessionToken("user-1", "user1@example.com", "sec-1", time.Hour)
+		require.NoError(t, err)
+
+		maxedApps := make([]types.UserApp, maxUserApps)
+		for i := range maxedApps {
+			maxedApps[i] = types.UserApp{
+				ID:        "app-" + string(rune('a'+i)),
+				Name:      "Existing App",
+				Type:      types.AppTypeAPIKey,
+				SiteID:    "site-1",
+				TSCreated: now,
+			}
+		}
+
+		mockS.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:            "user-1",
+			Email:         "user1@example.com",
+			SessionSecret: "sec-1",
+			Sites:         []types.UserSite{{ID: "site-1", Name: "Home"}},
+			Apps:          maxedApps,
+		}, nil).Times(3)
+		mockS.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "user-1"}},
+		}, nil).Times(3)
+
+		handler := srv.setupHandler()
+
+		// 1. Invalid JSON field type for handleNewApp decoder
+		reqBadJSON := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(`{"siteID":"site-1","name":123}`))
+		reqBadJSON.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wBadJSON := httptest.NewRecorder()
+		handler.ServeHTTP(wBadJSON, reqBadJSON)
+		assert.Equal(t, http.StatusBadRequest, wBadJSON.Code)
+
+		// 2. Empty / whitespace app name
+		reqEmptyName := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(`{"siteID":"site-1","name":"   "}`))
+		reqEmptyName.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wEmptyName := httptest.NewRecorder()
+		handler.ServeHTTP(wEmptyName, reqEmptyName)
+		assert.Equal(t, http.StatusBadRequest, wEmptyName.Code)
+
+		// 3. Max apps limit reached
+		reqMax := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(`{"siteID":"site-1","name":"One Too Many"}`))
+		reqMax.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wMax := httptest.NewRecorder()
+		handler.ServeHTTP(wMax, reqMax)
+		assert.Equal(t, http.StatusBadRequest, wMax.Code)
+		assert.Contains(t, wMax.Body.String(), "maximum number of apps reached")
+
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleRevokeApp(t *testing.T) {

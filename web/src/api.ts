@@ -1009,6 +1009,7 @@ export type AppType = typeof AppType[keyof typeof AppType];
 export interface UserApp {
     id: string;
     name: string;
+    clientDomain?: string;
     type: AppType;
     siteID: string;
     tsCreated: string;
@@ -1062,6 +1063,8 @@ export const revokeApp = async (siteID: string, id: string): Promise<void> => {
 export interface OAuthClientInfo {
     clientName: string;
     redirectURI: string;
+    clientDomain?: string;
+    verified: boolean;
 }
 
 export const fetchOAuthClientInfo = async (params: {

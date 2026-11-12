@@ -30,6 +30,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/raterudder/raterudder/web"
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 )
 
@@ -85,6 +86,9 @@ type Server struct {
 	showHidden            bool
 
 	clientLimiters     sync.Map
+	cimdCache          sync.Map
+	cimdFetchGroup     singleflight.Group
+	cimdHTTPClient     *http.Client
 	generalRateLimit   rate.Limit
 	generalBurst       int
 	sensitiveRateLimit rate.Limit
@@ -271,10 +275,24 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		srv.generalBurst = *generalRateLimitPerMin
 		srv.sensitiveRateLimit = rate.Every(time.Minute / time.Duration(*sensitiveRateLimitPerMin))
 		srv.sensitiveBurst = *sensitiveRateLimitPerMin
-		srv.startCleanupStaleLimiters()
+		srv.startCleanupStaleMapKeys()
 	})
 
 	return srv
+}
+
+func (s *Server) startCleanupStaleMapKeys() {
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			s.cleanupStaleMapKeys()
+		}
+	}()
+}
+
+func (s *Server) cleanupStaleMapKeys() {
+	s.cleanupStaleLimiters()
+	s.cleanupExpiredCIMDCache()
 }
 
 func (s *Server) setupHandler() http.Handler {

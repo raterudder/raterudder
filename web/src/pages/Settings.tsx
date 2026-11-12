@@ -3432,6 +3432,11 @@ const Settings = ({
                                             >
                                                 {app.type === AppType.OAuth ? 'OAuth' : 'API Key'}
                                             </span>
+                                            {app.clientDomain && (
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                                    {app.clientDomain}
+                                                </span>
+                                            )}
                                         </div>
                                         {app.tsCreated && (
                                             <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>

@@ -225,6 +225,26 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) hasDirectSitePermission(r *http.Request) bool {
+	if s.singleSite || s.bypassAuth {
+		return true
+	}
+	user := s.getUser(r)
+	if user.ID == "" {
+		return false
+	}
+	site, ok := r.Context().Value(siteContextKey).(types.Site)
+	if !ok {
+		return false
+	}
+	for _, p := range site.Permissions {
+		if p.UserID == user.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleNewApp(w http.ResponseWriter, r *http.Request) {
 	if len(s.appsEncryptionKey) != 32 {
 		writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
@@ -238,23 +258,31 @@ func (s *Server) handleNewApp(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !s.hasDirectSitePermission(r) {
+		log.Ctx(ctx).WarnContext(ctx, "new app rejected: user lacks direct site permission", slog.String("userID", user.ID), slog.String("siteID", siteID))
+		writeJSONError(w, "site access denied", http.StatusForbidden)
+		return
+	}
 
 	var req struct {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "new app rejected: invalid request body", slog.String("userID", user.ID), slog.String("siteID", siteID), slog.Any("error", err))
 		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	name, err := validateAppName(req.Name)
 	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "new app rejected: invalid app name", slog.String("userID", user.ID), slog.String("siteID", siteID), slog.Any("error", err))
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	_, remainingCount := s.cleanExpiredPendingApps(ctx, user, siteID)
 	if remainingCount >= maxUserApps {
+		log.Ctx(ctx).WarnContext(ctx, "new app rejected: maximum number of apps reached", slog.String("userID", user.ID), slog.String("siteID", siteID))
 		writeJSONError(w, "maximum number of apps reached", http.StatusBadRequest)
 		return
 	}
