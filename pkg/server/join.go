@@ -195,9 +195,10 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 		// Create the user with this site.
 		newUser := types.User{
-			ID:            userID,
-			Email:         email,
-			SessionSecret: sessionSecret,
+			ID:              userID,
+			Email:           email,
+			SessionSecret:   sessionSecret,
+			TSTermsAccepted: s.now().UTC(),
 			Sites: []types.UserSite{
 				{
 					ID:   req.JoinSiteID,
@@ -245,6 +246,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !hasSite || nameChanged {
+			existingUser.TSTermsAccepted = s.now().UTC()
 			if err := s.storage.UpdateUser(ctx, existingUser); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "join: failed to update user", slog.Any("error", err))
 				writeJSONError(w, "failed to join site", http.StatusInternalServerError)

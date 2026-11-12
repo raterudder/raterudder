@@ -34,6 +34,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/auth/login":                   {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/auth/status":                  {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/auth/logout":                  {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/auth/acceptTerms":             {ignoreSiteID: true, optionalSiteID: true},
 	"/api/report/browser":               {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/join":                         {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/update":                       {isUpdatePath: true},
@@ -610,24 +611,36 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type authStatusResponse struct {
-	LoggedIn     bool              `json:"loggedIn"`
-	UserID       string            `json:"userID,omitempty"`
-	Email        string            `json:"email"`
-	AuthRequired bool              `json:"authRequired"`
-	ClientIDs    map[string]string `json:"clientIDs"`
-	Sites        []types.UserSite  `json:"sites"`
+	LoggedIn      bool              `json:"loggedIn"`
+	UserID        string            `json:"userID,omitempty"`
+	Email         string            `json:"email"`
+	AuthRequired  bool              `json:"authRequired"`
+	ClientIDs     map[string]string `json:"clientIDs"`
+	Sites         []types.UserSite  `json:"sites"`
+	TermsAccepted bool              `json:"termsAccepted"`
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	var loggedIn bool
+	var persistedUser bool
 	user := s.getUser(r)
 	if user.ID != "" {
 		loggedIn = true
+		persistedUser = true
 	} else if userToRegister, ok := r.Context().Value(userToRegisterContextKey).(types.User); ok {
 		user = userToRegister
 		loggedIn = true
 	}
 	sites := s.getAllUserSites(r)
+
+	termsAccepted := false
+	if loggedIn {
+		if s.singleSite || s.bypassAuth || !persistedUser {
+			termsAccepted = true
+		} else {
+			termsAccepted = !user.TSTermsAccepted.Before(types.CurrentTermsDate)
+		}
+	}
 
 	// Check if session token should be refreshed (once a day if > 24h duration, or once an hour if <= 24h duration)
 	if sess, ok := r.Context().Value(sessionDataContextKey).(*SessionData); ok && sess != nil {
@@ -658,14 +671,41 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := json.NewEncoder(w).Encode(authStatusResponse{
-		LoggedIn:     loggedIn,
-		UserID:       user.ID,
-		Email:        user.Email,
-		AuthRequired: len(s.oidcAudiences) > 0,
-		ClientIDs:    s.oidcAudiences,
-		Sites:        sites,
+		LoggedIn:      loggedIn,
+		UserID:        user.ID,
+		Email:         user.Email,
+		AuthRequired:  len(s.oidcAudiences) > 0,
+		ClientIDs:     s.oidcAudiences,
+		Sites:         sites,
+		TermsAccepted: termsAccepted,
 	})
 	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := s.getUser(r)
+	if user.ID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	acceptedAt := s.now().UTC()
+	if !s.singleSite && !s.bypassAuth && s.storage != nil && user.TSTermsAccepted.Before(types.CurrentTermsDate) {
+		user.TSTermsAccepted = acceptedAt
+		if err := s.storage.UpdateUser(ctx, user); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update user terms acceptance", slog.String("userID", user.ID), slog.Any("error", err))
+			writeJSONError(w, "failed to accept terms", http.StatusInternalServerError)
+			return
+		}
+		log.Ctx(ctx).InfoContext(ctx, "user accepted terms", slog.String("userID", user.ID), slog.Time("tsTermsAccepted", acceptedAt))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]any{"status": "success"}); err != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

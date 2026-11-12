@@ -311,6 +311,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	apiMux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	apiMux.HandleFunc("POST /api/auth/logout", s.handleLogout)
+	apiMux.HandleFunc("POST /api/auth/acceptTerms", s.handleAcceptTerms)
 	apiMux.HandleFunc("GET /api/forecast", s.handleForecast)
 	apiMux.HandleFunc("POST /api/join", s.handleJoin)
 	apiMux.HandleFunc("GET /api/list/utilities", s.handleListUtilities)

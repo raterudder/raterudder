@@ -1182,12 +1182,13 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.Equal(t, "new@example.com", resp.Email)
 		assert.Equal(t, "123", resp.UserID)
 		assert.Empty(t, resp.Sites)
+		assert.True(t, resp.TermsAccepted)
 		// Verify auth settings are exposed to frontend correctly
 		assert.True(t, resp.AuthRequired)
 		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
 	})
 
-	t.Run("Registered User", func(t *testing.T) {
+	t.Run("Registered User Without Accepted Terms", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/auth/status", nil)
 		user := types.User{Email: "existing@example.com", ID: "456", Sites: []types.UserSite{{ID: "site1"}}}
 		ctx := context.WithValue(req.Context(), userContextKey, user)
@@ -1206,9 +1207,58 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.Equal(t, "existing@example.com", resp.Email)
 		assert.Equal(t, "456", resp.UserID)
 		assert.Equal(t, []types.UserSite{{ID: "site1"}}, resp.Sites)
+		assert.False(t, resp.TermsAccepted)
 		// Verify auth settings are exposed to frontend correctly
 		assert.True(t, resp.AuthRequired)
 		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
+	})
+
+	t.Run("Registered User With Outdated Terms", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{
+			Email:           "existing@example.com",
+			ID:              "456",
+			Sites:           []types.UserSite{{ID: "site1"}},
+			TSTermsAccepted: types.CurrentTermsDate.Add(-24 * time.Hour),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		server.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp authStatusResponse
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.True(t, resp.LoggedIn)
+		assert.False(t, resp.TermsAccepted)
+	})
+
+	t.Run("Registered User With Current Terms Accepted", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{
+			Email:           "existing@example.com",
+			ID:              "456",
+			Sites:           []types.UserSite{{ID: "site1"}},
+			TSTermsAccepted: types.CurrentTermsDate.Add(time.Hour),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		server.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp authStatusResponse
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.True(t, resp.LoggedIn)
+		assert.True(t, resp.TermsAccepted)
 	})
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {
@@ -1824,5 +1874,113 @@ func TestHandleLogout(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
+	})
+}
+
+func TestHandleAcceptTerms(t *testing.T) {
+	testKey := "12345678901234567890123456789012"
+	fixedNow := types.CurrentTermsDate.Add(2 * time.Hour)
+
+	t.Run("Unauthorized", func(t *testing.T) {
+		mocks := new(mockStorage)
+		s := &Server{
+			storage: mocks,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/acceptTerms", nil)
+		w := httptest.NewRecorder()
+
+		s.handleAcceptTerms(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		mocks.AssertExpectations(t)
+	})
+
+	t.Run("Through Auth Middleware Updates User Terms Timestamp", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+
+		mocks := new(mockStorage)
+		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
+		s := &Server{
+			storage:              mocks,
+			sessionEncryptionKey: testKey,
+			sessionDuration:      7 * 24 * time.Hour,
+			nowFunc:              func() time.Time { return fixedNow },
+			oidcAudiences:        map[string]string{"google": "test-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user-sub")
+		mocks.On("GetUser", mock.Anything, "google:user-sub").Return(types.User{
+			ID:    "google:user-sub",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site1", Name: "Home"}},
+		}, nil).Once()
+		mocks.On("UpdateUser", mock.Anything, mock.MatchedBy(func(u types.User) bool {
+			return u.ID == "google:user-sub" && u.TSTermsAccepted.Equal(fixedNow.UTC()) && len(u.Sites) == 1
+		})).Return(nil).Once()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/acceptTerms", nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+		w := httptest.NewRecorder()
+
+		handler := s.authMiddleware(http.HandlerFunc(s.handleAcceptTerms))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "success", resp["status"])
+		mocks.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+		mocks.AssertExpectations(t)
+	})
+
+	t.Run("AlreadyAcceptedSkipsStorageUpdate", func(t *testing.T) {
+		mocks := new(mockStorage)
+		s := &Server{
+			storage: mocks,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		user := types.User{
+			ID:              "google:user-sub",
+			Email:           "user@example.com",
+			TSTermsAccepted: types.CurrentTermsDate.Add(time.Minute),
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/acceptTerms", nil)
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, user))
+		w := httptest.NewRecorder()
+
+		s.handleAcceptTerms(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		mocks.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+		mocks.AssertExpectations(t)
+	})
+
+	t.Run("StorageErrorReturnsInternalServerError", func(t *testing.T) {
+		mocks := new(mockStorage)
+		s := &Server{
+			storage: mocks,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		user := types.User{
+			ID:    "google:user-sub",
+			Email: "user@example.com",
+		}
+		mocks.On("UpdateUser", mock.Anything, mock.Anything).Return(assert.AnError).Once()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/acceptTerms", nil)
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, user))
+		w := httptest.NewRecorder()
+
+		s.handleAcceptTerms(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		mocks.AssertExpectations(t)
 	})
 }

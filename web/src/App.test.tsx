@@ -99,9 +99,44 @@ describe('App routing and viewSite parameter preservation', () => {
         unmount3();
 
         window.history.pushState(null, '', '/changelog');
-        render(<App />);
+        const { unmount: unmount4 } = render(<App />);
         expect(await screen.findByText(/What's New in/i)).toBeInTheDocument();
         expect(screen.getByText('November 2026')).toBeInTheDocument();
         expect(screen.getByText('October 2026')).toBeInTheDocument();
+        unmount4();
+
+        window.history.pushState(null, '', '/privacy');
+        const { unmount: unmount5 } = render(<App />);
+        expect(await screen.findByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument();
+        expect(screen.getByText(/Last Updated: November 12, 2026/i)).toBeInTheDocument();
+        unmount5();
+
+        window.history.pushState(null, '', '/terms');
+        render(<App />);
+        expect(await screen.findByRole('heading', { level: 1, name: 'Terms of Service' })).toBeInTheDocument();
+        expect(screen.getByText(/State of Illinois/i)).toBeInTheDocument();
+    });
+
+    it('shows TermsAcceptanceModal when termsAccepted is false and closes after accepting', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/dashboard');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            termsAccepted: false,
+            sites: [{ id: 'site1', name: 'Site 1' }],
+        });
+
+        render(<App />);
+
+        expect(await screen.findByTestId('terms-acceptance-modal')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Agree & Continue' }));
+
+        await waitFor(() => {
+            expect(api.acceptTerms).toHaveBeenCalledTimes(1);
+            expect(screen.queryByTestId('terms-acceptance-modal')).not.toBeInTheDocument();
+        });
     });
 });

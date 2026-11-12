@@ -19,6 +19,14 @@ describe('LoginPage Component', () => {
         const googleContainer = container.querySelector('.google-login-btn-container');
         expect(googleContainer).toBeInTheDocument();
         expect(googleContainer).toHaveStyle({ colorScheme: 'light' });
+
+        expect(screen.getByText(/By signing in, you agree to our/i)).toBeInTheDocument();
+        const termsLink = screen.getByRole('link', { name: 'Terms of Service' });
+        const privacyLink = screen.getByRole('link', { name: 'Privacy Policy' });
+        expect(termsLink).toHaveAttribute('href', '/terms');
+        expect(termsLink).toHaveAttribute('target', '_blank');
+        expect(privacyLink).toHaveAttribute('href', '/privacy');
+        expect(privacyLink).toHaveAttribute('target', '_blank');
     });
 
     it('renders disabled message when auth is disabled', () => {

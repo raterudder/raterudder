@@ -336,5 +336,27 @@ func TestDeleteHandlers(t *testing.T) {
 
 			store.AssertExpectations(t)
 		})
+
+		t.Run("SuccessClearsInterestSubmission", func(t *testing.T) {
+			store := &mockStorage{}
+			s := newServer(store)
+
+			user := types.User{
+				ID:    "user1",
+				Email: "user1@example.com",
+				Sites: []types.UserSite{},
+			}
+
+			store.On("DeleteUser", mock.Anything, "user1").Return(nil).Once()
+			store.On("DeleteInterest", mock.Anything, "user1@example.com").Return(nil).Once()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/delete/user", nil)
+			req = withUser(req, user)
+			w := httptest.NewRecorder()
+
+			s.handleDeleteUser(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+			store.AssertExpectations(t)
+		})
 	})
 }

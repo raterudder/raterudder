@@ -74,11 +74,20 @@
   margin-top: 1.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--ghost-border);
+  text-align: center;
+}
+
+.login-consent {
+  margin: 0;
+  color: var(--on-surface-variant);
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .login-footer a {
   color: var(--on-surface-variant);
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
   font-size: 0.8125rem;
   font-weight: 600;
   transition: color 0.15s ease;

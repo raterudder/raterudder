@@ -14,6 +14,9 @@ const (
 	SiteIDNone = "none"
 )
 
+// CurrentTermsDate is the effective UTC date of the latest Terms of Service and Privacy Policy update.
+var CurrentTermsDate = time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+
 // Site represents a household or location that has a battery and solar panels.
 type Site struct {
 	ID          string            `json:"id"`
@@ -95,6 +98,7 @@ type User struct {
 	RevokedSessions []RevokedSession   `json:"revokedSessions,omitempty"`
 	Subscriptions   []PushSubscription `json:"subscriptions,omitempty"`
 	Apps            []UserApp          `json:"apps,omitempty"`
+	TSTermsAccepted time.Time          `json:"tsTermsAccepted,omitempty,omitzero"`
 }
 
 // ActionReason represents the type of action taken by the system.

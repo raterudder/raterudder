@@ -1,8 +1,6 @@
 import React from 'react';
 import { GoogleLogin, GoogleOAuthProvider, type CredentialResponse } from '@react-oauth/google';
 import AppleSignin, { type AppleAuthResponse } from 'react-apple-signin-auth';
-import { Link } from 'wouter';
-import { Separator } from '@base-ui/react/separator';
 import './LoginPage.css';
 
 interface LoginPageProps {
@@ -87,9 +85,11 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
                     )}
                 </div>
                 <div className="login-footer">
-                    <Link to="/privacy">Privacy Policy</Link>
-                    <Separator className="separator" />
-                    <Link to="/terms">Terms of Service</Link>
+                    <p className="login-consent">
+                        By signing in, you agree to our{' '}
+                        <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and{' '}
+                        <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
+                    </p>
                 </div>
             </div>
         </div>

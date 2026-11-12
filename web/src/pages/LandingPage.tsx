@@ -225,11 +225,11 @@ const faqData: { question: string; answer: React.ReactNode }[] = [
     },
     {
         question: "Does using RateRudder void my battery warranty?",
-        answer: "No. RateRudder requires no physical modifications or electrical work. We communicate exclusively through official manufacturer cloud APIs to manage modes and schedules, just like their mobile apps do."
+        answer: "RateRudder requires no physical modifications or electrical work—it adjusts modes and schedules over the internet through your battery system's cloud interface, similar to using a mobile app. Because every manufacturer's warranty and cycling policy is different, check your hardware warranty terms if you have questions."
     },
     {
         question: "What happens if there's a storm or blackout?",
-        answer: "RateRudder respects your configured emergency backup reserve at all times. You can even configure time-windowed reserves, lowering your floor only during brief peak windows and automatically restoring a higher reserve overnight."
+        answer: "RateRudder is designed to respect your configured backup reserve and pause automatically during manufacturer storm alerts. You can also configure time-windowed reserves—allowing deeper discharge during brief peak windows and restoring a higher reserve overnight—though cloud connectivity, forecast errors, or utility VPP events can still affect your battery's charge level."
     },
     {
         question: "What equipment do I need?",

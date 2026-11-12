@@ -121,6 +121,12 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.Email != "" {
+		if err := s.storage.DeleteInterest(ctx, user.Email); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to delete user interest submission", slog.String("userID", user.ID), slog.String("email", user.Email), slog.Any("error", err))
+		}
+	}
+
 	// Log out the user after the deletion is done
 	s.clearCookie(w)
 

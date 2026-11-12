@@ -22,6 +22,13 @@ describe('JoinSitePage Component', () => {
         expect(screen.getByLabelText('Site Name')).toBeInTheDocument();
         expect(screen.getByLabelText('Invite Code')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Join Site' })).toBeInTheDocument();
+
+        const termsLink = screen.getByRole('link', { name: 'Terms of Service' });
+        const privacyLink = screen.getByRole('link', { name: 'Privacy Policy' });
+        expect(termsLink).toHaveAttribute('href', '/terms');
+        expect(termsLink).toHaveAttribute('target', '_blank');
+        expect(privacyLink).toHaveAttribute('href', '/privacy');
+        expect(privacyLink).toHaveAttribute('target', '_blank');
     });
 
     it('disables submit when fields are empty', () => {

@@ -168,7 +168,8 @@ func TestHandleJoin(t *testing.T) {
 		store.On("CreateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
 			return user.ID == "newuser@test.com" &&
 				len(user.Sites) == 1 &&
-				user.Sites[0].ID == "site1"
+				user.Sites[0].ID == "site1" &&
+				!user.TSTermsAccepted.IsZero()
 		})).Return(nil)
 
 		// Expect site update with new user added to permissions
@@ -208,7 +209,7 @@ func TestHandleJoin(t *testing.T) {
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil)
 		store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
-			return len(user.Sites) == 2 && user.Sites[1].ID == "site2"
+			return len(user.Sites) == 2 && user.Sites[1].ID == "site2" && !user.TSTermsAccepted.IsZero()
 		})).Return(nil)
 
 		// Expect site update

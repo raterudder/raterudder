@@ -441,6 +441,7 @@ export interface AuthStatus {
     authRequired: boolean;
     clientIDs: Record<string, string>;
     sites?: UserSite[];
+    termsAccepted?: boolean;
 }
 
 export const fetchAuthStatus = async (): Promise<AuthStatus> => {
@@ -470,6 +471,18 @@ export const logout = async (): Promise<void> => {
     });
     if (!response.ok) {
         throw new Error(await extractError(response, 'Logout failed'));
+    }
+};
+
+export const acceptTerms = async (): Promise<void> => {
+    const response = await fetch('/api/auth/acceptTerms', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to accept terms'));
     }
 };
 

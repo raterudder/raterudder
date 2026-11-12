@@ -89,8 +89,8 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
 
                     <p className="join-consent">
                         By joining, you agree to our{' '}
-                        <Link to="/terms">Terms of Service</Link> and{' '}
-                        <Link to="/privacy">Privacy Policy</Link>.
+                        <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and{' '}
+                        <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
                     </p>
 
                     <button

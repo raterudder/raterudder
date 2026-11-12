@@ -7,6 +7,7 @@ import Footer from './components/Footer';
 import FeedbackWidget from './components/FeedbackWidget';
 import { TutorialDialog } from './components/TutorialDialog';
 import { NotificationModal } from './components/NotificationModal';
+import { TermsAcceptanceModal } from './components/TermsAcceptanceModal';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
 import LandingPage from './pages/LandingPage';
@@ -120,6 +121,7 @@ function AppContent() {
     const [showTutorial, setShowTutorial] = useState(false);
     const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
     const [currentUserID, setCurrentUserID] = useState<string>("");
+    const [termsAccepted, setTermsAccepted] = useState(true);
 
     const [location, navigate] = useLocationWithViewSite();
     const isHome = isMarketingRoute(location);
@@ -211,6 +213,7 @@ function AppContent() {
         setLoggedIn(status.loggedIn);
         setClientIDs(status.clientIDs || {});
         setCurrentUserID(status.userID || "");
+        setTermsAccepted(status.loggedIn ? (status.termsAccepted ?? true) : true);
 
         const newSites = status.sites || [];
         setSites(newSites);
@@ -348,6 +351,7 @@ function AppContent() {
             setSelectedSiteID("");
             setSettings(null);
             setSettingsSiteID("");
+            setTermsAccepted(true);
             navigate('/', { preserveViewSite: false }); // Go back to landing page on logout
         } catch (err) {
             console.error("Logout failed", err);
@@ -521,6 +525,12 @@ function AppContent() {
                 )}
 
                 <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />
+
+                <TermsAcceptanceModal
+                    open={loggedIn && sites.length > 0 && !termsAccepted && location !== '/terms' && location !== '/privacy'}
+                    onAccepted={() => setTermsAccepted(true)}
+                    onLogout={handleLogout}
+                />
             </div>
         </FeaturesProvider>
     );

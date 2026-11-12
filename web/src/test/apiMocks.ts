@@ -6,7 +6,8 @@ export const defaultAuthStatus = {
     clientIDs: { google: 'test-client-id' },
     email: 'user@example.com',
     userID: 'test-user-123',
-    sites: [{ id: 'site1', name: 'Site 1' }]
+    sites: [{ id: 'site1', name: 'Site 1' }],
+    termsAccepted: true,
 };
 
 export const defaultSavings = {
@@ -205,6 +206,7 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.submitESSStage?.mockResolvedValue === 'function') api.submitESSStage.mockResolvedValue(undefined);
     if (typeof api.login?.mockResolvedValue === 'function') api.login.mockResolvedValue(undefined);
     if (typeof api.logout?.mockResolvedValue === 'function') api.logout.mockResolvedValue(undefined);
+    if (typeof api.acceptTerms?.mockResolvedValue === 'function') api.acceptTerms.mockResolvedValue(undefined);
     if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue([]);
     if (typeof api.fetchUtilityPeriods?.mockResolvedValue === 'function') api.fetchUtilityPeriods.mockResolvedValue([]);
     if (typeof api.updateNotificationSettings?.mockResolvedValue === 'function') api.updateNotificationSettings.mockResolvedValue(undefined);
