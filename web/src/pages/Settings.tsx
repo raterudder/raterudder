@@ -529,19 +529,20 @@ const ESSForm = ({
     const hasStoredCredsForSelectedESS = Boolean(!isWizard && settings.ess && settings.hasCredentials?.[settings.ess]);
     const isAuthFailing = hasStoredCredsForSelectedESS && (consecutiveFailures >= 3 || consecutiveSetFailures >= 3);
     const cooldownSeconds = getRemainingESSCooldownSeconds(effectiveAuthStatus, nowMs);
-    const showFirstRetryCaution = cooldownSeconds === 0 && hasRecentFirstInteractiveFailure(effectiveAuthStatus, nowMs);
+    const isCoolingDown = cooldownSeconds > 0;
+    const showFirstRetryCaution = !isCoolingDown && hasRecentFirstInteractiveFailure(effectiveAuthStatus, nowMs);
 
     useEffect(() => {
         setNowMs(Date.now());
     }, [effectiveAuthStatus?.consecutiveUserFailures, effectiveAuthStatus?.lastUserAttempt]);
 
     useEffect(() => {
-        if (cooldownSeconds <= 0) return;
+        if (!isCoolingDown) return;
         const timer = setInterval(() => {
             setNowMs(Date.now());
         }, 1000);
         return () => clearInterval(timer);
-    }, [cooldownSeconds > 0, effectiveAuthStatus?.consecutiveUserFailures, effectiveAuthStatus?.lastUserAttempt]);
+    }, [isCoolingDown]);
 
     const renderAuthFailureWarning = () => {
         if (!hasStoredCredsForSelectedESS) return null;
@@ -1051,6 +1052,7 @@ const Settings = ({
     const [appError, setAppError] = useState<string | null>(null);
     const [copiedToken, setCopiedToken] = useState(false);
     const [copiedSummaryUrl, setCopiedSummaryUrl] = useState(false);
+    const [copiedMcpUrl, setCopiedMcpUrl] = useState(false);
 
     const isAppsFeatureEnabled = useFeatureFlag('connectedApps');
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
@@ -1471,6 +1473,17 @@ const Settings = ({
             setApps(prev => prev.filter(a => a.id !== id));
         } catch (err) {
             setAppError(err instanceof Error ? err.message : 'Failed to revoke app');
+        }
+    };
+
+    const handleCopyText = async (text: string, setCopied: (val: boolean) => void) => {
+        if (!navigator.clipboard?.writeText) return;
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setCopied(false);
         }
     };
 
@@ -3334,6 +3347,27 @@ const Settings = ({
                         Manage API keys and OAuth connections that have read-only access to this site.
                     </p>
 
+                    <div className="mcp-endpoint-box">
+                        <div className="mcp-endpoint-label">Remote MCP Server URL</div>
+                        <div className="mcp-endpoint-hint">
+                            Paste this URL into MCP-compatible AI assistants (such as Claude or ChatGPT) to connect via OAuth.
+                        </div>
+                        <div className="mcp-endpoint-row">
+                            <code data-testid="mcp-server-url" className="mcp-endpoint-code">
+                                {`${window.location.origin}/mcp`}
+                            </code>
+                            <Button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => {
+                                    void handleCopyText(`${window.location.origin}/mcp`, setCopiedMcpUrl);
+                                }}
+                            >
+                                {copiedMcpUrl ? 'Copied!' : 'Copy MCP URL'}
+                            </Button>
+                        </div>
+                    </div>
+
                     {appError && <div className="error-message" style={{ marginBottom: '1rem' }}>{appError}</div>}
 
                     {createdToken && (
@@ -3361,8 +3395,7 @@ const Settings = ({
                                     type="button"
                                     className="btn btn-secondary"
                                     onClick={() => {
-                                        navigator.clipboard?.writeText(createdToken);
-                                        setCopiedToken(true);
+                                        void handleCopyText(createdToken, setCopiedToken);
                                     }}
                                 >
                                     {copiedToken ? 'Copied!' : 'Copy'}
@@ -3389,8 +3422,7 @@ const Settings = ({
                                     className="btn btn-secondary"
                                     onClick={() => {
                                         const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`;
-                                        navigator.clipboard?.writeText(summaryUrl);
-                                        setCopiedSummaryUrl(true);
+                                        void handleCopyText(summaryUrl, setCopiedSummaryUrl);
                                     }}
                                 >
                                     {copiedSummaryUrl ? 'Copied!' : 'Copy URL'}

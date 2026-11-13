@@ -27,6 +27,7 @@ type pathAttributes struct {
 	optionalSiteID     bool
 	allowAllSites      bool
 	allowAppToken      bool
+	requireAppToken    bool
 	allowQueryToken    bool
 }
 
@@ -61,6 +62,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/history/actionsAndSavings":    {allowAllSites: true},
 	"/api/oauth/client":                 {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/agent/summary":                {allowAppToken: true, allowQueryToken: true},
+	"/mcp":                              {allowAppToken: true, requireAppToken: true, ignoreSiteID: true},
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -85,10 +87,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		optionalSiteID := attrs.optionalSiteID
 		allowAllSites := attrs.allowAllSites
 		allowAppToken := attrs.allowAppToken
+		requireAppToken := attrs.requireAppToken
 		allowQueryToken := attrs.allowQueryToken
 
+		if requireAppToken && len(s.appsEncryptionKey) != 32 {
+			writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
+			return
+		}
+
 		setWWWAuthenticate := func() {
-			if allowAppToken {
+			if allowAppToken && !allowQueryToken {
 				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, requestBaseURL(r)))
 			}
 		}
@@ -122,7 +130,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// extract SiteID
 		siteID := r.URL.Query().Get("siteID")
-		if r.Method != http.MethodGet {
+		if r.Method != http.MethodGet && !ignoreSiteID {
 			// read body to find SiteID
 			var bodyBytes []byte
 			if r.Body != nil {
@@ -139,7 +147,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 
 			// try to unmarshal just the SiteID
-			if len(bodyBytes) > 0 && !ignoreSiteID {
+			if len(bodyBytes) > 0 {
 				var justSiteID struct {
 					SiteID string `json:"siteID"`
 				}
@@ -180,6 +188,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			authSuccess = true
 			ctx = context.WithValue(ctx, userContextKey, user)
 		} else {
+			if requireAppToken && rawAppToken == "" {
+				log.Ctx(ctx).WarnContext(ctx, "missing app token on endpoint requiring app token", slog.String("path", r.URL.Path))
+				setWWWAuthenticate()
+				writeJSONError(w, "missing app token", http.StatusUnauthorized)
+				return
+			}
 
 			// Check app token auth on allowed endpoints
 			if rawAppToken != "" && allowAppToken {

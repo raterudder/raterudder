@@ -1086,6 +1086,7 @@ export const fetchOAuthClientInfo = async (params: {
     responseType: string;
     codeChallenge: string;
     codeChallengeMethod: string;
+    resource?: string;
 }): Promise<OAuthClientInfo> => {
     const query = new URLSearchParams({
         client_id: params.clientID,
@@ -1094,6 +1095,9 @@ export const fetchOAuthClientInfo = async (params: {
         code_challenge: params.codeChallenge,
         code_challenge_method: params.codeChallengeMethod,
     });
+    if (params.resource) {
+        query.set('resource', params.resource);
+    }
     const response = await fetch(`/api/oauth/client?${query.toString()}`);
     if (!response.ok) {
         throw new Error(await extractError(response, 'Invalid OAuth authorization request'));
@@ -1109,6 +1113,7 @@ export const approveOAuthClient = async (payload: {
     codeChallenge: string;
     codeChallengeMethod: string;
     state?: string;
+    resource?: string;
 }): Promise<{ redirectURL: string }> => {
     const response = await fetch('/api/oauth/approve', {
         method: 'POST',

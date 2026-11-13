@@ -192,10 +192,12 @@ func TestHandleAgentSummary(t *testing.T) {
 		assert.Equal(t, "America/Chicago", res.TimeZone)
 		assert.Equal(t, 78.4, res.Status.BatterySOC)
 		assert.Equal(t, 13.5, res.Status.BatteryCapacityKWH)
-		assert.Equal(t, 1.25, res.Status.BatteryKW)
+		assert.Equal(t, 0.0, res.Status.BatteryChargingKW)
+		assert.Equal(t, 1.25, res.Status.BatteryDischargingKW)
 		assert.Equal(t, 4.5, res.Status.SolarKW)
 		assert.Equal(t, 2.1, res.Status.HomeKW)
-		assert.Equal(t, -3.65, res.Status.GridKW)
+		assert.Equal(t, 0.0, res.Status.GridImportKW)
+		assert.Equal(t, 3.65, res.Status.GridExportKW)
 		assert.Equal(t, types.BatteryModeLoad, res.Status.BatteryMode)
 		assert.Equal(t, "Power Home", res.Status.BatteryModeLabel)
 		assert.Equal(t, types.SolarModeAny, res.Status.SolarMode)
@@ -206,11 +208,11 @@ func TestHandleAgentSummary(t *testing.T) {
 		assert.Equal(t, 0.045, res.Status.ExportDollarsPerKWH)
 
 		// Today actual: 5.2 + 4.8 = 10.0 kWh
-		// Today remaining: p1 (14:00-15:00, now=14:30 -> 4.0 kWh since latestActualEnd=14:00 <= p1Start) + p2 (3.5 kWh) = 7.5 kWh
+		// Today remaining: in-progress p1 (14:00-15:00, now=14:30) is skipped; p2 (15:00-16:00) = 3.5 kWh
 		// Tomorrow forecast: pTomorrow (6.25) + pBeyond24h (5.0) = 11.25 kWh
 		assert.Equal(t, 10.0, res.SolarForecast.TodayActualSolarKWH)
-		assert.Equal(t, 7.5, res.SolarForecast.TodayRemainingForecastSolarKWH)
-		assert.Equal(t, 17.5, res.SolarForecast.TodayTotalEstimatedSolarKWH)
+		assert.Equal(t, 3.5, res.SolarForecast.TodayRemainingForecastSolarKWH)
+		assert.Equal(t, 13.5, res.SolarForecast.TodayTotalEstimatedSolarKWH)
 		assert.Equal(t, 11.25, res.SolarForecast.TomorrowForecastSolarKWH)
 
 		// Plan only includes periods overlapping [14:30, +24h] -> p1, p2, pTomorrow (not pBeyond24h at 16:00 tomorrow)
@@ -536,5 +538,21 @@ func TestHandleAgentSummary(t *testing.T) {
 		fmtHTML, err := resolveAgentSummaryFormat(reqHTMLFirst)
 		require.NoError(t, err)
 		assert.Equal(t, "html", fmtHTML)
+	})
+
+	t.Run("NegativeZeroNormalizedAndPausedReserveFallbackAndNoMCPWWWAuthenticate", func(t *testing.T) {
+		assert.Equal(t, 0.0, roundSummaryFloat(-0.0001, 2))
+		assert.False(t, roundSummaryFloat(-0.0001, 2) < 0)
+
+		assert.Equal(t, 18.0, resolveActionReserveSOC(types.Action{Paused: true, ReserveSOC: 0}, 18.0))
+		assert.Equal(t, 25.0, resolveActionReserveSOC(types.Action{Paused: false, ReserveSOC: 25.0}, 18.0))
+
+		// Unauthenticated /api/agent/summary returns 401 without advertising /mcp OAuth resource_metadata
+		srv := newTestAppsServer(&mockStorage{}, fixedNow)
+		reqUnauth := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		wUnauth := httptest.NewRecorder()
+		srv.setupHandler().ServeHTTP(wUnauth, reqUnauth)
+		assert.Equal(t, http.StatusUnauthorized, wUnauth.Code)
+		assert.Empty(t, wUnauth.Header().Get("WWW-Authenticate"))
 	})
 }

@@ -64,8 +64,17 @@ func IsBlockedSSRFDialIP(ip netip.Addr) bool {
 	return false
 }
 
+// Version returns the embedded RateRudder version string.
+func Version() string {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return "v0.0.0"
+	}
+	return v
+}
+
 func userAgent() string {
-	return "RateRudder/" + strings.TrimSpace(version)
+	return "RateRudder/" + Version()
 }
 
 type defaultTransport struct {

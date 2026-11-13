@@ -29,6 +29,7 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
     const codeChallenge = searchParams.get('code_challenge') || '';
     const codeChallengeMethod = searchParams.get('code_challenge_method') || 'S256';
     const state = searchParams.get('state') || '';
+    const resource = searchParams.get('resource') || '';
 
     useEffect(() => {
         if (!siteID && sites.length > 0) {
@@ -47,6 +48,7 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
             responseType,
             codeChallenge,
             codeChallengeMethod,
+            ...(resource ? { resource } : {}),
         })
             .then((info) => {
                 if (active) {
@@ -67,7 +69,7 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
         return () => {
             active = false;
         };
-    }, [clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod]);
+    }, [clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod, resource]);
 
     const handleApprove = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -84,6 +86,7 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
                 codeChallenge,
                 codeChallengeMethod,
                 state: state || undefined,
+                ...(resource ? { resource } : {}),
             });
             const parsedUrl = new URL(res.redirectURL);
             if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {

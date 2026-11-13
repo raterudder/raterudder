@@ -208,4 +208,54 @@ describe('OAuthAuthorizePage', () => {
 
         closeSpy.mockRestore();
     });
+
+    it('forwards optional resource query parameter to fetchOAuthClientInfo and approveOAuthClient', async () => {
+        const resourceURL = 'https://raterudder.example.com/mcp';
+        window.history.pushState(
+            null,
+            '',
+            `/oauth/authorize?client_id=rrc_123&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcb&code_challenge=ch_abc&code_challenge_method=S256&state=xyz&resource=${encodeURIComponent(resourceURL)}`
+        );
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [{ id: 'site1', name: 'Home Site' }],
+        });
+        (api.fetchOAuthClientInfo as any).mockResolvedValue({
+            clientName: 'Claude Desktop',
+            redirectURI: 'http://127.0.0.1:9999/cb',
+            verified: false,
+        });
+        (api.approveOAuthClient as any).mockResolvedValue({
+            redirectURL: 'http://127.0.0.1:9999/cb?code=rro_123&state=xyz',
+        });
+
+        render(<App />);
+
+        expect(await screen.findByText(/Connect Claude Desktop/i)).toBeInTheDocument();
+        expect(api.fetchOAuthClientInfo).toHaveBeenCalledWith({
+            clientID: 'rrc_123',
+            redirectURI: 'http://127.0.0.1:9999/cb',
+            responseType: 'code',
+            codeChallenge: 'ch_abc',
+            codeChallengeMethod: 'S256',
+            resource: resourceURL,
+        });
+
+        fireEvent.click(screen.getByTestId('oauth-approve-btn'));
+
+        await waitFor(() => {
+            expect(api.approveOAuthClient).toHaveBeenCalledWith({
+                siteID: 'site1',
+                clientID: 'rrc_123',
+                redirectURI: 'http://127.0.0.1:9999/cb',
+                responseType: 'code',
+                codeChallenge: 'ch_abc',
+                codeChallengeMethod: 'S256',
+                state: 'xyz',
+                resource: resourceURL,
+            });
+        });
+    });
 });

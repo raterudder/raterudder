@@ -23,26 +23,28 @@ var (
 
 // AgentSummaryStatus represents the current site status in the agent summary response.
 type AgentSummaryStatus struct {
-	Timestamp           time.Time          `json:"timestamp"`
-	BatterySOC          float64            `json:"batterySOC"`
-	BatteryCapacityKWH  float64            `json:"batteryCapacityKWH"`
-	BatteryKW           float64            `json:"batteryKW"`
-	SolarKW             float64            `json:"solarKW"`
-	HomeKW              float64            `json:"homeKW"`
-	GridKW              float64            `json:"gridKW"`
-	BatteryMode         types.BatteryMode  `json:"batteryMode"`
-	BatteryModeLabel    string             `json:"batteryModeLabel"`
-	SolarMode           types.SolarMode    `json:"solarMode"`
-	SolarModeLabel      string             `json:"solarModeLabel"`
-	Reason              types.ActionReason `json:"reason,omitempty"`
-	Description         string             `json:"description,omitempty"`
-	ReserveSOC          float64            `json:"reserveSOC"`
-	Paused              bool               `json:"paused,omitempty"`
-	GridUnavailable     bool               `json:"gridUnavailable,omitempty"`
-	EmergencyMode       bool               `json:"emergencyMode,omitempty"`
-	VPPActive           bool               `json:"vppActive,omitempty"`
-	ImportDollarsPerKWH float64            `json:"importDollarsPerKWH"`
-	ExportDollarsPerKWH float64            `json:"exportDollarsPerKWH"`
+	Timestamp            time.Time          `json:"timestamp"`
+	BatterySOC           float64            `json:"batterySOC"`
+	BatteryCapacityKWH   float64            `json:"batteryCapacityKWH"`
+	BatteryChargingKW    float64            `json:"batteryChargingKW"`
+	BatteryDischargingKW float64            `json:"batteryDischargingKW"`
+	SolarKW              float64            `json:"solarKW"`
+	HomeKW               float64            `json:"homeKW"`
+	GridImportKW         float64            `json:"gridImportKW"`
+	GridExportKW         float64            `json:"gridExportKW"`
+	BatteryMode          types.BatteryMode  `json:"batteryMode"`
+	BatteryModeLabel     string             `json:"batteryModeLabel"`
+	SolarMode            types.SolarMode    `json:"solarMode"`
+	SolarModeLabel       string             `json:"solarModeLabel"`
+	Reason               types.ActionReason `json:"reason,omitempty"`
+	Description          string             `json:"description,omitempty"`
+	ReserveSOC           float64            `json:"reserveSOC"`
+	Paused               bool               `json:"paused,omitempty"`
+	GridUnavailable      bool               `json:"gridUnavailable,omitempty"`
+	EmergencyMode        bool               `json:"emergencyMode,omitempty"`
+	VPPActive            bool               `json:"vppActive,omitempty"`
+	ImportDollarsPerKWH  float64            `json:"importDollarsPerKWH"`
+	ExportDollarsPerKWH  float64            `json:"exportDollarsPerKWH"`
 }
 
 // AgentSolarForecast represents today's and tomorrow's solar generation totals in kWh.
@@ -117,7 +119,21 @@ func solarModeLabel(mode types.SolarMode) string {
 
 func roundSummaryFloat(val float64, decimals int) float64 {
 	pow := math.Pow(10, float64(decimals))
-	return math.Round(val*pow) / pow
+	rounded := math.Round(val*pow) / pow
+	if rounded == 0 {
+		return 0
+	}
+	return rounded
+}
+
+func resolveActionReserveSOC(a types.Action, fallbackMinSOC float64) float64 {
+	if r, ok := actionReserveSOC(a); ok {
+		return r
+	}
+	if fallbackMinSOC > 0 && fallbackMinSOC <= 100 {
+		return fallbackMinSOC
+	}
+	return 0
 }
 
 func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSummaryRes, error) {
@@ -167,7 +183,6 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 	tomorrowEnd := todayStart.AddDate(0, 0, 2)
 
 	var todayActualSolarKWH float64
-	var latestActualEnd time.Time
 	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, todayStart, now)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history for agent summary", slog.Any("error", err))
@@ -175,14 +190,8 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 		for _, day := range energyHistory {
 			for _, h := range day.Hourly {
 				hStart := h.TSHourStart.In(loc)
-				if !hStart.Before(todayStart) && hStart.Before(tomorrowStart) {
-					if h.SolarKWH > 0 {
-						todayActualSolarKWH += h.SolarKWH
-					}
-					hEnd := hStart.Add(time.Hour)
-					if hEnd.After(latestActualEnd) {
-						latestActualEnd = hEnd
-					}
+				if !hStart.Before(todayStart) && hStart.Before(tomorrowStart) && h.SolarKWH > 0 {
+					todayActualSolarKWH += h.SolarKWH
 				}
 			}
 		}
@@ -208,29 +217,9 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 				priceSetFromPlan = true
 			}
 
-			// Remaining today solar forecast
-			if pEnd.After(now) && pStart.Before(tomorrowStart) {
-				if pStart.Before(now) {
-					// Energy history is synced in whole-hour buckets (typically up to the start of the
-					// current hour, e.g. 14:00), while the first plan period starts at the last poll time
-					// (e.g. 14:20-15:00). Only prorate the in-progress plan period if recorded actuals
-					// (latestActualEnd) overlap past pStart so we don't double-count solar already in
-					// todayActualSolarKWH or drop the unrecorded gap between the hour start and now.
-					if !latestActualEnd.IsZero() && latestActualEnd.After(pStart) && p.DurationHours > 0 {
-						remStart := now
-						if latestActualEnd.After(remStart) {
-							remStart = latestActualEnd
-						}
-						if pEnd.After(remStart) {
-							frac := pEnd.Sub(remStart).Hours() / p.DurationHours
-							todayRemainingForecastSolarKWH += p.SolarKWH * math.Min(1, math.Max(0, frac))
-						}
-					} else {
-						todayRemainingForecastSolarKWH += p.SolarKWH
-					}
-				} else {
-					todayRemainingForecastSolarKWH += p.SolarKWH
-				}
+			// Remaining today solar forecast (skip in-progress periods)
+			if !pStart.Before(now) && pStart.Before(tomorrowStart) {
+				todayRemainingForecastSolarKWH += p.SolarKWH
 			}
 
 			// Tomorrow solar forecast
@@ -280,8 +269,12 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 
 	// otherwise get it from the action itself
 	if !priceSetFromPlan && latestAction.CurrentPrice != nil {
+		var refPrices []types.Price
+		if latestAction.FuturePrice != nil {
+			refPrices = []types.Price{*latestAction.CurrentPrice, *latestAction.FuturePrice}
+		}
 		importDollarsPerKWH = latestAction.CurrentPrice.ImportRateDollars()
-		exportDollarsPerKWH = latestAction.CurrentPrice.ExportRateDollars(settings.Settings, nil)
+		exportDollarsPerKWH = latestAction.CurrentPrice.ExportRateDollars(settings.Settings, refPrices)
 	}
 
 	todayActualRounded := roundSummaryFloat(todayActualSolarKWH, 2)
@@ -294,31 +287,47 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 		statusTS = latestAction.Timestamp
 	}
 
+	var batteryChargingKW, batteryDischargingKW float64
+	if latestAction.SystemStatus.BatteryKW > 0 {
+		batteryDischargingKW = roundSummaryFloat(latestAction.SystemStatus.BatteryKW, 2)
+	} else if latestAction.SystemStatus.BatteryKW < 0 {
+		batteryChargingKW = roundSummaryFloat(-latestAction.SystemStatus.BatteryKW, 2)
+	}
+
+	var gridImportKW, gridExportKW float64
+	if latestAction.SystemStatus.GridKW > 0 {
+		gridImportKW = roundSummaryFloat(latestAction.SystemStatus.GridKW, 2)
+	} else if latestAction.SystemStatus.GridKW < 0 {
+		gridExportKW = roundSummaryFloat(-latestAction.SystemStatus.GridKW, 2)
+	}
+
 	return AgentSummaryRes{
 		SiteTime:  now,
 		TimeZone:  loc.String(),
 		UpdatedAt: latestAction.Timestamp,
 		Status: AgentSummaryStatus{
-			Timestamp:           statusTS,
-			BatterySOC:          roundSummaryFloat(latestAction.SystemStatus.BatterySOC, 1),
-			BatteryCapacityKWH:  roundSummaryFloat(latestAction.SystemStatus.BatteryCapacityKWH, 2),
-			BatteryKW:           roundSummaryFloat(latestAction.SystemStatus.BatteryKW, 2),
-			SolarKW:             roundSummaryFloat(latestAction.SystemStatus.SolarKW, 2),
-			HomeKW:              roundSummaryFloat(latestAction.SystemStatus.HomeKW, 2),
-			GridKW:              roundSummaryFloat(latestAction.SystemStatus.GridKW, 2),
-			BatteryMode:         latestAction.BatteryMode,
-			BatteryModeLabel:    batteryModeLabel(latestAction.BatteryMode),
-			SolarMode:           latestAction.SolarMode,
-			SolarModeLabel:      solarModeLabel(latestAction.SolarMode),
-			Reason:              latestAction.Reason,
-			Description:         latestAction.Description,
-			ReserveSOC:          roundSummaryFloat(latestAction.ReserveSOC, 1),
-			Paused:              latestAction.Paused || settings.Pause,
-			GridUnavailable:     latestAction.SystemStatus.GridUnavailable,
-			EmergencyMode:       latestAction.SystemStatus.EmergencyMode,
-			VPPActive:           latestAction.SystemStatus.VPPActive,
-			ImportDollarsPerKWH: roundSummaryFloat(importDollarsPerKWH, 4),
-			ExportDollarsPerKWH: roundSummaryFloat(exportDollarsPerKWH, 4),
+			Timestamp:            statusTS,
+			BatterySOC:           roundSummaryFloat(latestAction.SystemStatus.BatterySOC, 1),
+			BatteryCapacityKWH:   roundSummaryFloat(latestAction.SystemStatus.BatteryCapacityKWH, 2),
+			BatteryChargingKW:    batteryChargingKW,
+			BatteryDischargingKW: batteryDischargingKW,
+			SolarKW:              roundSummaryFloat(latestAction.SystemStatus.SolarKW, 2),
+			HomeKW:               roundSummaryFloat(latestAction.SystemStatus.HomeKW, 2),
+			GridImportKW:         gridImportKW,
+			GridExportKW:         gridExportKW,
+			BatteryMode:          latestAction.BatteryMode,
+			BatteryModeLabel:     batteryModeLabel(latestAction.BatteryMode),
+			SolarMode:            latestAction.SolarMode,
+			SolarModeLabel:       solarModeLabel(latestAction.SolarMode),
+			Reason:               latestAction.Reason,
+			Description:          latestAction.Description,
+			ReserveSOC:           roundSummaryFloat(resolveActionReserveSOC(*latestAction, settings.MinBatterySOC), 1),
+			Paused:               latestAction.Paused || settings.Pause,
+			GridUnavailable:      latestAction.SystemStatus.GridUnavailable,
+			EmergencyMode:        latestAction.SystemStatus.EmergencyMode,
+			VPPActive:            latestAction.SystemStatus.VPPActive,
+			ImportDollarsPerKWH:  roundSummaryFloat(importDollarsPerKWH, 4),
+			ExportDollarsPerKWH:  roundSummaryFloat(exportDollarsPerKWH, 4),
 		},
 		SolarForecast: AgentSolarForecast{
 			TodayActualSolarKWH:            todayActualRounded,
@@ -339,7 +348,7 @@ func formatAgentSummaryText(summary AgentSummaryRes) string {
 	st := summary.Status
 	b.WriteString("## Current Status\n\n")
 	fmt.Fprintf(&b, "- **Battery SOC:** %.1f%% (Capacity: %.1f kWh, Reserve: %.1f%%)\n", st.BatterySOC, st.BatteryCapacityKWH, st.ReserveSOC)
-	fmt.Fprintf(&b, "- **Power Flows:** Battery %.2f kW, Solar %.2f kW, Home Load %.2f kW, Grid %.2f kW\n", st.BatteryKW, st.SolarKW, st.HomeKW, st.GridKW)
+	fmt.Fprintf(&b, "- **Power Flows:** Battery Charging %.2f kW, Battery Discharging %.2f kW, Solar %.2f kW, Home Load %.2f kW, Grid Import %.2f kW, Grid Export %.2f kW\n", st.BatteryChargingKW, st.BatteryDischargingKW, st.SolarKW, st.HomeKW, st.GridImportKW, st.GridExportKW)
 	fmt.Fprintf(&b, "- **Battery Mode:** %s\n", st.BatteryModeLabel)
 	fmt.Fprintf(&b, "- **Solar Mode:** %s\n", st.SolarModeLabel)
 	if st.Description != "" {
@@ -403,7 +412,7 @@ func formatAgentSummaryHTML(summary AgentSummaryRes) string {
 	st := summary.Status
 	b.WriteString("<h2>Current Status</h2>\n<ul>\n")
 	fmt.Fprintf(&b, "<li><strong>Battery SOC:</strong> %.1f%% (Capacity: %.1f kWh, Reserve: %.1f%%)</li>\n", st.BatterySOC, st.BatteryCapacityKWH, st.ReserveSOC)
-	fmt.Fprintf(&b, "<li><strong>Power Flows:</strong> Battery %.2f kW, Solar %.2f kW, Home Load %.2f kW, Grid %.2f kW</li>\n", st.BatteryKW, st.SolarKW, st.HomeKW, st.GridKW)
+	fmt.Fprintf(&b, "<li><strong>Power Flows:</strong> Battery Charging %.2f kW, Battery Discharging %.2f kW, Solar %.2f kW, Home Load %.2f kW, Grid Import %.2f kW, Grid Export %.2f kW</li>\n", st.BatteryChargingKW, st.BatteryDischargingKW, st.SolarKW, st.HomeKW, st.GridImportKW, st.GridExportKW)
 	fmt.Fprintf(&b, "<li><strong>Battery Mode:</strong> %s</li>\n", html.EscapeString(st.BatteryModeLabel))
 	fmt.Fprintf(&b, "<li><strong>Solar Mode:</strong> %s</li>\n", html.EscapeString(st.SolarModeLabel))
 	if st.Description != "" {

@@ -2967,6 +2967,7 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
             expect(await screen.findByTestId('connected-apps-section')).toBeInTheDocument();
+            expect(screen.getByTestId('mcp-server-url')).toHaveTextContent('/mcp');
             expect(screen.getByText('Claude')).toBeInTheDocument();
             expect(screen.getByText('claude.ai')).toBeInTheDocument();
             expect(screen.getByText('OAuth')).toBeInTheDocument();

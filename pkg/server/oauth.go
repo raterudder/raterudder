@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -161,10 +162,136 @@ func requestBaseURL(r *http.Request) string {
 	scheme := "https"
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "http" || proto == "https" {
 		scheme = proto
-	} else if r.TLS == nil && (strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "[::1]")) {
+	} else if r.TLS == nil && isLoopbackHost(host) {
 		scheme = "http"
 	}
 	return scheme + "://" + host
+}
+
+func isLoopbackHost(rawHost string) bool {
+	h := strings.TrimSpace(rawHost)
+	if h == "" {
+		return false
+	}
+	if splitHost, _, err := net.SplitHostPort(h); err == nil {
+		h = splitHost
+	} else {
+		h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+	}
+	h = strings.ToLower(h)
+	if h == "localhost" {
+		return true
+	}
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr.IsLoopback()
+	}
+	return false
+}
+
+func isValidMCPOrigin(rawOrigin string) bool {
+	if rawOrigin == "" || rawOrigin == "null" || len(rawOrigin) > maxRedirectURILength {
+		return false
+	}
+	if strings.TrimSpace(rawOrigin) != rawOrigin {
+		return false
+	}
+	for _, r := range rawOrigin {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	u, err := url.Parse(rawOrigin)
+	if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
+		strings.Contains(rawOrigin, "?") || strings.Contains(rawOrigin, "#") {
+		return false
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		return isLoopbackHost(hostname)
+	default:
+		return false
+	}
+}
+
+// publicOAuthAndMCPCORSMiddleware handles CORS and Origin validation for public OAuth
+// discovery/registration/token endpoints and /mcp so browser-hosted MCP clients (such as MCP
+// Inspector in direct browser mode or web SPAs) can complete unauthenticated OPTIONS preflights,
+// read WWW-Authenticate on 401 responses to discover OAuth metadata, and perform cross-origin
+// PKCE token exchanges. (go-sdk's StreamableHTTPHandler does not handle CORS or OPTIONS.)
+func (s *Server) publicOAuthAndMCPCORSMiddleware(allowedMethods string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		w.Header().Add("Vary", "Origin")
+
+		origins := r.Header.Values("Origin")
+		if len(origins) > 1 {
+			log.Ctx(ctx).WarnContext(ctx, "rejected multiple Origin headers", slog.String("path", r.URL.Path))
+			writeJSONError(w, "invalid Origin header", http.StatusForbidden)
+			return
+		}
+		if len(origins) == 1 {
+			origin := origins[0]
+			if !isValidMCPOrigin(origin) {
+				log.Ctx(ctx).WarnContext(ctx, "rejected invalid Origin header", slog.String("origin", truncateLogString(origin, 128)), slog.String("path", r.URL.Path))
+				writeJSONError(w, "invalid Origin header", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, MCP-Session-Id")
+			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate, MCP-Protocol-Version")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+		}
+
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Allow", allowedMethods)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func validateOAuthResource(baseURL, rawResource string) error {
+	if rawResource == "" {
+		return nil
+	}
+	if len(rawResource) > maxRedirectURILength {
+		return fmt.Errorf("resource must be %d characters or fewer", maxRedirectURILength)
+	}
+	if strings.TrimSpace(rawResource) != rawResource || strings.Contains(rawResource, `\`) {
+		return errors.New("invalid resource URI")
+	}
+	for _, r := range rawResource {
+		if unicode.IsControl(r) {
+			return errors.New("invalid resource URI")
+		}
+	}
+	u, err := url.Parse(rawResource)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil {
+		return errors.New("invalid resource URI")
+	}
+	if u.RawQuery != "" || u.Fragment != "" || strings.Contains(rawResource, "?") || strings.Contains(rawResource, "#") {
+		return errors.New("resource URI must not contain query or fragment")
+	}
+	normOrigin := normalizedOrigin(rawResource)
+	normBase := normalizedOrigin(baseURL)
+	if normOrigin == "" || normBase == "" {
+		return errors.New("invalid resource URI")
+	}
+	cleanPath := strings.TrimSuffix(u.EscapedPath(), "/")
+	candidate := normOrigin + cleanPath
+	if candidate != normBase && candidate != normBase+"/mcp" {
+		return errors.New("resource does not match this MCP server")
+	}
+	return nil
 }
 
 func validateRedirectURI(rawURI string) (string, error) {
@@ -258,6 +385,11 @@ func writeOAuthError(w http.ResponseWriter, status int, errCode, description str
 }
 
 func (s *Server) handleOAuthServerMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET, OPTIONS")
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(s.appsEncryptionKey) != 32 {
 		writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 		return
@@ -267,15 +399,16 @@ func (s *Server) handleOAuthServerMetadata(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	err := json.NewEncoder(w).Encode(struct {
-		Issuer                            string   `json:"issuer"`
-		AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-		TokenEndpoint                     string   `json:"token_endpoint"`
-		RegistrationEndpoint              string   `json:"registration_endpoint"`
-		ResponseTypesSupported            []string `json:"response_types_supported"`
-		GrantTypesSupported               []string `json:"grant_types_supported"`
-		TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-		CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
-		ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
+		Issuer                                     string   `json:"issuer"`
+		AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
+		TokenEndpoint                              string   `json:"token_endpoint"`
+		RegistrationEndpoint                       string   `json:"registration_endpoint"`
+		ResponseTypesSupported                     []string `json:"response_types_supported"`
+		GrantTypesSupported                        []string `json:"grant_types_supported"`
+		TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+		CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported"`
+		ClientIDMetadataDocumentSupported          bool     `json:"client_id_metadata_document_supported"`
+		AuthorizationResponseIssParameterSupported bool     `json:"authorization_response_iss_parameter_supported"`
 	}{
 		Issuer:                 baseURL,
 		AuthorizationEndpoint:  baseURL + "/oauth/authorize",
@@ -285,9 +418,10 @@ func (s *Server) handleOAuthServerMetadata(w http.ResponseWriter, r *http.Reques
 		GrantTypesSupported:    []string{"authorization_code"},
 		// Public OAuth 2.1 / MCP clients authenticate token exchanges via PKCE (S256)
 		// rather than a client_secret, keeping client registration stateless.
-		TokenEndpointAuthMethodsSupported: []string{"none"},
-		CodeChallengeMethodsSupported:     []string{"S256"},
-		ClientIDMetadataDocumentSupported: true,
+		TokenEndpointAuthMethodsSupported:          []string{"none"},
+		CodeChallengeMethodsSupported:              []string{"S256"},
+		ClientIDMetadataDocumentSupported:          true,
+		AuthorizationResponseIssParameterSupported: true,
 	})
 	if err != nil {
 		panic(http.ErrAbortHandler)
@@ -295,6 +429,11 @@ func (s *Server) handleOAuthServerMetadata(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleOAuthProtectedResource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET, OPTIONS")
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(s.appsEncryptionKey) != 32 {
 		writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 		return
@@ -307,7 +446,7 @@ func (s *Server) handleOAuthProtectedResource(w http.ResponseWriter, r *http.Req
 		Resource             string   `json:"resource"`
 		AuthorizationServers []string `json:"authorization_servers"`
 	}{
-		Resource:             baseURL + "/api/mcp",
+		Resource:             baseURL + "/mcp",
 		AuthorizationServers: []string{baseURL},
 	})
 	if err != nil {
@@ -316,6 +455,11 @@ func (s *Server) handleOAuthProtectedResource(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST, OPTIONS")
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(s.appsEncryptionKey) != 32 {
 		writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 		return
@@ -678,6 +822,15 @@ func (s *Server) handleOAuthClientInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	if len(q["resource"]) > 1 {
+		writeJSONError(w, "duplicate resource parameter", http.StatusBadRequest)
+		return
+	}
+	if err := validateOAuthResource(requestBaseURL(r), q.Get("resource")); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "oauth client info rejected: invalid resource", slog.String("userID", user.ID), slog.String("resource", truncateLogString(q.Get("resource"), 256)), slog.Any("error", err))
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
 	responseType := q.Get("response_type")
@@ -744,10 +897,17 @@ func (s *Server) handleOAuthApprove(w http.ResponseWriter, r *http.Request) {
 		CodeChallenge       string `json:"codeChallenge"`
 		CodeChallengeMethod string `json:"codeChallengeMethod"`
 		State               string `json:"state"`
+		Resource            string `json:"resource"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "oauth approve rejected: invalid request body", slog.String("userID", user.ID), slog.String("siteID", siteID), slog.Any("error", err))
 		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := validateOAuthResource(requestBaseURL(r), req.Resource); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "oauth approve rejected: invalid resource", slog.String("userID", user.ID), slog.String("siteID", siteID), slog.String("resource", truncateLogString(req.Resource, 256)), slog.Any("error", err))
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -842,6 +1002,7 @@ func (s *Server) handleOAuthApprove(w http.ResponseWriter, r *http.Request) {
 	if req.State != "" {
 		q.Set("state", req.State)
 	}
+	q.Set("iss", requestBaseURL(r))
 	targetURL.RawQuery = q.Encode()
 
 	if err := s.storage.AddUserApp(ctx, user.ID, pendingApp); err != nil {
@@ -865,6 +1026,11 @@ func (s *Server) handleOAuthApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST, OPTIONS")
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(s.appsEncryptionKey) != 32 {
 		writeOAuthError(w, http.StatusNotImplemented, "server_error", "apps not enabled")
 		return
@@ -872,7 +1038,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	now := s.now().UTC()
-	var grantType, code, codeVerifier, redirectURI, clientID string
+	var grantType, code, codeVerifier, redirectURI, clientID, resource string
 
 	contentType := r.Header.Get("Content-Type")
 	mediaType, _, _ := mime.ParseMediaType(contentType)
@@ -883,6 +1049,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			CodeVerifier string `json:"code_verifier"`
 			RedirectURI  string `json:"redirect_uri"`
 			ClientID     string `json:"client_id"`
+			Resource     string `json:"resource"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, maxOAuthTokenBodyBytes)).Decode(&req); err != nil {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -893,6 +1060,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		codeVerifier = req.CodeVerifier
 		redirectURI = req.RedirectURI
 		clientID = req.ClientID
+		resource = req.Resource
 	} else {
 		if contentType != "" && !strings.EqualFold(mediaType, "application/x-www-form-urlencoded") {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "unsupported Content-Type")
@@ -908,7 +1076,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "failed to parse form body")
 			return
 		}
-		for _, param := range []string{"grant_type", "code", "code_verifier", "redirect_uri", "client_id"} {
+		for _, param := range []string{"grant_type", "code", "code_verifier", "redirect_uri", "client_id", "resource"} {
 			if len(vals[param]) > 1 {
 				writeOAuthError(w, http.StatusBadRequest, "invalid_request", "duplicate OAuth parameter")
 				return
@@ -919,6 +1087,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		codeVerifier = vals.Get("code_verifier")
 		redirectURI = vals.Get("redirect_uri")
 		clientID = vals.Get("client_id")
+		resource = vals.Get("resource")
 	}
 
 	// Decrypt the authorization code early so that if any validation or token exchange
@@ -966,6 +1135,12 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := validateOAuthResource(requestBaseURL(r), resource); err != nil {
+		cleanupEarly()
+		log.Ctx(ctx).WarnContext(ctx, "oauth token rejected: invalid resource", slog.String("resource", truncateLogString(resource, 256)), slog.String("clientID", truncateLogString(clientID, 256)), slog.Any("error", err))
+		writeOAuthError(w, http.StatusBadRequest, "invalid_target", err.Error())
+		return
+	}
 	if grantType != "authorization_code" {
 		cleanupEarly()
 		log.Ctx(ctx).WarnContext(ctx, "oauth token rejected: unsupported grant_type", slog.String("grantType", truncateLogString(grantType, 64)), slog.String("clientID", truncateLogString(clientID, 256)))

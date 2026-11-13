@@ -105,6 +105,9 @@ type Server struct {
 	featsEvaluator *feats.Evaluator
 	featsUpdatedAt time.Time
 	featsFetchedAt time.Time
+
+	mcpHandlerOnce sync.Once
+	mcpHandler     http.Handler
 }
 
 // Configured initializes the Server with dependencies.
@@ -354,17 +357,42 @@ func (s *Server) setupHandler() http.Handler {
 		1048576,
 	))
 	mux.HandleFunc("GET /.well-known/appspecific/com.tesla.3p.public-key.pem", s.handleTeslaPublicKey)
-	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.handleOAuthServerMetadata)
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleOAuthProtectedResource)
-	mux.Handle("POST /oauth/register", http.MaxBytesHandler(
+	mux.Handle("/.well-known/oauth-authorization-server", s.rateLimitMiddleware(
+		common.CtxFromRequestMiddleware(
+			s.publicOAuthAndMCPCORSMiddleware("GET, OPTIONS", http.HandlerFunc(s.handleOAuthServerMetadata)),
+		),
+	))
+	mux.Handle("/.well-known/oauth-protected-resource", s.rateLimitMiddleware(
+		common.CtxFromRequestMiddleware(
+			s.publicOAuthAndMCPCORSMiddleware("GET, OPTIONS", http.HandlerFunc(s.handleOAuthProtectedResource)),
+		),
+	))
+	mux.Handle("/.well-known/oauth-protected-resource/mcp", s.rateLimitMiddleware(
+		common.CtxFromRequestMiddleware(
+			s.publicOAuthAndMCPCORSMiddleware("GET, OPTIONS", http.HandlerFunc(s.handleOAuthProtectedResource)),
+		),
+	))
+	mux.Handle("/oauth/register", http.MaxBytesHandler(
 		s.rateLimitMiddleware(
-			common.CtxFromRequestMiddleware(http.HandlerFunc(s.handleOAuthRegister)),
+			common.CtxFromRequestMiddleware(
+				s.publicOAuthAndMCPCORSMiddleware("POST, OPTIONS", http.HandlerFunc(s.handleOAuthRegister)),
+			),
 		),
 		1048576,
 	))
-	mux.Handle("POST /oauth/token", http.MaxBytesHandler(
+	mux.Handle("/oauth/token", http.MaxBytesHandler(
 		s.rateLimitMiddleware(
-			common.CtxFromRequestMiddleware(http.HandlerFunc(s.handleOAuthToken)),
+			common.CtxFromRequestMiddleware(
+				s.publicOAuthAndMCPCORSMiddleware("POST, OPTIONS", http.HandlerFunc(s.handleOAuthToken)),
+			),
+		),
+		1048576,
+	))
+	mux.Handle("/mcp", http.MaxBytesHandler(
+		s.rateLimitMiddleware(
+			common.CtxFromRequestMiddleware(
+				s.publicOAuthAndMCPCORSMiddleware("POST, OPTIONS", s.authMiddleware(http.HandlerFunc(s.handleMCP))),
+			),
 		),
 		1048576,
 	))

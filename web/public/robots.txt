@@ -3,5 +3,7 @@ Allow: /
 Allow: /api/agent/summary
 Disallow: /api/
 Disallow: /callback/
+Disallow: /mcp
+Disallow: /oauth/
 
 Sitemap: https://raterudder.com/sitemap.xml

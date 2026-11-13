@@ -733,3 +733,41 @@
     flex: 1;
   }
 }
+
+.mcp-endpoint-box {
+  margin-bottom: 1.25rem;
+  padding: 0.875rem 1rem;
+  background: var(--surface-container, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-md);
+}
+
+.mcp-endpoint-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--on-surface);
+  margin-bottom: 0.25rem;
+}
+
+.mcp-endpoint-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.mcp-endpoint-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mcp-endpoint-code {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm, 6px);
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 0.85rem;
+}

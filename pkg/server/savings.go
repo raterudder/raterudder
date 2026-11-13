@@ -671,7 +671,11 @@ func calculateIntervalPrices(subPrice types.Price, subTS time.Time, settings typ
 // getCombinedEnergyHistory fetches energy history across [historyStart, historyEnd) by combining
 // monthly history_summary documents with unsummarized daily energy_history documents.
 func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, historyStart, historyEnd time.Time) ([]types.DailyEnergyStats, error) {
-	todayStart := truncateDay(s.now())
+	baseLoc := historyStart.Location()
+	if baseLoc == nil {
+		baseLoc = time.UTC
+	}
+	todayStart := truncateDay(s.now().In(baseLoc))
 
 	var summaries []types.HistorySummary
 	// Only query monthly summaries if the requested window starts before today.
@@ -737,7 +741,8 @@ func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, hi
 		seen := make(map[string]int)
 		var deduped []types.DailyEnergyStats
 		for _, day := range combinedEnergy {
-			dateStr := day.TSDayStart.Format("2006-01-02")
+			dLoc := getLocation(day.TimeLocation, baseLoc)
+			dateStr := day.TSDayStart.In(dLoc).Format("2006-01-02")
 			if idx, ok := seen[dateStr]; ok {
 				if len(day.Hourly) >= len(deduped[idx].Hourly) {
 					deduped[idx] = day
@@ -979,6 +984,20 @@ func (s *Server) getSiteSavingsNew(
 	actionStart, actionEnd time.Time,
 	periods []savingsPeriod,
 ) ([]types.SavingsStats, []types.Action, error) {
+	settings, _, err := s.getSettingsWithMigration(ctx, siteID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.getSiteSavingsNewWithSettings(ctx, siteID, settings, actionStart, actionEnd, periods)
+}
+
+func (s *Server) getSiteSavingsNewWithSettings(
+	ctx context.Context,
+	siteID string,
+	settings settingsWithVersion,
+	actionStart, actionEnd time.Time,
+	periods []savingsPeriod,
+) ([]types.SavingsStats, []types.Action, error) {
 	if len(periods) == 0 {
 		periods = []savingsPeriod{{Start: actionStart, End: actionEnd}}
 	}
@@ -998,11 +1017,6 @@ func (s *Server) getSiteSavingsNew(
 	lookbackStart := minStart.AddDate(0, 0, -shadowWarmupLookbackDays)
 	// Look ahead nextDayValuationLookaheadDays past maxEnd for next-day stored energy valuation and 24h net metering.
 	fetchEnd := maxEnd.AddDate(0, 0, nextDayValuationLookaheadDays)
-
-	settings, _, err := s.getSettingsWithMigration(ctx, siteID)
-	if err != nil {
-		return nil, nil, err
-	}
 
 	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, fetchEnd)
 	if err != nil {

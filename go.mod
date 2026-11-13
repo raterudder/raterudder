@@ -11,8 +11,10 @@ require (
 	cloud.google.com/go/firestore v1.29.2
 	github.com/NYTimes/gziphandler v1.1.1
 	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/levenlabs/go-lflag v1.0.2
 	github.com/levenlabs/go-llog v1.2.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
@@ -37,7 +39,10 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.24 // indirect
 	github.com/googleapis/gax-go/v2 v2.27.0 // indirect
 	github.com/levenlabs/errctx v1.1.0 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/stretchr/objx v0.8.0 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect

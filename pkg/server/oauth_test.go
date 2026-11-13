@@ -65,6 +65,26 @@ func TestHandleOAuthServerMetadata(t *testing.T) {
 		assert.Equal(t, "https://staging.raterudder.com/oauth/token", meta["token_endpoint"])
 		assert.Equal(t, "https://staging.raterudder.com/oauth/register", meta["registration_endpoint"])
 		assert.Equal(t, true, meta["client_id_metadata_document_supported"])
+		assert.Equal(t, true, meta["authorization_response_iss_parameter_supported"])
+	})
+
+	t.Run("CORSAndMethodNotAllowed", func(t *testing.T) {
+		srv := newTestAppsServer(&mockStorage{}, now)
+		handler := srv.setupHandler()
+
+		reqOpt := httptest.NewRequest(http.MethodOptions, "/.well-known/oauth-authorization-server", nil)
+		reqOpt.Header.Set("Origin", "https://claude.ai")
+		wOpt := httptest.NewRecorder()
+		handler.ServeHTTP(wOpt, reqOpt)
+		assert.Equal(t, http.StatusNoContent, wOpt.Code)
+		assert.Equal(t, "https://claude.ai", wOpt.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "GET, OPTIONS", wOpt.Header().Get("Access-Control-Allow-Methods"))
+
+		reqPost := httptest.NewRequest(http.MethodPost, "/.well-known/oauth-authorization-server", nil)
+		wPost := httptest.NewRecorder()
+		handler.ServeHTTP(wPost, reqPost)
+		assert.Equal(t, http.StatusMethodNotAllowed, wPost.Code)
+		assert.Equal(t, "GET, OPTIONS", wPost.Header().Get("Allow"))
 	})
 }
 
@@ -182,18 +202,41 @@ func TestHandleOAuthProtectedResource(t *testing.T) {
 		srv := newTestAppsServer(&mockStorage{}, now)
 		handler := srv.setupHandler()
 
-		reqRes := httptest.NewRequest(http.MethodGet, "https://energy.example.org/.well-known/oauth-protected-resource", nil)
-		wRes := httptest.NewRecorder()
-		handler.ServeHTTP(wRes, reqRes)
-		require.Equal(t, http.StatusOK, wRes.Code)
+		for _, p := range []string{
+			"/.well-known/oauth-protected-resource",
+			"/.well-known/oauth-protected-resource/mcp",
+		} {
+			reqRes := httptest.NewRequest(http.MethodGet, "https://energy.example.org"+p, nil)
+			wRes := httptest.NewRecorder()
+			handler.ServeHTTP(wRes, reqRes)
+			require.Equal(t, http.StatusOK, wRes.Code)
 
-		var resMeta struct {
-			Resource             string   `json:"resource"`
-			AuthorizationServers []string `json:"authorization_servers"`
+			var resMeta struct {
+				Resource             string   `json:"resource"`
+				AuthorizationServers []string `json:"authorization_servers"`
+			}
+			require.NoError(t, json.NewDecoder(wRes.Body).Decode(&resMeta))
+			assert.Equal(t, "https://energy.example.org/mcp", resMeta.Resource)
+			assert.Equal(t, []string{"https://energy.example.org"}, resMeta.AuthorizationServers)
 		}
-		require.NoError(t, json.NewDecoder(wRes.Body).Decode(&resMeta))
-		assert.Equal(t, "https://energy.example.org/api/mcp", resMeta.Resource)
-		assert.Equal(t, []string{"https://energy.example.org"}, resMeta.AuthorizationServers)
+	})
+
+	t.Run("CORSAndMethodNotAllowed", func(t *testing.T) {
+		srv := newTestAppsServer(&mockStorage{}, now)
+		handler := srv.setupHandler()
+
+		reqOpt := httptest.NewRequest(http.MethodOptions, "/.well-known/oauth-protected-resource", nil)
+		reqOpt.Header.Set("Origin", "https://claude.ai")
+		wOpt := httptest.NewRecorder()
+		handler.ServeHTTP(wOpt, reqOpt)
+		assert.Equal(t, http.StatusNoContent, wOpt.Code)
+		assert.Equal(t, "https://claude.ai", wOpt.Header().Get("Access-Control-Allow-Origin"))
+
+		reqPost := httptest.NewRequest(http.MethodPost, "/.well-known/oauth-protected-resource/mcp", nil)
+		wPost := httptest.NewRecorder()
+		handler.ServeHTTP(wPost, reqPost)
+		assert.Equal(t, http.StatusMethodNotAllowed, wPost.Code)
+		assert.Equal(t, "GET, OPTIONS", wPost.Header().Get("Allow"))
 	})
 }
 
@@ -248,6 +291,21 @@ func TestHandleOAuthRegister(t *testing.T) {
 		assert.True(t, strings.HasPrefix(regRes.ClientID, oauthClientIDPrefix))
 		assert.Equal(t, "Claude", regRes.ClientName)
 		assert.Len(t, regRes.RedirectURIs, 2)
+	})
+
+	t.Run("CORSAndMethodNotAllowed", func(t *testing.T) {
+		reqOpt := httptest.NewRequest(http.MethodOptions, "/oauth/register", nil)
+		reqOpt.Header.Set("Origin", "https://claude.ai")
+		wOpt := httptest.NewRecorder()
+		handler.ServeHTTP(wOpt, reqOpt)
+		assert.Equal(t, http.StatusNoContent, wOpt.Code)
+		assert.Equal(t, "https://claude.ai", wOpt.Header().Get("Access-Control-Allow-Origin"))
+
+		reqGet := httptest.NewRequest(http.MethodGet, "/oauth/register", nil)
+		wGet := httptest.NewRecorder()
+		handler.ServeHTTP(wGet, reqGet)
+		assert.Equal(t, http.StatusMethodNotAllowed, wGet.Code)
+		assert.Equal(t, "POST, OPTIONS", wGet.Header().Get("Allow"))
 	})
 }
 
@@ -511,6 +569,41 @@ func TestHandleOAuthClientInfo(t *testing.T) {
 		handler.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
+
+	t.Run("ValidatesOptionalResourceParameter", func(t *testing.T) {
+		// Matching baseURL or baseURL+"/mcp" succeeds (httptest default host is example.com -> https://example.com)
+		for _, validRes := range []string{"https://example.com", "https://example.com/mcp", "https://example.com/mcp/"} {
+			qOK := url.Values{
+				"client_id":             {clientID},
+				"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+				"response_type":         {"code"},
+				"code_challenge":        {codeChallenge},
+				"code_challenge_method": {"S256"},
+				"resource":              {validRes},
+			}
+			reqOK := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+qOK.Encode(), nil)
+			reqOK.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+			wOK := httptest.NewRecorder()
+			handler.ServeHTTP(wOK, reqOK)
+			assert.Equal(t, http.StatusOK, wOK.Code, "resource %q should be accepted", validRes)
+		}
+
+		// Foreign resource rejected with 400
+		qBad := url.Values{
+			"client_id":             {clientID},
+			"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+			"response_type":         {"code"},
+			"code_challenge":        {codeChallenge},
+			"code_challenge_method": {"S256"},
+			"resource":              {"https://other.example.org/mcp"},
+		}
+		reqBad := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+qBad.Encode(), nil)
+		reqBad.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wBad := httptest.NewRecorder()
+		handler.ServeHTTP(wBad, reqBad)
+		assert.Equal(t, http.StatusBadRequest, wBad.Code)
+		assert.Contains(t, wBad.Body.String(), "resource does not match")
+	})
 }
 
 func TestHandleOAuthApprove(t *testing.T) {
@@ -578,6 +671,7 @@ func TestHandleOAuthApprove(t *testing.T) {
 		parsedRedirect, err := url.Parse(approveRes.RedirectURL)
 		require.NoError(t, err)
 		assert.Equal(t, "xyz-state", parsedRedirect.Query().Get("state"))
+		assert.Equal(t, "https://example.com", parsedRedirect.Query().Get("iss"))
 		assert.True(t, strings.HasPrefix(parsedRedirect.Query().Get("code"), oauthCodePrefix))
 		mockS.AssertExpectations(t)
 	})
@@ -708,6 +802,52 @@ func TestHandleOAuthApprove(t *testing.T) {
 		handler.ServeHTTP(wApprove, reqApprove)
 		assert.Equal(t, http.StatusForbidden, wApprove.Code)
 		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RejectsForeignResourceParameter", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		handler := srv.setupHandler()
+
+		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
+			Name:         "Claude",
+			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
+			CreatedAt:    now.Unix(),
+		})
+		require.NoError(t, err)
+
+		sessionToken, err := srv.createSessionToken("user-1", "user1@example.com", "sec-1", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:            "user-1",
+			Email:         "user1@example.com",
+			SessionSecret: "sec-1",
+			Sites:         []types.UserSite{{ID: "site-1", Name: "Home"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "user-1"}},
+		}, nil).Once()
+
+		codeChallenge := computePKCES256Challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk-valid-pkce-verifier")
+		approvePayload, err := json.Marshal(map[string]string{
+			"siteID":              "site-1",
+			"clientID":            clientID,
+			"redirectURI":         "https://claude.ai/api/mcp/auth_callback",
+			"responseType":        "code",
+			"codeChallenge":       codeChallenge,
+			"codeChallengeMethod": "S256",
+			"resource":            "https://foreign.example.net/mcp",
+		})
+		require.NoError(t, err)
+
+		reqApprove := httptest.NewRequest(http.MethodPost, "/api/oauth/approve", bytes.NewReader(approvePayload))
+		reqApprove.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wApprove := httptest.NewRecorder()
+		handler.ServeHTTP(wApprove, reqApprove)
+		assert.Equal(t, http.StatusBadRequest, wApprove.Code)
+		assert.Contains(t, wApprove.Body.String(), "resource does not match")
 	})
 }
 
@@ -1175,5 +1315,28 @@ func TestHandleOAuthToken(t *testing.T) {
 		handler.ServeHTTP(wQuery, reqQuery)
 		assert.Equal(t, http.StatusBadRequest, wQuery.Code)
 		assert.Contains(t, wQuery.Body.String(), "unsupported_grant_type")
+
+		// Foreign RFC 8707 resource returns 400 invalid_target
+		foreignResForm := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {"abc"},
+			"code_verifier": {codeVerifier},
+			"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+			"client_id":     {"https://claude.ai/oauth/client-metadata.json"},
+			"resource":      {"https://foreign.example.net/mcp"},
+		}
+		reqForeignRes := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(foreignResForm.Encode()))
+		reqForeignRes.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		wForeignRes := httptest.NewRecorder()
+		handler.ServeHTTP(wForeignRes, reqForeignRes)
+		assert.Equal(t, http.StatusBadRequest, wForeignRes.Code)
+		assert.Contains(t, wForeignRes.Body.String(), "invalid_target")
+
+		// Method not allowed on GET /oauth/token
+		reqGet := httptest.NewRequest(http.MethodGet, "/oauth/token", nil)
+		wGet := httptest.NewRecorder()
+		handler.ServeHTTP(wGet, reqGet)
+		assert.Equal(t, http.StatusMethodNotAllowed, wGet.Code)
+		assert.Equal(t, "POST, OPTIONS", wGet.Header().Get("Allow"))
 	})
 }
