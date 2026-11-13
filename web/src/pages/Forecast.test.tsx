@@ -5,36 +5,10 @@ import { Router } from 'wouter';
 import Forecast, { STALE_FORECAST_TIMEOUT_MS } from './Forecast';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
-import { BatteryMode, ActionReason, type ModelingHour, type Plan, type PlanPeriod } from '../api';
+import { BatteryMode, ActionReason, type Plan, type PlanPeriod } from '../api';
 const { fetchModeling, fetchSettings } = api;
 
 vi.mock('../api');
-
-
-
-function makeSimHours(): ModelingHour[] {
-    const hours: ModelingHour[] = [];
-    const base = new Date('2026-02-11T14:00:00Z');
-    for (let i = 0; i < 24; i++) {
-        const ts = new Date(base);
-        ts.setHours(ts.getHours() + i);
-        hours.push({
-            ts: ts.toISOString(),
-            hour: ts.getHours(),
-            netLoadSolarKWH: 1.0 - i * 0.05,
-            gridChargeDollarsPerKWH: 0.10 + i * 0.005,
-            solarOppDollarsPerKWH: 0.08,
-            avgHomeLoadKWH: 1.5,
-            predictedSolarKWH: Math.max(0, 3.0 * Math.sin((i / 24) * Math.PI)),
-            batteryKWH: 5.0 - i * 0.2,
-            startBatteryKWH: 5.0 - i * 0.2,
-            batteryCapacityKWH: 10.0,
-            batteryReserveKWH: 0.5,
-            todaySolarTrend: 1.0,
-        });
-    }
-    return hours;
-}
 
 function makeTestPlan(): Plan {
     const base = new Date('2026-02-11T14:00:00Z');
@@ -83,13 +57,12 @@ describe('Forecast Page', () => {
     it('shows loading state initially', () => {
         (fetchModeling as any).mockReturnValue(new Promise(() => {}));
         renderForecast();
-        expect(screen.getByText(/Loading simulation/)).toBeInTheDocument();
+        expect(screen.getByText(/Loading forecast/)).toBeInTheDocument();
     });
 
-    it('calls fetchModeling and renders 5 charts when no weather data is present', async () => {
-        const data = makeSimHours();
+    it('calls fetchModeling and renders plan charts when no weather data is present', async () => {
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: []
@@ -102,23 +75,22 @@ describe('Forecast Page', () => {
         });
 
         await waitFor(() => {
-            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Battery Schedule & SOC (%)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar & Home Load (kWh)')).toBeInTheDocument();
             expect(screen.queryByText('Estimated Irradiance (W/m²)')).not.toBeInTheDocument();
-            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
     });
 
     it('calls fetchModeling and renders charts when weather data is present', async () => {
-        const data = makeSimHours();
+        const plan = makeTestPlan();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan,
             energyHistory: [],
             priceHistory: [],
             weather: [
                 {
-                    tsHourStart: data[0].ts,
+                    tsHourStart: plan.periods[0].tsStart,
                     irradiance: 350,
                     improvedSolarGeneration: 2.5,
                     unclippedSolarGeneration: 2.8,
@@ -133,89 +105,26 @@ describe('Forecast Page', () => {
         });
 
         await waitFor(() => {
-            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Battery Schedule & SOC (%)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar & Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
     });
 
-    it('allows toggling between Default and Conservative home load prediction strategy', async () => {
-        const user = userEvent.setup();
-        const data = makeSimHours();
+    it('shows page heading and subtitle with plan timestamp', async () => {
+        const plan = makeTestPlan();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
-
-        renderForecast();
-
-        // Check toggle switch is present
-        const toggle = await screen.findByRole('switch', { name: /Conservative/i });
-        expect(toggle).toBeInTheDocument();
-        expect(toggle).not.toBeChecked();
-
-        // Toggle to conservative
-        await user.click(toggle);
-
-        // Verify fetchModeling was called with override 'conservative'
-        await waitFor(() => {
-            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
-        });
-    });
-
-    it('defaults the toggle to checked if settings strategy is conservative', async () => {
-        const data = makeSimHours();
-        (fetchModeling as any).mockResolvedValue({
-            simulation: data,
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
-
-        renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
-
-        // Check toggle switch is present and checked
-        const toggle = await screen.findByRole('switch', { name: /Conservative/i });
-        expect(toggle).toBeChecked();
-    });
-
-    it('shows page heading and subtitle', async () => {
-        (fetchModeling as any).mockResolvedValue({
-            simulation: makeSimHours(),
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
-
-        renderForecast();
-
-        await waitFor(() => {
-            expect(screen.getByText('24-Hour Simulation')).toBeInTheDocument();
-            expect(screen.getByText(/Predicted energy state starting from/)).toBeInTheDocument();
-        });
-    });
-
-    it('shows page subtitle with updated timestamp from backend if present', async () => {
-        const updatedTimeStr = '2026-02-11T12:00:00Z';
-        (fetchModeling as any).mockResolvedValue({
-            simulation: makeSimHours(),
+            plan,
             energyHistory: [],
             priceHistory: [],
             weather: [],
-            updated: updatedTimeStr,
         });
 
         renderForecast();
 
         await waitFor(() => {
-            const expectedTime = new Date(updatedTimeStr).toLocaleTimeString([], {
-                hour: 'numeric',
-                minute: '2-digit',
-                hour12: true,
-            });
-            expect(screen.getByText(new RegExp("starting from.*" + expectedTime))).toBeInTheDocument();
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            expect(screen.getByText(/Optimal/i)).toBeInTheDocument();
         });
     });
 
@@ -230,18 +139,18 @@ describe('Forecast Page', () => {
     });
 
     it('shows empty state when no data', async () => {
-        (fetchModeling as any).mockResolvedValue([]);
+        (fetchModeling as any).mockResolvedValue({});
 
         renderForecast();
 
         await waitFor(() => {
-            expect(screen.getByText('No simulation data available.')).toBeInTheDocument();
+            expect(screen.getByText('No forecast data available.')).toBeInTheDocument();
         });
     });
 
     it('shows the include previous 24 hours checkbox', async () => {
         (fetchModeling as any).mockResolvedValue({
-            simulation: makeSimHours(),
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: []
@@ -254,36 +163,9 @@ describe('Forecast Page', () => {
         });
     });
 
-    it('renders VPP event reference area and reference lines when VPP data is present in the simulation', async () => {
-        const data = makeSimHours();
-        // Set VPP data on some hours
-        data[2].vppStandbyAt = data[2].ts;
-        data[3].vppStandbyAt = data[2].ts;
-        data[4].vppStandbyAt = data[2].ts;
-        data[2].vppEndAt = data[5].ts;
-        data[3].vppEndAt = data[5].ts;
-        data[4].vppEndAt = data[5].ts;
-
+    it('does not make duplicate fetchModeling calls on initial load', async () => {
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
-
-        renderForecast();
-
-        await waitFor(() => {
-            const vppLabels = screen.getAllByText('VPP Event');
-            expect(vppLabels.length).toBe(1);
-        });
-    });
-
-    it('does not make duplicate fetchModeling calls on initial load or toggle', async () => {
-        const user = userEvent.setup();
-        const data = makeSimHours();
-        (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: []
@@ -291,34 +173,18 @@ describe('Forecast Page', () => {
 
         renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
 
-        // 1. Initial load should happen once. Wait for the loading screen to disappear.
         await waitFor(() => {
-            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
+            expect(screen.getByText('Battery Schedule & SOC (%)')).toBeInTheDocument();
         });
 
-        // The initial request to modeling should be exactly 1, and fetchSettings should not be called.
         expect(fetchSettings).not.toHaveBeenCalled();
         expect(fetchModeling).toHaveBeenCalledTimes(1);
         expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
-
-        // Check toggle switch is checked by default
-        const toggle = screen.getByRole('switch', { name: /Conservative/i });
-        expect(toggle).toBeChecked();
-
-        // 2. Toggle to default strategy
-        await user.click(toggle);
-
-        // Fetch modeling should be called a second time (total 2 times) with 'default'.
-        await waitFor(() => {
-            expect(fetchModeling).toHaveBeenCalledTimes(2);
-            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'default');
-        });
     });
 
     it('opens help dialog when help button on a forecast chart is clicked', async () => {
-        const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: [],
@@ -328,7 +194,7 @@ describe('Forecast Page', () => {
         renderForecast();
 
         await waitFor(() => {
-            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
+            expect(screen.getByText('Battery Schedule & SOC (%)')).toBeInTheDocument();
         });
 
         const helpBtns = screen.getAllByRole('button', { name: /more info/i });
@@ -338,7 +204,7 @@ describe('Forecast Page', () => {
         await user.click(helpBtn);
 
         expect(await screen.findByRole('dialog')).toBeInTheDocument();
-        expect(screen.getByText(/if RateRudder did nothing to optimize your system/i)).toBeInTheDocument();
+        expect(screen.getByText(/SmartPlan engine/i)).toBeInTheDocument();
     });
 
     it('renders 24-Hour Energy Plan and hero metrics when plan is present', async () => {
@@ -585,7 +451,7 @@ describe('Forecast Page', () => {
         expect(screen.getByText('Reserve')).toBeInTheDocument();
     });
 
-    it('renders system fault banner when latestAction has fault without simulation or plan', async () => {
+    it('renders system fault banner when latestAction has fault without plan', async () => {
         (fetchModeling as any).mockResolvedValue({
             latestAction: {
                 timestamp: '2026-09-30T12:00:00Z',
@@ -652,7 +518,7 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             expect(screen.getByTestId('forecast-fault-alert')).toBeInTheDocument();
             expect(screen.getByText(/2 alarms present/)).toBeInTheDocument();
-            expect(screen.getByText('24-Hour Simulation')).toBeInTheDocument();
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
         });
     });
 
@@ -661,9 +527,8 @@ describe('Forecast Page', () => {
         let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
         const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
 
-        const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: [],
@@ -701,9 +566,8 @@ describe('Forecast Page', () => {
         let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
         const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
 
-        const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: [],
@@ -741,9 +605,8 @@ describe('Forecast Page', () => {
         let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
         const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
 
-        const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
-            simulation: data,
+            plan: makeTestPlan(),
             energyHistory: [],
             priceHistory: [],
             weather: [],

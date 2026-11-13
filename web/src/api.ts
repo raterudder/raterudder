@@ -286,15 +286,11 @@ export interface Settings {
     postalCode: string;
     location?: SiteLocation;
     release: string;
-    alwaysChargeUnderDollarsPerKWH: number;
     minArbitrageDifferenceDollarsPerKWH: number;
-    minDeficitPriceDifferenceDollarsPerKWH: number;
-    minExportHoldDifferenceDollarsPerKWH: number;
     minBatteryExportDifferenceDollarsPerKWH?: number;
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
     evChargingStandby?: boolean;
-    ignoreHourUsageOverMultiple: number;
     customGridSettings?: boolean;
     manageTOUSchedules?: boolean;
     gridChargeBatteries: boolean;
@@ -302,7 +298,6 @@ export interface Settings {
     gridExportBatteries: boolean;
     solarTrendRatioMax: number;
     solarBellCurveMultiplier: number;
-    solarFullyChargeHeadroomBatterySOC: number;
     solarNetMeteringCreditsValue: string;
     utilityProvider: string;
     utilityRate: string;
@@ -320,9 +315,6 @@ export interface Settings {
         consecutiveUserFailures?: number;
         lastUserAttempt?: string;
     };
-    minStartChargeMinutes: number;
-    solarCapacityBufferMinutes: number;
-    vppChargingBufferMinutes: number;
     homeLoadPredictionStrategy?: string;
     optimizationProfile?: string;
 }
@@ -585,24 +577,6 @@ export const listUserSites = async (): Promise<UserSite[]> => {
     return response.json();
 };
 
-export interface ModelingHour {
-    ts: string;
-    hour: number;
-    netLoadSolarKWH: number;
-    gridChargeDollarsPerKWH: number;
-    solarOppDollarsPerKWH: number;
-    avgHomeLoadKWH: number;
-    predictedSolarKWH: number;
-    batteryKWH: number;
-    startBatteryKWH?: number;
-    batteryCapacityKWH: number;
-    batteryReserveKWH: number;
-    todaySolarTrend: number;
-    startedVPPChargingAt?: string;
-    vppStandbyAt?: string;
-    vppEndAt?: string;
-}
-
 export const fetchModeling = async (siteID?: string, overrideHomeLoadPredictionStrategy?: string, regeneratePlan?: boolean): Promise<ForecastResponse> => {
     const query = new URLSearchParams();
     if (siteID) {
@@ -777,7 +751,6 @@ export interface WeatherRes {
 export interface ForecastResponse {
     plan?: Plan;
     latestAction?: Action;
-    simulation?: ModelingHour[];
     energyHistory?: EnergyHistoryRes[];
     priceHistory?: PriceHistoryRes[];
     futurePrices?: PriceHistoryRes[];
@@ -866,7 +839,6 @@ export const fetchActionsAndSavings = async (
     end: Date,
     siteID?: string,
     options?: {
-        newCalculation?: boolean;
         savingsPeriods?: SavingsPeriod[];
     }
 ): Promise<ActionsAndSavingsResponse> => {
@@ -878,9 +850,6 @@ export const fetchActionsAndSavings = async (
     });
     if (siteID) {
         query.append('siteID', siteID);
-    }
-    if (options?.newCalculation) {
-        query.append('newCalculation', 'true');
     }
     if (options?.savingsPeriods && options.savingsPeriods.length > 0) {
         const periodsParam = options.savingsPeriods

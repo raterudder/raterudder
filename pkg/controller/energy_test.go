@@ -46,9 +46,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0, // Disable hourly outlier filtering
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -87,9 +85,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -125,9 +121,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -162,9 +156,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -209,9 +201,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			})
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -255,9 +245,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			})
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -298,10 +286,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 3.0,
-			IgnoreHourUsageFloorKWH:     0.5,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -339,10 +324,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 3.0,
-			IgnoreHourUsageFloorKWH:     0.5,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -384,9 +366,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -432,9 +412,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -467,9 +445,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -548,9 +524,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			ForecastHours: todayFHours,
 		})
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 0.0,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
@@ -673,10 +647,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 3.0,
-			IgnoreHourUsageFloorKWH:     0.5,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -712,10 +683,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 2.0,
-			IgnoreHourUsageFloorKWH:     0.5, // Floor is 0.5, so 0.3 is not filtered since 0.3 <= Max(0.1, 0.5) * 2
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -758,10 +726,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		settings := types.Settings{
-			IgnoreHourUsageOverMultiple: 2.0,
-			IgnoreHourUsageFloorKWH:     0.5,
-		}
+		settings := types.Settings{}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
@@ -783,7 +748,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 2.1743589743589746, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -795,7 +760,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 0.09, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -809,7 +774,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 18, 0, 0, 0, time.UTC) // Friday hour 18
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 2.0, model[18].AvgHomeLoadKWH, 0.001)
 	})
 
@@ -4216,5 +4181,110 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		for h := 10; h <= 14; h++ {
 			assert.Greater(t, rawAvgLoadA[h], 1.30, "Sunday hour %d should scale using the Thursday+Friday baseline even when Saturday is also high", h)
 		}
+	})
+}
+
+func TestCalculateSolarTrend(t *testing.T) {
+	c := NewController()
+	ctx := context.Background()
+	now := time.Date(2025, 6, 15, 13, 0, 0, 0, time.UTC)
+	historyStart := now.Add(-2 * time.Hour)
+
+	// Mock model
+	model := []TimeProfile{
+		{Hour: 11, AvgSolarKWH: 2.0},
+		{Hour: 12, AvgSolarKWH: 3.0},
+		{Hour: 13, AvgSolarKWH: 4.0},
+	}
+
+	settings := types.Settings{
+		SolarTrendRatioMax: 3.0,
+	}
+
+	t.Run("Insufficient History", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: historyStart.Add(time.Hour), SolarKWH: 2.0},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.Equal(t, 1.0, ratio)
+	})
+
+	t.Run("Model Zero (Night)", func(t *testing.T) {
+		nightNow := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
+		history := []types.EnergyStats{
+			{TSHourStart: nightNow.Add(-1 * time.Hour), SolarKWH: 0.0},
+			{TSHourStart: nightNow.Add(-2 * time.Hour), SolarKWH: 0.0},
+		}
+		nightModel := []TimeProfile{
+			{Hour: 0, AvgSolarKWH: 0.0},
+			{Hour: 1, AvgSolarKWH: 0.0},
+			{Hour: 2, AvgSolarKWH: 0.0},
+		}
+		ratio := c.calculateSolarTrend(ctx, nightNow, history, nightModel, settings)
+		assert.Equal(t, 1.0, ratio)
+	})
+
+	t.Run("High Solar Trend (Capped)", func(t *testing.T) {
+		// Model expects 2.0 + 3.0 = 5.0 for hours 11 and 12
+		// Actual is 10.0 + 15.0 = 25.0
+		// Ratio 5.0, should cap at settings.SolarTrendRatioMax (3.0)
+		history := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 10.0},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 15.0},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.Equal(t, 3.0, ratio)
+	})
+
+	t.Run("Low Solar Trend", func(t *testing.T) {
+		// Model expects 5.0
+		// Actual is 0.5 + 0.5 = 1.0
+		// Ratio 1.0 / 5.0 = 0.2
+		history := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 0.5},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 0.5},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.InDelta(t, 0.2, ratio, 0.001)
+	})
+
+	t.Run("Low Variation (Less than 10%)", func(t *testing.T) {
+		// Model expects 5.0
+		// Actual is 2.6 + 2.5 = 5.1
+		// Variation (5.1-5.0)/5.0 = 2%, should return 1.0
+		history := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 2.6},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 2.5},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.Equal(t, 1.0, ratio)
+	})
+
+	t.Run("Custom Cap", func(t *testing.T) {
+		customSettings := settings
+		customSettings.SolarTrendRatioMax = 5.0
+		history := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 10.0},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 10.0},
+		}
+		// Model expects 5.0. Actual 20.0. Ratio 4.0.
+		ratio := c.calculateSolarTrend(ctx, now, history, model, customSettings)
+		assert.Equal(t, 4.0, ratio)
+	})
+
+	t.Run("Ignore Current Hour", func(t *testing.T) {
+		// If the latestTime is the current hour, it should be ignored.
+		// So recent actual solar and expected solar should use the 2 previous full hours.
+		// Model expects 2.0 (hr 11) + 3.0 (hr 12) = 5.0.
+		// Actual solar for hr 11 and 12 is 4.0 + 6.0 = 10.0.
+		// Ratio should be 10.0 / 5.0 = 2.0.
+		// If current hour (hr 13) were not ignored, expected would be 7.0, actual 31.0, ratio capped at 3.0.
+		history := []types.EnergyStats{
+			{TSHourStart: now, SolarKWH: 25.0}, // current hour (now is 13:00)
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 6.0},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 4.0},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.Equal(t, 2.0, ratio)
 	})
 }

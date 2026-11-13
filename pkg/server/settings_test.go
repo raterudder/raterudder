@@ -242,10 +242,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		newSettings := types.Settings{
-			DryRun:                      true,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
+			DryRun:                   true,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
 		}
 		b, _ := json.Marshal(newSettings)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
@@ -279,11 +278,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("SetSettings", mock.Anything, "site1", mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		newSettings := types.Settings{
-			DryRun:                      true,
-			MinBatterySOC:               25.0,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
+			DryRun:                   true,
+			MinBatterySOC:            25.0,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
 		}
 		b, err := json.Marshal(newSettings)
 		require.NoError(t, err)
@@ -564,9 +562,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		base := types.Settings{
-			IgnoreHourUsageOverMultiple: 1,
-			SolarTrendRatioMax:          1,
-			MinBatterySOC:               20,
+			SolarTrendRatioMax: 1,
+			MinBatterySOC:      20,
 		}
 
 		// Invalid value (negative battery SOC)
@@ -579,28 +576,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "minimum battery SOC must be between 0 and 100")
-
-		// Invalid value (IgnoreHourUsageOverMultiple < 1)
-		s2 := base
-		s2.IgnoreHourUsageOverMultiple = 0
-		b2, _ := json.Marshal(s2)
-		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b2))
-		req = withUser(req, "admin@example.com", true)
-		w = httptest.NewRecorder()
-		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
-		assert.Contains(t, w.Body.String(), "ignore hour usage over multiple must be at least 1")
-
-		// Invalid value (IgnoreHourUsageFloorKWH < 0)
-		s2Floor := base
-		s2Floor.IgnoreHourUsageFloorKWH = -0.5
-		b2Floor, _ := json.Marshal(s2Floor)
-		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b2Floor))
-		req = withUser(req, "admin@example.com", true)
-		w = httptest.NewRecorder()
-		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
-		assert.Contains(t, w.Body.String(), "ignore hour usage floor KWH cannot be negative")
 
 		// Invalid value (MinArbitrageDifferenceDollarsPerKWH < 0)
 		s3 := base
@@ -796,11 +771,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               80,
-			DryRun:                      true,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
+			MinBatterySOC:            80,
+			DryRun:                   true,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -861,12 +835,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				MinBatterySOC:               80,
-				DryRun:                      true,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
-				ESS:                         "mock",
+				MinBatterySOC:            80,
+				DryRun:                   true,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
+				ESS:                      "mock",
 			},
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{Strategy: "foo"},
@@ -948,12 +921,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				MinBatterySOC:               80,
-				DryRun:                      true,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
-				ESS:                         "mock",
+				MinBatterySOC:            80,
+				DryRun:                   true,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
+				ESS:                      "mock",
 			},
 		}
 		b, err := json.Marshal(s)
@@ -997,12 +969,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				MinBatterySOC:               80,
-				DryRun:                      true,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
-				ESS:                         "mock",
+				MinBatterySOC:            80,
+				DryRun:                   true,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
+				ESS:                      "mock",
 			},
 		}
 		b, err := json.Marshal(s)
@@ -1066,13 +1037,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				ESS:                         "mock",
-				CustomGridSettings:          false,
-				GridExportSolar:             false,
-				MinBatterySOC:               20,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
+				ESS:                      "mock",
+				CustomGridSettings:       false,
+				GridExportSolar:          false,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
 			},
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{Strategy: "simple"},
@@ -1136,13 +1106,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				ESS:                         "franklin",
-				CustomGridSettings:          false,
-				ManageTOUSchedules:          false,
-				MinBatterySOC:               20,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
+				ESS:                      "franklin",
+				CustomGridSettings:       false,
+				ManageTOUSchedules:       false,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
 			},
 			Credentials: &types.Credentials{
 				Franklin: &types.FranklinCredentials{Username: "user@example.com", Password: "pw"},
@@ -1207,15 +1176,14 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				ESS:                         "mock",
-				CustomGridSettings:          true,
-				GridChargeBatteries:         false,
-				GridExportSolar:             true,
-				GridExportBatteries:         false,
-				MinBatterySOC:               20,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
+				ESS:                      "mock",
+				CustomGridSettings:       true,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+				GridExportBatteries:      false,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
 			},
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{Strategy: "simple"},
@@ -1280,14 +1248,13 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials,omitempty"`
 		}{
 			Settings: types.Settings{
-				ESS:                         "mock",
-				GridChargeBatteries:         false,
-				GridExportSolar:             true,
-				GridExportBatteries:         true,
-				MinBatterySOC:               20,
-				IgnoreHourUsageOverMultiple: 5,
-				SolarTrendRatioMax:          3.0,
-				SolarBellCurveMultiplier:    1.0,
+				ESS:                      "mock",
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+				GridExportBatteries:      true,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
 			},
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{Strategy: "simple"},
@@ -1335,13 +1302,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Create a request with valid settings but invalid rate options
 		s := types.Settings{
-			MinBatterySOC:               80,
-			DryRun:                      true,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "test",
-			UtilityRateOptions:          types.UtilityRateOptions{RateClass: "invalid"},
+			MinBatterySOC:            80,
+			DryRun:                   true,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "test",
+			UtilityRateOptions:       types.UtilityRateOptions{RateClass: "invalid"},
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -1373,10 +1339,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		bodyData := types.Settings{
-			PostalCode:                  "90210",
-			CountryCode:                 "US",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
+			PostalCode:         "90210",
+			CountryCode:        "US",
+			SolarTrendRatioMax: 1.0,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -1438,10 +1403,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		bodyData := types.Settings{
-			PostalCode:                  "90210",
-			CountryCode:                 "US",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
+			PostalCode:         "90210",
+			CountryCode:        "US",
+			SolarTrendRatioMax: 1.0,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -1480,10 +1444,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		bodyData := types.Settings{
-			PostalCode:                  "60601",
-			CountryCode:                 "US",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
+			PostalCode:         "60601",
+			CountryCode:        "US",
+			SolarTrendRatioMax: 1.0,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -1559,11 +1522,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			ESS:                         "mock",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
+			ESS:                      "mock",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
 		}
 
 		body := struct {
@@ -1635,11 +1597,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 
 		s := types.Settings{
-			ESS:                         "mock",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
+			ESS:                      "mock",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
 		}
 
 		body := struct {
@@ -1706,11 +1667,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 
 		s := types.Settings{
-			ESS:                         "mock",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
+			ESS:                      "mock",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
 		}
 
 		body := struct {
@@ -1773,11 +1733,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			ESS:                         "mock",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
+			ESS:                      "mock",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
 		}
 
 		body := struct {
@@ -1858,11 +1817,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Credentials *types.Credentials `json:"credentials"`
 		}{
 			Settings: types.Settings{
-				ESS:                         "mock",
-				MinBatterySOC:               20,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			},
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{
@@ -1990,11 +1948,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Create a request with new utility provider
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "new-utility",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "new-utility",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2042,11 +1999,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "new-utility",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "new-utility",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2095,12 +2051,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "new-utility",
-			ESS:                         "tesla",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "new-utility",
+			ESS:                      "tesla",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2160,12 +2115,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "comed",
-			ESS:                         "tesla",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "comed",
+			ESS:                      "tesla",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2223,12 +2177,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "pge",
-			ESS:                         "tesla",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "pge",
+			ESS:                      "tesla",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2284,11 +2237,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 5,
-			SolarTrendRatioMax:          3.0,
-			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "new-utility",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3.0,
+			SolarBellCurveMultiplier: 1.0,
+			UtilityProvider:          "new-utility",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -2339,12 +2291,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Change ZIP code (weather backfill) and utility settings (price update)
 		bodyData := types.Settings{
-			PostalCode:                  "60601",
-			CountryCode:                 "US",
-			UtilityProvider:             "new-utility",
-			UtilityRate:                 "mock",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
+			PostalCode:         "60601",
+			CountryCode:        "US",
+			UtilityProvider:    "new-utility",
+			UtilityRate:        "mock",
+			SolarTrendRatioMax: 1.0,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -2425,11 +2376,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 
 		s := types.Settings{
-			ESS:                         "mock",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
+			ESS:                      "mock",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
 			UtilityRateOptions: types.UtilityRateOptions{
 				NetMeteringScheme:  "nem2",
 				NetMeteringCredits: true,
@@ -2503,13 +2453,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}).Return(true, nil).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          true,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       true,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2543,13 +2492,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}, nil).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          true,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       true,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2578,13 +2526,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          false,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       false,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2613,13 +2560,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          true,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       true,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2651,13 +2597,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{}, fmt.Errorf("status error")).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          true,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       true,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2695,13 +2640,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}).Return(false, fmt.Errorf("set modes error")).Once()
 
 			s := types.Settings{
-				ESS:                         "mock",
-				Pause:                       true,
-				ManageTOUSchedules:          true,
-				MinBatterySOC:               25,
-				IgnoreHourUsageOverMultiple: 2,
-				SolarTrendRatioMax:          3,
-				SolarBellCurveMultiplier:    1,
+				ESS:                      "mock",
+				Pause:                    true,
+				ManageTOUSchedules:       true,
+				MinBatterySOC:            25,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
 			}
 			b, err := json.Marshal(s)
 			require.NoError(t, err)
@@ -2807,7 +2751,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		migratedTime := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
 			// Basic validation to ensure settings are actually migrated/passed correctly
-			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
+			return s.UtilityProvider == "old-utility" && s.OptimizationProfile == "balanced"
 		}), types.CurrentSettingsVersion, mock.Anything).Return(migratedTime, nil)
 
 		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)
@@ -2845,7 +2789,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		// Mock the SetSettings call to return an error
 		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
 			// Basic validation to ensure settings are actually migrated/passed correctly
-			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
+			return s.UtilityProvider == "old-utility" && s.OptimizationProfile == "balanced"
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, fmt.Errorf("save failed"))
 
 		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)

@@ -36,7 +36,6 @@ func main() {
 	periodMinSOCFlag := lflag.String("period-min-soc", "", "Override MinBatterySOCPeriods, e.g. 'On-Peak=20,Off-Peak=50' (optional)")
 	exportMarginDollarsFlag := lflag.String("export-margin", "", "Override settings.MinBatteryExportDifferenceDollarsPerKWH (optional)")
 	arbitrageDiffDollarsFlag := lflag.String("arbitrage-diff", "", "Override settings.MinArbitrageDifferenceDollarsPerKWH (optional)")
-	alwaysChargeUnderDollarsFlag := lflag.String("always-charge-under", "", "Override settings.AlwaysChargeUnderDollarsPerKWH (optional)")
 	gridChargeFlag := lflag.String("grid-charge", "", "Override settings.GridChargeBatteries ('true' or 'false')")
 	gridExportBatteriesFlag := lflag.String("grid-export-batteries", "", "Override settings.GridExportBatteries ('true' or 'false')")
 	gridExportSolarFlag := lflag.String("grid-export-solar", "", "Override settings.GridExportSolar ('true' or 'false')")
@@ -56,7 +55,7 @@ func main() {
 		siteID, dateStr, startDateStr, endDateStr string
 		detailAtStr, periodMinSOCStr              string
 		minSOCStr, exportMarginStr                string
-		arbitrageDiffStr, alwaysChargeStr         string
+		arbitrageDiffStr                          string
 		gridChargeStr, gridExportBatStr           string
 		gridExportSolStr                          string
 		days, maxPeriods                          int
@@ -79,7 +78,6 @@ func main() {
 		periodMinSOCStr = strings.TrimSpace(*periodMinSOCFlag)
 		exportMarginStr = strings.TrimSpace(*exportMarginDollarsFlag)
 		arbitrageDiffStr = strings.TrimSpace(*arbitrageDiffDollarsFlag)
-		alwaysChargeStr = strings.TrimSpace(*alwaysChargeUnderDollarsFlag)
 		gridChargeStr = strings.TrimSpace(*gridChargeFlag)
 		gridExportBatStr = strings.TrimSpace(*gridExportBatteriesFlag)
 		gridExportSolStr = strings.TrimSpace(*gridExportSolarFlag)
@@ -169,15 +167,6 @@ func main() {
 		}
 		settings.MinArbitrageDifferenceDollarsPerKWH = val
 		overridesApplied = append(overridesApplied, fmt.Sprintf("ArbitrageDiff=$%.4f", val))
-	}
-	if alwaysChargeStr != "" {
-		val, err := strconv.ParseFloat(alwaysChargeStr, 64)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid --always-charge-under value %q: %v\n", alwaysChargeStr, err)
-			os.Exit(1)
-		}
-		settings.AlwaysChargeUnderDollarsPerKWH = val
-		overridesApplied = append(overridesApplied, fmt.Sprintf("AlwaysChargeUnder=$%.4f", val))
 	}
 	if gridChargeStr != "" {
 		b, err := strconv.ParseBool(gridChargeStr)
@@ -307,11 +296,10 @@ func main() {
 	fmt.Printf("Window:         %s to %s (%d polls)\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04"), len(actions))
 	fmt.Printf("Utility:        %s (Rate: %s) | ESS: %s\n",
 		settings.UtilityProvider, settings.UtilityRate, settings.ESS)
-	fmt.Printf("Settings:       MinSOC=%.1f%% | Periods=%+v | ExportMargin=$%.4f | ArbDiff=$%.4f | AlwaysChargeUnder=$%.4f\n",
+	fmt.Printf("Settings:       MinSOC=%.1f%% | Periods=%+v | ExportMargin=$%.4f | ArbDiff=$%.4f\n",
 		settings.MinBatterySOC, settings.MinBatterySOCPeriods,
 		settings.MinBatteryExportDifferenceDollarsPerKWH,
-		settings.MinArbitrageDifferenceDollarsPerKWH,
-		settings.AlwaysChargeUnderDollarsPerKWH)
+		settings.MinArbitrageDifferenceDollarsPerKWH)
 	if len(overridesApplied) > 0 {
 		fmt.Printf("Overrides:      %s\n", strings.Join(overridesApplied, ", "))
 	}

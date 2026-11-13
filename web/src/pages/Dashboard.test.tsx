@@ -355,21 +355,18 @@ describe('Dashboard', () => {
             gridExported: 5,
             homeUsed: 25,
             batteryUsed: 11,
+            totalSavingsDollars: 11.50,
+            solarAndBatterySavingsDollars: 8.50,
+            rateRudderSavingsDollars: 3.00,
         };
         mockActionsAndSavings([], savingsData);
 
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
-            expect(screen.getByText('Savings')).toBeInTheDocument();
-            // Net savings: 5.50 (battery) + 5.00 (solar) + 1.00 (credit) = 11.50
-            expect(screen.getByText(/\$ 11\.50/)).toBeInTheDocument();
-            expect(screen.getByText('Solar')).toBeInTheDocument();
-            expect(screen.getByText('+ $ 5.00')).toBeInTheDocument();
-            expect(screen.getByText('Battery')).toBeInTheDocument();
-            expect(screen.getByText('+ $ 5.50')).toBeInTheDocument();
-            expect(screen.getByText('Export')).toBeInTheDocument();
-            expect(screen.getByText('+ $ 1.00')).toBeInTheDocument();
+            expect(screen.getByText('Today Savings')).toBeInTheDocument();
+            expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('$ 11.50');
+            expect(screen.getByTestId('hero-without-rr-savings')).toHaveTextContent('($ 8.50)');
         });
 
         await waitFor(() => {
@@ -403,6 +400,9 @@ describe('Dashboard', () => {
             gridExported: 5,
             homeUsed: 25,
             batteryUsed: 11,
+            totalSavingsDollars: 11.50,
+            solarAndBatterySavingsDollars: 8.50,
+            rateRudderSavingsDollars: 3.00,
         };
         const actions = [{
             reason: ActionReason.AlwaysChargeBelowThreshold,
@@ -422,12 +422,9 @@ describe('Dashboard', () => {
         renderWithRouter(<Dashboard settings={{ utilityProvider: 'octopus' } as any} />);
 
         await waitFor(() => {
-            expect(screen.getByText('Savings')).toBeInTheDocument();
-            // Net savings: 5.50 + 5.00 + 1.00 = 11.50 with £
-            expect(screen.getByText(/£ 11\.50/)).toBeInTheDocument();
-            expect(screen.getByText('+ £ 5.00')).toBeInTheDocument();
-            expect(screen.getByText('+ £ 5.50')).toBeInTheDocument();
-            expect(screen.getByText('+ £ 1.00')).toBeInTheDocument();
+            expect(screen.getByText('Today Savings')).toBeInTheDocument();
+            expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('£ 11.50');
+            expect(screen.getByTestId('hero-without-rr-savings')).toHaveTextContent('(£ 8.50)');
             // Price metrics with £
             expect(screen.getAllByText(/£ 0\.050/).length).toBeGreaterThanOrEqual(2);
         });
@@ -445,31 +442,20 @@ describe('Dashboard', () => {
             gridImported: 20,
             gridExported: 2,
             homeUsed: 23,
-            batteryUsed: 5
+            batteryUsed: 5,
+            totalSavingsDollars: -2.00,
+            solarAndBatterySavingsDollars: -2.00,
+            rateRudderSavingsDollars: 0,
         };
         mockActionsAndSavings([], savingsData);
 
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
-            // Net savings: 1.00 (solar) - 2.50 (battery) - 0.50 (credit) = -2.00
-            expect(screen.getByText('Savings')).toBeInTheDocument();
-            const netValue = screen.getByText(/- \$ 2\.00/);
-            expect(netValue).toBeInTheDocument();
+            expect(screen.getByText('Today Savings')).toBeInTheDocument();
+            const netValue = screen.getByTestId('hero-primary-savings');
+            expect(netValue).toHaveTextContent('- $ 2.00');
             expect(netValue).toHaveClass('negative');
-
-            expect(screen.getByText('Solar')).toBeInTheDocument();
-            expect(screen.getByText('+ $ 1.00')).toBeInTheDocument();
-
-            expect(screen.getByText('Battery')).toBeInTheDocument();
-            const batteryValue = screen.getByText('- $ 2.50');
-            expect(batteryValue).toBeInTheDocument();
-            expect(batteryValue).toHaveClass('negative');
-
-            expect(screen.getByText('Export')).toBeInTheDocument();
-            const exportValues = screen.getAllByText('- $ 0.50');
-            expect(exportValues.length).toBe(2);
-            expect(exportValues[0]).toHaveClass('negative');
         });
     });
 
@@ -996,14 +982,17 @@ describe('Dashboard', () => {
             gridExported: 5,
             homeUsed: 40,
             batteryUsed: 10,
+            totalSavingsDollars: 32,
+            solarAndBatterySavingsDollars: 32,
+            rateRudderSavingsDollars: 0,
         };
         mockActionsAndSavings([{ description: 'Should not show' }], savingsData);
 
         renderWithRouter(<Dashboard siteID="ALL" settings={null} />);
 
         await waitFor(() => {
-            expect(screen.getByText('Savings')).toBeInTheDocument();
-            expect(screen.getByText(/\$ 32\.00/)).toBeInTheDocument(); // 10+20+2
+            expect(screen.getByText('Today Savings')).toBeInTheDocument();
+            expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('$ 32.00');
         });
 
         // Should NOT show current status or actions
@@ -1576,7 +1565,7 @@ describe('Dashboard', () => {
             });
         });
 
-        it('requests newCalculation and 3 savingsPeriods when onlyPlanMode is enabled', async () => {
+        it('requests 3 savingsPeriods and renders multi-period savings', async () => {
             const periodStats = [
                 {
                     timestamp: new Date().toISOString(),
@@ -1648,7 +1637,6 @@ describe('Dashboard', () => {
                         ess: 'franklinwh',
                         hasCredentials: { franklinwh: true },
                         utilityProvider: 'comed_besh',
-                        features: { onlyPlanMode: true },
                     } as any}
                 />
             );
@@ -1659,7 +1647,6 @@ describe('Dashboard', () => {
                     expect.any(Date),
                     'site1',
                     expect.objectContaining({
-                        newCalculation: true,
                         savingsPeriods: expect.arrayContaining([
                             expect.objectContaining({ start: expect.any(Date), end: expect.any(Date) }),
                         ]),

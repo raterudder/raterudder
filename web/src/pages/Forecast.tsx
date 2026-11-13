@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchModeling } from '../api';
-import type { ForecastResponse, ModelingHour, Settings, PlanPeriod } from '../api';
+import type { ForecastResponse, Settings, PlanPeriod } from '../api';
 import { Button } from '@base-ui/react/button';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
@@ -14,7 +14,6 @@ import {
     Tooltip,
     ReferenceLine,
     Line,
-    ReferenceArea,
 } from 'recharts';
 import { HelpButton } from '../components/HelpButton';
 import './Forecast.css';
@@ -28,76 +27,9 @@ type ChartConfig = {
     height?: number;
     helpDescription?: React.ReactNode;
     areaType?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore';
-    referenceLine?: { dataKey: string; label: string; color: string };
     additionalAreas?: { dataKey: string; label?: string; color: string; gradientId: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
     additionalLines?: { dataKey: string; label?: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
 };
-
-const charts: ChartConfig[] = [
-    {
-        title: 'Battery (if used) (%)',
-        dataKey: 'batterySOCIfUsed',
-        color: 'var(--accent)',
-        gradientId: 'batteryGrad',
-        unit: '%',
-        helpDescription: (
-            <p>
-                Displays the forecasted State of Charge (SOC) of your battery if RateRudder did nothing to optimize your system.
-                It shows how battery levels would naturally change based solely on home load and solar generation without automated charging, discharging, or grid arbitrage interventions.
-                The dashed red line represents your Minimum Reserve SOC threshold.
-            </p>
-        ),
-        additionalLines: [
-            { dataKey: 'batteryReserveSOC', color: '#ef4444', strokeDasharray: '6 4', type: 'stepAfter' },
-        ],
-    },
-    {
-        title: 'Predicted Solar (kWh)',
-        dataKey: 'predictedSolarKWH',
-        color: 'var(--warning)',
-        gradientId: 'solarGrad',
-        unit: ' kWh',
-        helpDescription: (
-            <p>
-                Forecasts expected hourly solar generation in kilowatt-hours (kWh) for your system based on weather predictions, historical calibration, and panel orientation. RateRudder uses this forecast to optimize battery charging and grid usage.
-            </p>
-        ),
-    },
-    {
-        title: 'Predicted Home Load (kWh)',
-        dataKey: 'avgHomeLoadKWH',
-        color: '#a855f7',
-        gradientId: 'loadGrad',
-        unit: ' kWh',
-        helpDescription: (
-            <p>
-                Forecasts expected hourly electricity usage (in kWh) for your home based on historical consumption patterns, day of week, and temperature predictions.
-            </p>
-        ),
-    },
-    {
-        title: 'Grid Charge Cost ($/kWh)',
-        dataKey: 'gridChargeDollarsPerKWH',
-        color: '#10b981',
-        gradientId: 'priceGrad',
-        unit: ' $/kWh',
-        areaType: 'stepAfter',
-        helpDescription: (
-            <p>
-                Displays hourly electricity import prices and export credit rates ($/kWh) according to your utility rate plan. RateRudder uses these rates to schedule low-cost grid charging, avoid expensive peak pricing, and optimize solar or battery export credits.
-            </p>
-        ),
-        additionalLines: [
-            {
-                dataKey: 'gridExportDollarsPerKWH',
-                label: 'Export Rate',
-                color: '#f59e0b',
-                strokeDasharray: '4 3',
-                type: 'stepAfter',
-            },
-        ],
-    },
-];
 
 import {
     ALL_ZONES,
@@ -151,8 +83,27 @@ const planCharts: ChartConfig[] = [
         ],
     },
     {
-        ...charts[3],
+        title: 'Grid Charge Cost ($/kWh)',
+        dataKey: 'gridChargeDollarsPerKWH',
+        color: '#10b981',
+        gradientId: 'priceGrad',
+        unit: ' $/kWh',
+        areaType: 'stepAfter',
         height: 140,
+        helpDescription: (
+            <p>
+                Displays hourly electricity import prices and export credit rates ($/kWh) according to your utility rate plan. RateRudder uses these rates to schedule low-cost grid charging, avoid expensive peak pricing, and optimize solar or battery export credits.
+            </p>
+        ),
+        additionalLines: [
+            {
+                dataKey: 'gridExportDollarsPerKWH',
+                label: 'Export Rate',
+                color: '#f59e0b',
+                strokeDasharray: '4 3',
+                type: 'stepAfter',
+            },
+        ],
     },
 ];
 
@@ -160,14 +111,6 @@ function formatHour(ts: string, referenceTs?: string, timeZone?: string): string
     if (!ts) return '';
     const formatted = formatTime(ts, referenceTs, timeZone);
     return formatted.replace(':00 ', ' ');
-}
-
-// Extended interface adding calculated fields
-interface ProcessedModelingHour extends ModelingHour {
-    batterySOCIfUsed: number;
-    batteryReserveSOC: number;
-    plannedSOC?: number;
-    gridExportDollarsPerKWH?: number;
 }
 
 function syncByTimestamp(tooltipTicks: readonly any[], syncState: any): number {
@@ -197,7 +140,6 @@ function ForecastChart({
     isMobile,
     showCurrentTime,
     nowMs,
-    headerAction,
     planPeriods,
     planStats,
     scheduleBeats,
@@ -209,18 +151,12 @@ function ForecastChart({
     isMobile: boolean;
     showCurrentTime: boolean;
     nowMs: number;
-    headerAction?: React.ReactNode;
     planPeriods?: PlanPeriod[];
     planStats?: PlanSummaryStats | null;
     scheduleBeats?: DaySummaryBeat[];
     currencySymbol?: string;
     timeZone?: string;
 }) {
-    // Compute reference value if applicable
-    const refValue = config.referenceLine
-        ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
-        : undefined;
-
     const currentTimeStr = React.useMemo(() => {
         if (!showCurrentTime || data.length === 0) return undefined;
         // find closest hour in data
@@ -235,39 +171,6 @@ function ForecastChart({
         }
         return closest;
     }, [data, showCurrentTime, nowMs]);
-
-    const vppTicks = React.useMemo(() => {
-        if (config.dataKey !== 'batterySOCIfUsed' && config.dataKey !== 'plannedSOC') return null;
-
-        const isZeroTime = (ts: string | undefined | null) => {
-            if (!ts) return true;
-            const date = new Date(ts);
-            return isNaN(date.getTime()) || date.getFullYear() <= 1;
-        };
-
-        let startIdx = -1;
-        let endIdx = -1;
-        for (let i = 0; i < data.length; i++) {
-            const start = data[i].vppStandbyAt;
-            const end = data[i].vppEndAt;
-            if (start && !isZeroTime(start)) {
-                if (startIdx === -1) {
-                    startIdx = i;
-                }
-            }
-            if (end && !isZeroTime(end)) {
-                endIdx = i;
-            }
-        }
-        if (startIdx !== -1 && endIdx !== -1) {
-            const endHourIdx = Math.min(endIdx + 1, data.length - 1);
-            return {
-                start: data[startIdx].ts,
-                end: data[endHourIdx].ts
-            };
-        }
-        return null;
-    }, [data, config.dataKey]);
 
     const activeZones = React.useMemo(() => {
         if (config.dataKey !== 'plannedSOC' || !planPeriods || planPeriods.length === 0) {
@@ -309,7 +212,6 @@ function ForecastChart({
                         <HelpButton title={config.title} description={config.helpDescription} />
                     )}
                 </h3>
-                {headerAction}
             </div>
             {config.dataKey === 'plannedSOC' && activeZones.length > 0 && (
                 <div className="mode-legend" aria-label="Battery Modes Legend">
@@ -436,7 +338,7 @@ function ForecastChart({
                             };
 
                             if (config.dataKey === 'plannedSOC') {
-                                const soc = pt.plannedSOC ?? pt.batterySOCIfUsed;
+                                const soc = pt.plannedSOC;
                                 return (
                                     <div style={containerStyle}>
                                         <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
@@ -465,8 +367,6 @@ function ForecastChart({
                                         let displayName = config.title;
                                         if (entry.dataKey === 'batteryReserveSOC') {
                                             displayName = 'Reserve SOC';
-                                        } else if (entry.dataKey === 'batterySOCIfUsed') {
-                                            displayName = 'Battery SOC';
                                         } else if (entry.dataKey === 'predictedSolarKWH') {
                                             displayName = 'Solar';
                                         } else if (entry.dataKey === 'avgHomeLoadKWH') {
@@ -594,32 +494,7 @@ function ForecastChart({
                                     activeDot={line.dataKey === 'batteryReserveSOC' ? false : undefined}
                                 />
                             ))}
-                            {config.dataKey === 'batterySOCIfUsed' && lastReserveVal !== undefined && (
-                                <ReferenceLine
-                                    y={lastReserveVal}
-                                    stroke="none"
-                                    label={{
-                                        value: 'Reserve',
-                                        fill: '#ef4444',
-                                        fontSize: 11,
-                                        position: 'insideTopRight',
-                                    }}
-                                />
-                            )}
                         </>
-                    )}
-                    {config.referenceLine && refValue !== undefined && (
-                        <ReferenceLine
-                            y={refValue}
-                            stroke={config.referenceLine.color}
-                            strokeDasharray="6 4"
-                            label={{
-                                value: config.referenceLine.label,
-                                fill: config.referenceLine.color,
-                                fontSize: 11,
-                                position: 'insideTopRight',
-                            }}
-                        />
                     )}
                     {showCurrentTime && currentTimeStr && (
                         <ReferenceLine
@@ -632,34 +507,6 @@ function ForecastChart({
                                 fill: 'var(--primary)',
                                 fontSize: 11,
                             }}
-                        />
-                    )}
-                    {vppTicks && (
-                        <ReferenceArea
-                            x1={vppTicks.start}
-                            x2={vppTicks.end}
-                            fill="rgba(59, 130, 246, 0.08)"
-                            label={{
-                                value: 'VPP Event',
-                                position: 'insideTopLeft',
-                                fill: '#3b82f6',
-                                fontSize: 10,
-                                fontWeight: 'bold',
-                            }}
-                        />
-                    )}
-                    {vppTicks && (
-                        <ReferenceLine
-                            x={vppTicks.start}
-                            stroke="#3b82f6"
-                            strokeDasharray="3 3"
-                        />
-                    )}
-                    {vppTicks && (
-                        <ReferenceLine
-                            x={vppTicks.end}
-                            stroke="#3b82f6"
-                            strokeDasharray="3 3"
                         />
                     )}
                 </AreaChart>
@@ -685,10 +532,7 @@ export const STALE_DASHBOARD_TIMEOUT_MS = STALE_FORECAST_TIMEOUT_MS;
 
 const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
-    const initialStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
-    const [loadPredictionMode, setLoadPredictionMode] = useState<'default' | 'conservative'>(initialStrategy);
-    const [initialized, setInitialized] = useState(false);
-    const lastFetchedStrategyRef = useRef<string | null>(null);
+    const loadStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
     const [loading, setLoading] = useState(true);
     const [regenerating, setRegenerating] = useState(false);
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -702,8 +546,8 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     );
     const lastFetchTimeRef = useRef<number>(Date.now());
     const isRefreshRef = useRef(false);
-    const loadPredictionModeRef = useRef(loadPredictionMode);
-    loadPredictionModeRef.current = loadPredictionMode;
+    const loadStrategyRef = useRef(loadStrategy);
+    loadStrategyRef.current = loadStrategy;
     const siteIDRef = useRef(siteID);
     siteIDRef.current = siteID;
 
@@ -741,24 +585,16 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    // Initial load on siteID change or settings strategy change: fetch matching modeling.
+    // Initial load on siteID change or settings strategy change: fetch matching forecast.
     useEffect(() => {
         let isCancelled = false;
         const loadInitialData = async () => {
             setLoading(true);
-            setInitialized(false);
             try {
-                const strategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
-
-                // Fetch modeling using the resolved settings strategy
-                const mod = await fetchModeling(siteID, strategy);
+                const mod = await fetchModeling(siteID, loadStrategy);
 
                 if (!isCancelled) {
-                    // Update states together
-                    setLoadPredictionMode(strategy);
-                    lastFetchedStrategyRef.current = strategy;
                     setRawModelingData(mod);
-                    setInitialized(true);
                     lastFetchTimeRef.current = Date.now();
                 }
             } catch (error) {
@@ -776,41 +612,9 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         return () => {
             isCancelled = true;
         };
-    }, [siteID, settings?.homeLoadPredictionStrategy]);
+    }, [siteID, loadStrategy]);
 
-    // Re-fetch modeling only when toggle is manually flipped by user after initialization
-    useEffect(() => {
-        if (!initialized) return;
-        if (lastFetchedStrategyRef.current === loadPredictionMode) return;
-        let isCancelled = false;
-
-        const loadModelingOverride = async () => {
-            setLoading(true);
-            try {
-                lastFetchedStrategyRef.current = loadPredictionMode;
-                const mod = await fetchModeling(siteID, loadPredictionMode);
-                if (!isCancelled) {
-                    setRawModelingData(mod);
-                    lastFetchTimeRef.current = Date.now();
-                }
-            } catch (error) {
-                if (!isCancelled) {
-                    setError(error instanceof Error ? error.message : 'Unknown error');
-                }
-            } finally {
-                if (!isCancelled) {
-                    setLoading(false);
-                    lastFetchTimeRef.current = Date.now();
-                }
-            }
-        };
-        loadModelingOverride();
-        return () => {
-            isCancelled = true;
-        };
-    }, [loadPredictionMode, initialized, siteID]);
-
-    // Refresh modeling when returning to page after timeout
+    // Refresh forecast when returning to page after timeout
     useEffect(() => {
         if (refreshTrigger === 0) return;
         let isCancelled = false;
@@ -820,7 +624,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             setLoading(true);
             setError(null);
             try {
-                const mod = await fetchModeling(siteIDRef.current, loadPredictionModeRef.current);
+                const mod = await fetchModeling(siteIDRef.current, loadStrategyRef.current);
                 if (!isCancelled) {
                     setRawModelingData(mod);
                     setNowMs(Date.now());
@@ -847,7 +651,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         setRegenerating(true);
         setError(null);
         try {
-            const mod = await fetchModeling(siteID, loadPredictionMode, true);
+            const mod = await fetchModeling(siteID, loadStrategy, true);
             setRawModelingData(mod);
             setNowMs(Date.now());
             lastFetchTimeRef.current = Date.now();
@@ -858,12 +662,6 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         }
     };
 
-    const isPlanActive = Boolean(
-        rawModelingData?.plan &&
-        rawModelingData.plan.periods &&
-        rawModelingData.plan.periods.length > 0
-    );
-
     const siteTimeZone =
         rawModelingData?.latestAction?.systemStatus?.timeLocation ||
         settings?.location?.timeZone;
@@ -871,162 +669,14 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const data = useMemo(() => {
         if (!rawModelingData) return [];
 
-        if (isPlanActive) {
-            const plan = rawModelingData.plan!;
-            const periods = plan.periods;
-            const refTs = periods[0]?.tsStart;
+        const periods = rawModelingData.plan?.periods || [];
+        const refTs = periods[0]?.tsStart || rawModelingData.energyHistory?.[0]?.tsHourStart;
 
-            let planData: any[] = [];
-            if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
-                const energyHist = rawModelingData.energyHistory || [];
-                const priceHist = rawModelingData.priceHistory || [];
-                const historyMapped = energyHist.map((h: any) => {
-                    const hTime = new Date(h.tsHourStart).getTime();
-                    const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
-                    const exportPrice = price
-                        ? (price.exportDollarsPerKWH ?? price.dollarsPerKWH ?? 0)
-                        : 0;
-                    return {
-                        ts: h.tsHourStart,
-                        hour: getHourInTimeZone(h.tsHourStart, refTs, siteTimeZone),
-                        plannedSOC: h.avgBatterySOC,
-                        batterySOCIfUsed: h.avgBatterySOC,
-                        batteryReserveSOC: periods[0]?.reserveSOC,
-                        historySOC: h.avgBatterySOC,
-                        predictedSolarKWH: h.solarKWH || 0,
-                        avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
-                        gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
-                        gridExportDollarsPerKWH: exportPrice,
-                        isHistory: true,
-                        zone: 'Historical Actual',
-                        zoneColor: 'var(--text-muted)',
-                    };
-                });
-                planData = [...historyMapped];
-            }
-
-            const periodZones = periods.map((p) => classifyPlanPeriod(p));
-
-            // Base hourly rates for each period (used for solar and home load interpolation)
-            const periodRates = periods.map((p) => {
-                const solarRate = p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0);
-                const loadRate = p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0);
-                return {
-                    startTimeMs: new Date(p.tsStart).getTime(),
-                    endTimeMs: new Date(p.tsEnd).getTime(),
-                    solarRate,
-                    loadRate,
-                };
-            });
-
-            const getBaseRateAt = (targetMs: number) => {
-                if (targetMs <= periodRates[0].startTimeMs) {
-                    return periodRates[0];
-                }
-                const lastRate = periodRates[periodRates.length - 1];
-                if (targetMs >= lastRate.endTimeMs) {
-                    return lastRate;
-                }
-                for (let i = 0; i < periodRates.length; i++) {
-                    if (targetMs >= periodRates[i].startTimeMs && targetMs < periodRates[i].endTimeMs) {
-                        return periodRates[i];
-                    }
-                }
-                return lastRate;
-            };
-
-            const getInterpolatedRates = (ts: string | Date) => {
-                const d = new Date(ts);
-                const tsMs = d.getTime();
-                const msIntoHour = ((tsMs % 3600000) + 3600000) % 3600000;
-                if (msIntoHour === 0) {
-                    return getBaseRateAt(tsMs);
-                }
-                const hourStartMs = tsMs - msIntoHour;
-                const nextHourMs = hourStartMs + 3600000;
-                const fraction = msIntoHour / 3600000;
-
-                const currentRate = getBaseRateAt(hourStartMs);
-                const nextRate = getBaseRateAt(nextHourMs);
-
-                return {
-                    solarRate: (1 - fraction) * currentRate.solarRate + fraction * nextRate.solarRate,
-                    loadRate: (1 - fraction) * currentRate.loadRate + fraction * nextRate.loadRate,
-                };
-            };
-
-            periods.forEach((p, idx) => {
-                const z = periodZones[idx];
-                const rates = getInterpolatedRates(p.tsStart);
-
-                const pt: any = {
-                    ts: p.tsStart,
-                    hour: getHourInTimeZone(p.tsStart, refTs, siteTimeZone),
-                    plannedSOC: p.startSoc,
-                    batterySOCIfUsed: p.startSoc,
-                    batteryReserveSOC: p.reserveSOC,
-                    predictedSolarKWH: rates.solarRate,
-                    avgHomeLoadKWH: Math.floor(rates.loadRate * 10) / 10,
-                    gridChargeDollarsPerKWH: p.importDollars ?? 0,
-                    gridExportDollarsPerKWH: p.exportDollars ?? 0,
-                    isHistory: false,
-                    period: p,
-                    zone: z.label,
-                    zoneColor: z.color,
-                    [`${z.key}SOC`]: p.startSoc,
-                };
-
-                // Connect previous period's line to this start point for seamless transition
-                if (idx > 0) {
-                    const prevZ = periodZones[idx - 1];
-                    if (prevZ.key !== z.key) {
-                        pt[`${prevZ.key}SOC`] = p.startSoc;
-                    }
-                } else if (planData.length > 0) {
-                    // Connect history line to plan start
-                    pt.historySOC = p.startSoc;
-                }
-
-                planData.push(pt);
-
-                if (idx === periods.length - 1) {
-                    const endRates = getInterpolatedRates(p.tsEnd);
-                    const endPt: any = {
-                        ts: p.tsEnd,
-                        hour: getHourInTimeZone(p.tsEnd, refTs, siteTimeZone),
-                        plannedSOC: p.endSoc,
-                        batterySOCIfUsed: p.endSoc,
-                        batteryReserveSOC: p.reserveSOC,
-                        predictedSolarKWH: endRates.solarRate,
-                        avgHomeLoadKWH: Math.floor(endRates.loadRate * 10) / 10,
-                        gridChargeDollarsPerKWH: p.importDollars ?? 0,
-                        gridExportDollarsPerKWH: p.exportDollars ?? 0,
-                        isHistory: false,
-                        zone: z.label,
-                        zoneColor: z.color,
-                        [`${z.key}SOC`]: p.endSoc,
-                    };
-                    planData.push(endPt);
-                }
-            });
-
-            return planData;
-        }
-
-        let modelingData: any[] = rawModelingData.simulation || [];
-
+        let planData: any[] = [];
         if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
             const energyHist = rawModelingData.energyHistory || [];
             const priceHist = rawModelingData.priceHistory || [];
-
-            // The battery capacity for history is best estimated from the first simulation hour
-            // or assumed from the context, here we use the first sim hour's capacity.
-            const firstSim = modelingData[0];
-            const simRefTs = firstSim?.ts;
-            const capacity = firstSim ? firstSim.batteryCapacityKWH : 10;
-            const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
-
-            const historyMapped = energyHist.map((h: any) => {
+            planData = energyHist.map((h: any) => {
                 const hTime = new Date(h.tsHourStart).getTime();
                 const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
                 const exportPrice = price
@@ -1034,63 +684,145 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                     : 0;
                 return {
                     ts: h.tsHourStart,
-                    hour: getHourInTimeZone(h.tsHourStart, simRefTs, siteTimeZone),
-                    batteryKWH: (h.avgBatterySOC / 100) * capacity,
-                    batteryCapacityKWH: capacity,
-                    batteryReserveSOC: reserve,
-                    predictedSolarKWH: h.solarKWH,
-                    todaySolarTrend: 1.0, // Used for raw solar calc below
-                    avgHomeLoadKWH: h.homeLoadKWH || 0,
+                    hour: getHourInTimeZone(h.tsHourStart, refTs, siteTimeZone),
+                    plannedSOC: h.avgBatterySOC,
+                    batteryReserveSOC: periods[0]?.reserveSOC ?? 0,
+                    historySOC: h.avgBatterySOC,
+                    predictedSolarKWH: h.solarKWH || 0,
+                    avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
                     gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                     gridExportDollarsPerKWH: exportPrice,
-                    netLoadSolarKWH: -h.solarKWH,
-                    solarOppDollarsPerKWH: exportPrice,
                     isHistory: true,
+                    zone: 'Historical Actual',
+                    zoneColor: 'var(--text-muted)',
                 };
             });
-
-            modelingData = [...historyMapped, ...modelingData];
         }
 
-        // Pre-process data
-        return modelingData.map((h: any, idx: number) => {
-            const prevH = idx > 0 ? modelingData[idx - 1] : null;
-            const predictedSolarKWH = prevH ? prevH.predictedSolarKWH : 0;
-            const avgHomeLoadKWH = prevH ? prevH.avgHomeLoadKWH : 0;
-            const todaySolarTrend = prevH ? prevH.todaySolarTrend : 1.0;
+        if (periods.length === 0) {
+            return planData;
+        }
 
-            let displayBatteryKWH = h.batteryKWH;
-            if (!h.isHistory) {
-                displayBatteryKWH = h.startBatteryKWH !== undefined ? h.startBatteryKWH : h.batteryKWH;
-            }
+        const periodZones = periods.map((p) => classifyPlanPeriod(p));
+
+        // Base hourly rates for each period (used for solar and home load interpolation)
+        const periodRates = periods.map((p) => {
+            const solarRate = p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0);
+            const loadRate = p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0);
             return {
-                ...h,
-                batterySOCIfUsed: (displayBatteryKWH / h.batteryCapacityKWH) * 100,
-                batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
-                predictedSolarKWH,
-                solarTrendRatio: todaySolarTrend > 0 && todaySolarTrend !== 1.0
-                    ? todaySolarTrend
-                    : 0,
-                avgHomeLoadKWH: Math.floor((avgHomeLoadKWH || 0) * 10) / 10,
-                gridExportDollarsPerKWH: h.gridExportDollarsPerKWH ?? h.solarOppDollarsPerKWH ?? 0,
+                startTimeMs: new Date(p.tsStart).getTime(),
+                endTimeMs: new Date(p.tsEnd).getTime(),
+                solarRate,
+                loadRate,
             };
         });
-    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
+
+        const getBaseRateAt = (targetMs: number) => {
+            if (targetMs <= periodRates[0].startTimeMs) {
+                return periodRates[0];
+            }
+            const lastRate = periodRates[periodRates.length - 1];
+            if (targetMs >= lastRate.endTimeMs) {
+                return lastRate;
+            }
+            for (let i = 0; i < periodRates.length; i++) {
+                if (targetMs >= periodRates[i].startTimeMs && targetMs < periodRates[i].endTimeMs) {
+                    return periodRates[i];
+                }
+            }
+            return lastRate;
+        };
+
+        const getInterpolatedRates = (ts: string | Date) => {
+            const d = new Date(ts);
+            const tsMs = d.getTime();
+            const msIntoHour = ((tsMs % 3600000) + 3600000) % 3600000;
+            if (msIntoHour === 0) {
+                return getBaseRateAt(tsMs);
+            }
+            const hourStartMs = tsMs - msIntoHour;
+            const nextHourMs = hourStartMs + 3600000;
+            const fraction = msIntoHour / 3600000;
+
+            const currentRate = getBaseRateAt(hourStartMs);
+            const nextRate = getBaseRateAt(nextHourMs);
+
+            return {
+                solarRate: (1 - fraction) * currentRate.solarRate + fraction * nextRate.solarRate,
+                loadRate: (1 - fraction) * currentRate.loadRate + fraction * nextRate.loadRate,
+            };
+        };
+
+        periods.forEach((p, idx) => {
+            const z = periodZones[idx];
+            const rates = getInterpolatedRates(p.tsStart);
+
+            const pt: any = {
+                ts: p.tsStart,
+                hour: getHourInTimeZone(p.tsStart, refTs, siteTimeZone),
+                plannedSOC: p.startSoc,
+                batteryReserveSOC: p.reserveSOC,
+                predictedSolarKWH: rates.solarRate,
+                avgHomeLoadKWH: Math.floor(rates.loadRate * 10) / 10,
+                gridChargeDollarsPerKWH: p.importDollars ?? 0,
+                gridExportDollarsPerKWH: p.exportDollars ?? 0,
+                isHistory: false,
+                period: p,
+                zone: z.label,
+                zoneColor: z.color,
+                [`${z.key}SOC`]: p.startSoc,
+            };
+
+            // Connect previous period's line to this start point for seamless transition
+            if (idx > 0) {
+                const prevZ = periodZones[idx - 1];
+                if (prevZ.key !== z.key) {
+                    pt[`${prevZ.key}SOC`] = p.startSoc;
+                }
+            } else if (planData.length > 0) {
+                // Connect history line to plan start
+                pt.historySOC = p.startSoc;
+            }
+
+            planData.push(pt);
+
+            if (idx === periods.length - 1) {
+                const endRates = getInterpolatedRates(p.tsEnd);
+                const endPt: any = {
+                    ts: p.tsEnd,
+                    hour: getHourInTimeZone(p.tsEnd, refTs, siteTimeZone),
+                    plannedSOC: p.endSoc,
+                    batteryReserveSOC: p.reserveSOC,
+                    predictedSolarKWH: endRates.solarRate,
+                    avgHomeLoadKWH: Math.floor(endRates.loadRate * 10) / 10,
+                    gridChargeDollarsPerKWH: p.importDollars ?? 0,
+                    gridExportDollarsPerKWH: p.exportDollars ?? 0,
+                    isHistory: false,
+                    zone: z.label,
+                    zoneColor: z.color,
+                    [`${z.key}SOC`]: p.endSoc,
+                };
+                planData.push(endPt);
+            }
+        });
+
+        return planData;
+    }, [rawModelingData, includeHistory, siteTimeZone]);
 
     const currencySymbol = getCurrencySymbol(settings?.utilityProvider);
 
     const solarLoadData = useMemo(() => {
-        if (!isPlanActive || !rawModelingData?.plan) return [];
+        if (!rawModelingData?.plan) return [];
         return buildPlanSolarLoadSeries(
             rawModelingData.plan.periods,
             rawModelingData.energyHistory,
             includeHistory,
             siteTimeZone
         );
-    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
+    }, [rawModelingData, includeHistory, siteTimeZone]);
 
     const priceData = useMemo(() => {
-        if (!isPlanActive || !rawModelingData?.plan) return [];
+        if (!rawModelingData?.plan) return [];
         return buildPlanPriceSeries(
             rawModelingData.plan.periods,
             rawModelingData.futurePrices,
@@ -1098,43 +830,41 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             includeHistory,
             siteTimeZone
         );
-    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
+    }, [rawModelingData, includeHistory, siteTimeZone]);
 
     const planStats = useMemo(() => {
-        if (!isPlanActive || !rawModelingData?.plan) return null;
+        if (!rawModelingData?.plan) return null;
         return computePlanSummaryStats(
             rawModelingData.plan.periods,
             rawModelingData.futurePrices
         );
-    }, [rawModelingData, isPlanActive]);
+    }, [rawModelingData]);
 
     const planScheduleBeats = useMemo(() => {
-        if (!isPlanActive || !rawModelingData?.plan) return [];
+        if (!rawModelingData?.plan) return [];
         return buildPlanSummaryBeats(
             rawModelingData.plan.periods,
             currencySymbol,
             siteTimeZone
         );
-    }, [rawModelingData, isPlanActive, currencySymbol, siteTimeZone]);
+    }, [rawModelingData, currencySymbol, siteTimeZone]);
 
     if (loading) return (
         <div className="loading-screen">
             <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
-            Loading simulation…
+            Loading forecast…
         </div>
     );
     if (error) return <div className="error">Error: {error}</div>;
 
     const hasFault = Boolean(rawModelingData?.latestAction?.fault);
     const faultDescription = rawModelingData?.latestAction?.description || 'A system fault is currently active.';
-
-    const activeCharts = isPlanActive ? planCharts : charts;
     const isStagingSite = typeof window !== 'undefined' && window.location.hostname.includes('staging');
 
     return (
         <div className="content-container forecast-page">
             <div className="forecast-header">
-                <h2>{isPlanActive ? '24-Hour Energy Plan' : '24-Hour Simulation'}</h2>
+                <h2>24-Hour Energy Plan</h2>
                 <div className="forecast-header-actions">
                     {isStagingSite && (
                         <Button
@@ -1172,11 +902,11 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                 <div className="no-actions">
                     {hasFault
                         ? 'No forecast data available while system is in a fault state.'
-                        : 'No simulation data available.'}
+                        : 'No forecast data available.'}
                 </div>
             ) : (
                 <>
-                    {isPlanActive ? (
+                    {rawModelingData?.plan && (
                         <>
                             <p className="forecast-subtitle">
                                 Optimal <strong>SmartPlan</strong> battery dispatch schedule generated {(() => {
@@ -1201,41 +931,14 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                                 </div>
                             </div>
                         </>
-                    ) : (
-                        <p className="forecast-subtitle">
-                            Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
-                            {(() => {
-                                const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
-                                return startTs ? formatTime(startTs, data[0]?.ts, siteTimeZone) : '';
-                            })()}
-                        </p>
                     )}
                     <div className="forecast-charts">
-                        {activeCharts.map((config) => {
-                            const headerAction = (!isPlanActive && config.dataKey === 'avgHomeLoadKWH') ? (
-                                <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                        <Switch.Root
-                                             id="loadPredictionModeToggle"
-                                             aria-label="Conservative"
-                                             checked={loadPredictionMode === 'conservative'}
-                                             onCheckedChange={(checked) => setLoadPredictionMode(checked ? 'conservative' : 'default')}
-                                             className="switch-root"
-                                        >
-                                            <Switch.Thumb className="switch-thumb" />
-                                        </Switch.Root>
-                                        <span style={{ color: loadPredictionMode === 'conservative' ? 'var(--primary)' : 'inherit', fontWeight: loadPredictionMode === 'conservative' ? 600 : 400 }}>Conservative</span>
-                                    </div>
-                                </Field.Root>
-                            ) : undefined;
-
+                        {planCharts.map((config) => {
                             let chartData = data;
-                            if (isPlanActive) {
-                                if (config.dataKey === 'predictedSolarKWH') {
-                                    chartData = solarLoadData;
-                                } else if (config.dataKey === 'gridChargeDollarsPerKWH') {
-                                    chartData = priceData;
-                                }
+                            if (config.dataKey === 'predictedSolarKWH' && solarLoadData.length > 0) {
+                                chartData = solarLoadData;
+                            } else if (config.dataKey === 'gridChargeDollarsPerKWH' && priceData.length > 0) {
+                                chartData = priceData;
                             }
 
                             return (
@@ -1246,10 +949,9 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                                     isMobile={isMobile}
                                     showCurrentTime={includeHistory}
                                     nowMs={nowMs}
-                                    headerAction={headerAction}
                                     planPeriods={rawModelingData?.plan?.periods}
-                                    planStats={isPlanActive ? planStats : null}
-                                    scheduleBeats={isPlanActive && config.dataKey === 'plannedSOC' ? planScheduleBeats : undefined}
+                                    planStats={planStats}
+                                    scheduleBeats={config.dataKey === 'plannedSOC' ? planScheduleBeats : undefined}
                                     currencySymbol={currencySymbol}
                                     timeZone={siteTimeZone}
                                 />

@@ -288,6 +288,7 @@ describe('App & Settings', () => {
 
         // They should be visible initially because zip code is empty
         await waitFor(() => {
+            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
             expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
             expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
         });
@@ -296,8 +297,9 @@ describe('App & Settings', () => {
         const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
         fireEvent.change(zipInput, { target: { value: '90210' } });
 
-        // They should be hidden now
+        // They should be hidden now along with the section header (when net metering is inactive)
         await waitFor(() => {
+            expect(screen.queryByRole('heading', { name: /Advanced Solar Settings/i })).not.toBeInTheDocument();
             expect(screen.queryByLabelText(/Solar Trend Ratio Max/i)).not.toBeInTheDocument();
             expect(screen.queryByLabelText(/Solar Bell Curve Multiplier/i)).not.toBeInTheDocument();
         });
@@ -307,68 +309,9 @@ describe('App & Settings', () => {
 
         // They should show up again
         await waitFor(() => {
-            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
-        });
-    });
-
-    it('hides headroom when solar exporting is enabled, and hides entire advanced solar settings when both are true', async () => {
-        // Mock settings without postalCode and without gridExportSolar so everything is visible
-        (fetchSettings as any).mockResolvedValue({
-            ...defaultSettings,
-            postalCode: '',
-            gridExportSolar: false
-        });
-        await navigateToSettings();
-
-        // Expand advanced tuning settings
-        const advancedBtn = await screen.findByText('Show Advanced Settings');
-        fireEvent.click(advancedBtn);
-
-        // All should be visible initially
-        await waitFor(() => {
-            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Solar Fully Charge Headroom/i)).toBeInTheDocument();
-            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
-        });
-
-        // 1. Toggle solar exporting on
-        const updateBtn = await screen.findByRole('button', { name: /Update Energy Storage System/i });
-        fireEvent.click(updateBtn);
-        const exportSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
-        fireEvent.click(exportSwitch);
-
-        // Headroom should be hidden
-        await waitFor(() => {
-            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
-            // Trend ratio and bell curve should still be visible because postalCode is empty
-            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
-            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
-        });
-
-        // 2. Now enter a zip code as well (both are now true)
-        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
-        fireEvent.change(zipInput, { target: { value: '90210' } });
-
-        // The entire Advanced Solar Settings section should be hidden
-        await waitFor(() => {
-            expect(screen.queryByRole('heading', { name: /Advanced Solar Settings/i })).not.toBeInTheDocument();
-            expect(screen.queryByLabelText(/Solar Trend Ratio Max/i)).not.toBeInTheDocument();
-            expect(screen.queryByLabelText(/Solar Bell Curve Multiplier/i)).not.toBeInTheDocument();
-            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
-        });
-
-        // 3. Clear zip code again
-        fireEvent.change(zipInput, { target: { value: '' } });
-
-        // Section header and trend/bell curve should come back (headroom still hidden since solar exporting is enabled)
-        await waitFor(() => {
             expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
             expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
             expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
-            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
         });
     });
 
@@ -431,59 +374,6 @@ describe('App & Settings', () => {
                     rateClass: "singleFamilyWithoutElectricHeat",
                     variableDeliveryRate: true
                 })
-            }), expect.any(String), undefined);
-        });
-    });
-
-    it('can update price threshold fields and shows warning appropriately', async () => {
-        await navigateToSettings();
-
-        // Expand advanced tuning settings to see the price threshold
-        const advancedBtn = await screen.findByText('Show Advanced Settings');
-        fireEvent.click(advancedBtn);
-
-        // Check fields are accessible
-        const priceInput = await screen.findByLabelText(/Always Charge Below/i);
-
-        // At initial value, warning should not be shown
-        expect(screen.queryByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).not.toBeInTheDocument();
-
-        fireEvent.change(priceInput, { target: { value: '0.10' } });
-
-        // Warning should be shown now that value > 0.05
-        await waitFor(() => {
-            expect(screen.getByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).toBeInTheDocument();
-        });
-
-        // Save
-        const saveBtn = screen.getByText('Save Settings');
-        fireEvent.click(saveBtn);
-
-        await waitFor(() => {
-            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
-            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                alwaysChargeUnderDollarsPerKWH: 0.10
-            }), expect.any(String), undefined);
-        });
-    });
-
-    it('can update standby for similar price field', async () => {
-        await navigateToSettings();
-
-        // Expand advanced tuning settings to see price threshold fields
-        const advancedBtn = await screen.findByText('Show Advanced Settings');
-        fireEvent.click(advancedBtn);
-
-        const holdInput = await screen.findByLabelText(/Standby for Similar Export Price/i);
-        fireEvent.change(holdInput, { target: { value: '0.04' } });
-
-        const saveBtn = screen.getByText('Save Settings');
-        fireEvent.click(saveBtn);
-
-        await waitFor(() => {
-            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
-            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                minExportHoldDifferenceDollarsPerKWH: 0.04
             }), expect.any(String), undefined);
         });
     });
@@ -1084,7 +974,7 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update timing setting: minStartChargeMinutes and optimizationProfile', async () => {
+    it('can update optimizationProfile setting', async () => {
         const user = userEvent.setup();
         await navigateToSettings();
 
@@ -1093,17 +983,11 @@ describe('App & Settings', () => {
         await user.click(advancedBtn);
 
         await waitFor(() => {
-            expect(screen.getByLabelText(/Minimum Start Charge Duration/i)).toBeInTheDocument();
             expect(screen.getByRole('combobox', { name: /Optimization Profile/i })).toBeInTheDocument();
         });
 
-        const minStartInput = screen.getByLabelText(/Minimum Start Charge Duration/i);
         const profileSelect = screen.getByRole('combobox', { name: /Optimization Profile/i });
-
-        expect(minStartInput).toHaveValue(5);
         expect(profileSelect).toHaveTextContent('Balanced');
-
-        fireEvent.change(minStartInput, { target: { value: '10' } });
 
         await user.click(profileSelect);
         const aggressiveOption = await screen.findByRole('option', { name: 'Aggressive' });
@@ -1116,7 +1000,6 @@ describe('App & Settings', () => {
         await waitFor(() => {
             expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                minStartChargeMinutes: 10,
                 optimizationProfile: 'aggressive'
             }), expect.any(String), undefined);
         });

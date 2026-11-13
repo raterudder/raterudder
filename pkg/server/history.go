@@ -263,7 +263,6 @@ func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.R
 		writeJSONError(w, fmt.Sprintf("invalid savingsPeriods: %v", err), http.StatusBadRequest)
 		return
 	}
-	newCalc := r.URL.Query().Get("newCalculation") == "true" || r.URL.Query().Get("savingsPeriods") != ""
 
 	var siteIDs []string
 	if siteID == SiteIDAll {
@@ -279,56 +278,31 @@ func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.R
 	var totalSavings types.SavingsStats
 	totalSavings.Timestamp = start
 
-	var totalPeriodStats []types.SavingsStats
-	if newCalc {
-		totalPeriodStats = make([]types.SavingsStats, len(periods))
-		for i, p := range periods {
-			totalPeriodStats[i].Timestamp = p.Start
-			totalPeriodStats[i].EndTimestamp = p.End
-		}
+	totalPeriodStats := make([]types.SavingsStats, len(periods))
+	for i, p := range periods {
+		totalPeriodStats[i].Timestamp = p.Start
+		totalPeriodStats[i].EndTimestamp = p.End
 	}
 
 	var allActions []types.Action
 
 	for _, id := range siteIDs {
-		if newCalc {
-			sitePeriodStats, actions, err := s.getSiteSavingsNew(ctx, id, start, end, periods)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to get new savings for site", slog.String("siteID", id), slog.Any("error", err))
-				writeJSONError(w, fmt.Sprintf("failed to get savings for site %s", id), http.StatusInternalServerError)
-				return
-			}
-			for i := range sitePeriodStats {
-				// TODO: move this back to inline
-				accumulateSavingsStats(&totalPeriodStats[i], sitePeriodStats[i])
-			}
-			if siteID != SiteIDAll {
-				allActions = actions
-			}
-		} else {
-			stats, actions, err := s.getSiteSavings(ctx, id, start, end)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to get savings for site", slog.String("siteID", id), slog.Any("error", err))
-				writeJSONError(w, fmt.Sprintf("failed to get savings for site %s", id), http.StatusInternalServerError)
-				return
-			}
-
-			accumulateSavingsStats(&totalSavings, stats)
-
-			// Only include hourly debugging and actions if it's a single site request
-			if siteID != SiteIDAll {
-				totalSavings.HourlyDebugging = stats.HourlyDebugging
-				allActions = actions
-			}
+		sitePeriodStats, actions, err := s.getSiteSavings(ctx, id, start, end, periods)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get savings for site", slog.String("siteID", id), slog.Any("error", err))
+			writeJSONError(w, fmt.Sprintf("failed to get savings for site %s", id), http.StatusInternalServerError)
+			return
+		}
+		for i := range sitePeriodStats {
+			accumulateSavingsStats(&totalPeriodStats[i], sitePeriodStats[i])
+		}
+		if siteID != SiteIDAll {
+			allActions = actions
 		}
 	}
 
-	if newCalc {
-		if len(totalPeriodStats) > 0 {
-			totalSavings = totalPeriodStats[0]
-		}
-	} else {
-		totalSavings.BatterySavings = totalSavings.AvoidedCost - totalSavings.ChargingCost
+	if len(totalPeriodStats) > 0 {
+		totalSavings = totalPeriodStats[0]
 	}
 
 	resp := struct {

@@ -25,11 +25,6 @@ type Settings struct {
 	// What environment to opt into
 	Release string `json:"release"`
 
-	// Deprecated: IgnoreHourUsageOverMultiple is deprecated in favor of automatic zero-config EV and load spike filtering.
-	IgnoreHourUsageOverMultiple float64 `json:"ignoreHourUsageOverMultiple"`
-	// Deprecated: IgnoreHourUsageFloorKWH is deprecated in favor of automatic zero-config EV and load spike filtering.
-	IgnoreHourUsageFloorKWH float64 `json:"ignoreHourUsageFloorKWH"`
-
 	// Utility Provider
 	UtilityProvider    string              `json:"utilityProvider"`
 	UtilityRate        string              `json:"utilityRate"`
@@ -94,12 +89,6 @@ type Settings struct {
 	// 0 disables bell curve smoothing entirely. 1.0 = full weight.
 	SolarBellCurveMultiplier float64 `json:"solarBellCurveMultiplier"`
 
-	// Headroom for solar fully charging when export is disabled (in battery SOC %).
-	// A value of 5 means we ensure we have 95% capacity.
-	// A value of -5 means we hit capacity during the solar charging period.
-	// Setting it to something like -100 will effectively disable the feature.
-	SolarFullyChargeHeadroomBatterySOC float64 `json:"solarFullyChargeHeadroomBatterySOC"`
-
 	// Credentials for external systems (encrypted)
 	EncryptedCredentials []byte `json:"encryptedCredentials,omitempty"`
 
@@ -108,9 +97,6 @@ type Settings struct {
 
 	// UpdateGroup controls which group the site gets updated in to spread out updates.
 	UpdateGroup int `json:"updateGroup"`
-
-	// Hysteresis & timing thresholds
-	MinStartChargeMinutes int `json:"minStartChargeMinutes"`
 
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
@@ -121,22 +107,6 @@ type Settings struct {
 
 	// Notifications maps userID to notification preferences for this site.
 	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
-
-	// Deprecated: MinDeficitPriceDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.GridChargeDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
-	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-
-	// Deprecated
-	SolarCapacityBufferMinutes int `json:"solarCapacityBufferMinutes"`
-
-	// Deprecated: MinExportHoldDifferenceDollarsPerKWH is deprecated in favor of internal cycling hurdle and RTE. Retained for backwards compatibility in decide path.
-	MinExportHoldDifferenceDollarsPerKWH float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
-
-	// Deprecated: VPPChargingBufferMinutes is deprecated in favor of OptimizationParams.VPPChargingBufferMinutes.
-	VPPChargingBufferMinutes int `json:"vppChargingBufferMinutes"`
-
-	// Always charge when the price is under this amount (in $/kWh).
-	// Deprecated: Only used by legacy Decide; Plan mode only triggers unconditional charging on negative or free rates (<= $0.00/kWh).
-	AlwaysChargeUnderDollarsPerKWH float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 }
 
 // LogValue implements slog.LogValuer to omit sensitive fields like EncryptedCredentials when logging.
@@ -236,10 +206,6 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 		switch version {
 		case 1:
 			// version 1: initial
-			if s.IgnoreHourUsageOverMultiple == 0 {
-				s.IgnoreHourUsageOverMultiple = 2
-				migrated = true
-			}
 			if s.MinBatterySOC == 0 {
 				s.MinBatterySOC = 20.0
 				migrated = true
@@ -247,10 +213,7 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			// we don't want to assume they can charge from grid or export to grid
 		case 2:
 			// version 2: add MinDeficitPriceDifferenceDollarsPerKWH
-			if s.MinDeficitPriceDifferenceDollarsPerKWH == 0 {
-				s.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
-				migrated = true
-			}
+			// no longer used or defaulted
 		case 3:
 			// version 3: add solar trend ratio max and bell curve multiplier
 			if s.SolarTrendRatioMax == 0 {
@@ -297,16 +260,10 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			}
 		case 10:
 			// version 10: set default MinStartChargeMinutes
-			if s.MinStartChargeMinutes == 0 {
-				s.MinStartChargeMinutes = 5
-				migrated = true
-			}
+			// no longer used or defaulted
 		case 11:
 			// version 11: add IgnoreHourUsageFloorKWH default
-			if s.IgnoreHourUsageFloorKWH == 0 {
-				s.IgnoreHourUsageFloorKWH = 0.5
-				migrated = true
-			}
+			// no longer used or defaulted
 		case 12:
 			// version 12: add default HomeLoadPredictionStrategy
 			if s.HomeLoadPredictionStrategy == "" {
@@ -315,22 +272,13 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			}
 		case 13:
 			// version 13: split buffer settings
-			if s.SolarCapacityBufferMinutes == 0 {
-				s.SolarCapacityBufferMinutes = 10
-			}
-			if s.VPPChargingBufferMinutes == 0 {
-				s.VPPChargingBufferMinutes = 20
-			}
-			migrated = true
+			// no longer used or defaulted
 		case 14:
 			// version 14: bump version to write top-level release field to firestore settings doc
 			migrated = true
 		case 15:
 			// version 15: add default MinExportHoldDifferenceDollarsPerKWH
-			if s.MinExportHoldDifferenceDollarsPerKWH == 0 {
-				s.MinExportHoldDifferenceDollarsPerKWH = 0.02
-				migrated = true
-			}
+			// no longer used or defaulted
 		case 16:
 			// version 16: Lock in existing grid settings as custom for already configured ESS sites
 			if s.ESS != "" {
@@ -362,15 +310,9 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				}
 			}
 		case 19:
-			// version 19: migrate legacy buffer settings to OptimizationProfile if unset
+			// version 19: default OptimizationProfile to balanced if unset
 			if s.OptimizationProfile == "" {
-				if s.VPPChargingBufferMinutes >= 40 || s.SolarCapacityBufferMinutes >= 30 {
-					s.OptimizationProfile = "conservative"
-				} else if s.VPPChargingBufferMinutes > 0 && s.VPPChargingBufferMinutes <= 10 {
-					s.OptimizationProfile = "aggressive"
-				} else {
-					s.OptimizationProfile = "balanced"
-				}
+				s.OptimizationProfile = "balanced"
 				migrated = true
 			}
 		case 20:

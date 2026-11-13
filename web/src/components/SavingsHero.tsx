@@ -6,7 +6,6 @@ import { formatCurrency } from '../utils/dashboardUtils';
 interface SavingsHeroProps {
     savings: SavingsStats | null;
     savingsPeriods?: SavingsStats[];
-    planMode?: boolean;
     currentDate?: Date;
     isToday?: boolean;
     currencySymbol?: string;
@@ -15,7 +14,6 @@ interface SavingsHeroProps {
 const SavingsHero: React.FC<SavingsHeroProps> = ({
     savings,
     savingsPeriods,
-    planMode = false,
     currentDate,
     isToday = true,
     currencySymbol = '$',
@@ -38,9 +36,9 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
 
     if (!savings) return null;
 
-    const useNewHero = Boolean(planMode && savingsPeriods && savingsPeriods.length > 0);
-    const activeIdx = useNewHero && savingsPeriods && selectedPeriodIdx < savingsPeriods.length ? selectedPeriodIdx : 0;
-    const activeStats = (useNewHero && savingsPeriods ? savingsPeriods[activeIdx] : savings) || savings;
+    const periods = savingsPeriods && savingsPeriods.length > 0 ? savingsPeriods : [savings];
+    const activeIdx = selectedPeriodIdx < periods.length ? selectedPeriodIdx : 0;
+    const activeStats = periods[activeIdx] || savings;
 
     const getPeriodMeta = (idx: number) => {
         if (idx === 0) {
@@ -58,7 +56,6 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
         return { header: 'Last 30 Days Savings', row: 'Last 30 Days', dotClass: 'period-30d' };
     };
 
-    const netSavings = savings.batterySavings + savings.solarSavings + savings.credit;
     const activeMeta = getPeriodMeta(activeIdx);
     const activeTotalSavings = activeStats.totalSavingsDollars ?? 0;
     const activeWithoutRRSavings = activeStats.solarAndBatterySavingsDollars ?? 0;
@@ -74,94 +71,56 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
             <Collapsible.Root open={isMobile ? open : true} onOpenChange={setOpen}>
                 <div className="overview-hero">
                     <div className="net-savings-panel">
-                        {useNewHero ? (
-                            <>
-                                <span className="hero-label">{activeMeta.header}</span>
-                                <div className="hero-value-group hero-value-inline">
-                                    <span
-                                        className={`hero-value ${activeTotalSavings >= 0 ? 'positive' : 'negative'}`}
-                                        data-testid="hero-primary-savings"
-                                    >
-                                        {formatCurrency(activeTotalSavings, false, currencySymbol)}
-                                    </span>
-                                    {activeShowRR && (
-                                        <span className="hero-value-secondary" data-testid="hero-without-rr-savings">
-                                            ({formatCurrency(activeWithoutRRSavings, false, currencySymbol)})
-                                        </span>
-                                    )}
-                                </div>
-                                {subcaption && (
-                                    <span className="hero-subcaption" data-testid="hero-subcaption">
-                                        {subcaption}
-                                    </span>
-                                )}
-                                <div className="hero-breakdown">
-                                    {savingsPeriods!.map((periodStats, idx) => {
-                                        if (idx === activeIdx) return null;
-                                        const meta = getPeriodMeta(idx);
-                                        const periodTotal = periodStats.totalSavingsDollars ?? 0;
-                                        const periodWithoutRR = periodStats.solarAndBatterySavingsDollars ?? 0;
-                                        const periodShowRR = (periodStats.rateRudderSavingsDollars ?? 0) >= 0.05;
-                                        return (
-                                            <button
-                                                key={idx}
-                                                type="button"
-                                                className="breakdown-item breakdown-period-btn"
-                                                onClick={() => setSelectedPeriodIdx(idx)}
-                                            >
-                                                <span className={`dot ${meta.dotClass}`} aria-hidden="true"></span>
-                                                <span className="label">{meta.row}</span>
-                                                <span className="breakdown-values">
-                                                    <span className={`value ${periodTotal >= 0 ? 'positive' : 'negative'}`}>
-                                                        {formatCurrency(periodTotal, true, currencySymbol)}
-                                                    </span>
-                                                    {periodShowRR && (
-                                                        <span className="value-secondary">
-                                                            ({formatCurrency(periodWithoutRR, false, currencySymbol)})
-                                                        </span>
-                                                    )}
-                                                    <span className="period-chevron" aria-hidden="true">›</span>
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </>
-                        ) : (
-                            <>
-                                <span className="hero-label">Savings</span>
-                                <div className="hero-value-group">
-                                    <span className={`hero-value ${netSavings >= 0 ? 'positive' : 'negative'}`}>
-                                        {formatCurrency(netSavings, false, currencySymbol)}
-                                    </span>
-                                </div>
-                                <div className="hero-breakdown">
-                                    <div className="breakdown-item">
-                                        <span className="dot solar" aria-hidden="true"></span>
-                                        <span className="label">Solar</span>
-                                        <span className={`value ${savings.solarSavings >= 0 ? 'positive' : 'negative'}`}>
-                                            {formatCurrency(savings.solarSavings, true, currencySymbol)}
-                                        </span>
-                                    </div>
-                                    <div className="breakdown-item">
-                                        <span className="dot battery" aria-hidden="true"></span>
-                                        <span className="label">Battery</span>
-                                        <span className={`value ${savings.batterySavings >= 0 ? 'positive' : 'negative'}`}>
-                                            {formatCurrency(savings.batterySavings, true, currencySymbol)}
-                                        </span>
-                                    </div>
-                                    {Math.abs(savings.credit) > 0.01 && (
-                                        <div className="breakdown-item">
-                                            <span className="dot credit" aria-hidden="true"></span>
-                                            <span className="label">Export</span>
-                                            <span className={`value ${savings.credit >= 0 ? 'positive' : 'negative'}`}>
-                                                {formatCurrency(savings.credit, true, currencySymbol)}
-                                            </span>
-                                        </div>
-                                    )}
-                                </div>
-                            </>
+                        <span className="hero-label">{activeMeta.header}</span>
+                        <div className="hero-value-group hero-value-inline">
+                            <span
+                                className={`hero-value ${activeTotalSavings >= 0 ? 'positive' : 'negative'}`}
+                                data-testid="hero-primary-savings"
+                            >
+                                {formatCurrency(activeTotalSavings, false, currencySymbol)}
+                            </span>
+                            {activeShowRR && (
+                                <span className="hero-value-secondary" data-testid="hero-without-rr-savings">
+                                    ({formatCurrency(activeWithoutRRSavings, false, currencySymbol)})
+                                </span>
+                            )}
+                        </div>
+                        {subcaption && (
+                            <span className="hero-subcaption" data-testid="hero-subcaption">
+                                {subcaption}
+                            </span>
                         )}
+                        <div className="hero-breakdown">
+                            {periods.map((periodStats, idx) => {
+                                if (idx === activeIdx) return null;
+                                const meta = getPeriodMeta(idx);
+                                const periodTotal = periodStats.totalSavingsDollars ?? 0;
+                                const periodWithoutRR = periodStats.solarAndBatterySavingsDollars ?? 0;
+                                const periodShowRR = (periodStats.rateRudderSavingsDollars ?? 0) >= 0.05;
+                                return (
+                                    <button
+                                        key={idx}
+                                        type="button"
+                                        className="breakdown-item breakdown-period-btn"
+                                        onClick={() => setSelectedPeriodIdx(idx)}
+                                    >
+                                        <span className={`dot ${meta.dotClass}`} aria-hidden="true"></span>
+                                        <span className="label">{meta.row}</span>
+                                        <span className="breakdown-values">
+                                            <span className={`value ${periodTotal >= 0 ? 'positive' : 'negative'}`}>
+                                                {formatCurrency(periodTotal, true, currencySymbol)}
+                                            </span>
+                                            {periodShowRR && (
+                                                <span className="value-secondary">
+                                                    ({formatCurrency(periodWithoutRR, false, currencySymbol)})
+                                                </span>
+                                            )}
+                                            <span className="period-chevron" aria-hidden="true">›</span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
 
                     {isMobile && (

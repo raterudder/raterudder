@@ -2948,30 +2948,6 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="alwaysChargeUnder">
-                                    Always Charge Below ($/kWh)
-                                    <HelpButton
-                                        title="Always Charge Below Price"
-                                        description="Sets an absolute electricity price threshold ($/kWh). Whenever the grid electricity rate drops below this price (e.g. during negative pricing or extreme off-peak rates), RateRudder will force-charge the battery regardless. Generally should not be used unless your utility has unpredictable rates."
-                                    />
-                                </Field.Label>
-                                <Input
-                                    id="alwaysChargeUnder"
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={settings.alwaysChargeUnderDollarsPerKWH}
-                                    onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
-                                {settings.alwaysChargeUnderDollarsPerKWH > 0.05 && (
-                                    <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
-                                        Are you sure you want to force charging the batteries from the grid when it's below this price?
-                                    </div>
-                                )}
-                            </Field.Root>
-
-                            <Field.Root className="form-group">
                                 <Field.Label htmlFor="minArbitrage">
                                     Minimum Arbitrage Profit ($/kWh)
                                     <HelpButton
@@ -3004,44 +2980,6 @@ const Settings = ({
                                         Warning: Setting this below $0.03/kWh may not cover battery degradation, making grid charging unprofitable.
                                     </div>
                                 )}
-                            </Field.Root>
-
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="minDeficit">
-                                    Charge for Deficit ($/kWh)
-                                    <HelpButton
-                                        title="Charge for Deficit Threshold"
-                                        description="The price difference threshold ($/kWh) required to justify pre-charging the battery from the grid when RateRudder forecasts that solar generation alone won't cover your upcoming home usage during peak rate hours."
-                                    />
-                                </Field.Label>
-                                <Input
-                                    id="minDeficit"
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={settings.minDeficitPriceDifferenceDollarsPerKWH}
-                                    onChange={(e) => handleChange('minDeficitPriceDifferenceDollarsPerKWH', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>Price difference required to justify charging now to avoid a future battery depletion.</Field.Description>
-                            </Field.Root>
-
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="minExportHold">
-                                    Standby for Similar Export Price ($/kWh)
-                                    <HelpButton
-                                        title="Standby for Similar Price Threshold"
-                                        description="Hold the battery on standby during low-cost grid hours if the grid price is within this amount of the export credit. This avoids battery round-trip cycling losses when grid power is as cheap as the export credits you would forfeit by recharging."
-                                    />
-                                </Field.Label>
-                                <Input
-                                    id="minExportHold"
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={settings.minExportHoldDifferenceDollarsPerKWH}
-                                    onChange={(e) => handleChange('minExportHoldDifferenceDollarsPerKWH', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>Max price difference to standby during cheap hours to export solar tomorrow.</Field.Description>
                             </Field.Root>
 
                             {settings.gridExportBatteries && (
@@ -3081,25 +3019,6 @@ const Settings = ({
                                 </Field.Root>
                             )}
 
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="minStartChargeMinutes">
-                                    Minimum Start Charge Duration (minutes)
-                                    <HelpButton
-                                        title="Minimum Start Charge Duration"
-                                        description="The minimum continuous duration (in minutes) of low-cost grid pricing required before starting a battery charge cycle. This prevents inefficient short-cycling of your battery system."
-                                    />
-                                </Field.Label>
-                                <Input
-                                    id="minStartChargeMinutes"
-                                    type="number"
-                                    step="1"
-                                    min="1"
-                                    value={settings.minStartChargeMinutes}
-                                    onChange={(e) => handleChange('minStartChargeMinutes', parseInt(e.target.value, 10))}
-                                />
-                                <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
-                            </Field.Root>
-
                             <Field.Root className="form-group switch-group compact">
                                 <div className="switch-row">
                                     <Switch.Root
@@ -3116,7 +3035,7 @@ const Settings = ({
                             </Field.Root>
                         </div>
 
-                        {!(settings.postalCode?.trim() && settings.gridExportSolar) && (
+                        {(!settings.postalCode?.trim() || settings.utilityRateOptions?.netMeteringCredits || settings.utilityRateOptions?.netMeteringScheme === 'net') && (
                             <>
                                 <div className="section-header">
                                     <h3>Advanced Solar Settings</h3>
@@ -3162,28 +3081,6 @@ const Settings = ({
                                                 <Field.Description>Multiplier for bell curve solar smoothing. 0 disables smoothing entirely</Field.Description>
                                             </Field.Root>
                                         </>
-                                    )}
-
-                                    {!settings.gridExportSolar && (
-                                        <Field.Root className="form-group">
-                                            <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">
-                                                Solar Fully Charge Headroom (%)
-                                                <HelpButton
-                                                    title="Solar Fully Charge Headroom"
-                                                    description="Percentage of battery capacity left open as headroom during solar charging when grid export is disabled, preventing premature solar power curtailment."
-                                                />
-                                            </Field.Label>
-                                            <Input
-                                                id="solarFullyChargeHeadroomBatterySOC"
-                                                type="number"
-                                                step="1"
-                                                value={settings.solarFullyChargeHeadroomBatterySOC}
-                                                onChange={(e) => handleChange('solarFullyChargeHeadroomBatterySOC', parseFloat(e.target.value))}
-                                            />
-                                            <Field.Description>
-                                                Battery percentage to leave as headroom during solar charging when export is disabled. Negative values will remove the headroom and ignore solar curtailment.
-                                            </Field.Description>
-                                        </Field.Root>
                                     )}
 
                                     {(settings.utilityRateOptions?.netMeteringCredits || settings.utilityRateOptions?.netMeteringScheme === 'net') && (
@@ -3255,21 +3152,6 @@ const Settings = ({
                             <h3>Advanced Home Usage Settings</h3>
                         </div>
                         <div className="grid-strategy-grid">
-                            {/*
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="ignoreHourUsageOverMultiple">Ignore Usage Outlier Multiple</Field.Label>
-                                <Input
-                                    id="ignoreHourUsageOverMultiple"
-                                    type="number"
-                                    step="0.1"
-                                    min="1"
-                                    value={settings.ignoreHourUsageOverMultiple}
-                                    onChange={(e) => handleChange('ignoreHourUsageOverMultiple', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>If a single hour's usage is this many times greater than the average of other data points for that hour, ignore it. Must be &ge; 1.</Field.Description>
-                            </Field.Root>
-                            */}
-
                             <Field.Root className="form-group">
                                 <Field.Label htmlFor="homeLoadPredictionStrategy">
                                     Home Load Prediction Strategy

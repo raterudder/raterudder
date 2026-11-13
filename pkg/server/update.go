@@ -21,14 +21,11 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
-	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"golang.org/x/sync/errgroup"
 )
-
-var ffOnlyPlanMode = feats.Bool("onlyPlanMode", true)
 
 type updateResult struct {
 	Status string        `json:"status"`
@@ -513,11 +510,6 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.futurePrices = futurePrices
 
-	// Always call Plan in addition to Decide when onlyPlanMode is false (dark-launched).
-	// When onlyPlanMode is true, run Plan without Decide and dispatch TOU schedules when configured.
-	// TODO: Remove Decide and ffOnlyPlanMode once plan mode is rolled out to 100% of sites.
-	onlyPlanMode := ffOnlyPlanMode.Enabled(ctx)
-
 	var planDecision controller.Decision
 	var planErr error
 	var hasPlan bool
@@ -551,9 +543,7 @@ func (s *Server) performSiteUpdate(
 		}
 		if hasPlan {
 			action.Plan = planDecision.Action.Plan
-			if onlyPlanMode {
-				action.SimulationParams = planDecision.SimulationParams
-			}
+			action.SimulationParams = planDecision.SimulationParams
 		} else if planErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan while paused", slog.Any("error", planErr))
 		}
@@ -578,9 +568,7 @@ func (s *Server) performSiteUpdate(
 		}
 		if hasPlan {
 			action.Plan = planDecision.Action.Plan
-			if onlyPlanMode {
-				action.SimulationParams = planDecision.SimulationParams
-			}
+			action.SimulationParams = planDecision.SimulationParams
 		} else if planErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan during VPP active", slog.Any("error", planErr))
 		}
@@ -595,54 +583,10 @@ func (s *Server) performSiteUpdate(
 		return nil, "", err
 	}
 
-	var decision controller.Decision
-	if onlyPlanMode {
-		if planErr != nil {
-			return nil, "", fmt.Errorf("controller plan failed: %w", planErr)
-		}
-		decision = planDecision
-	} else {
-		decideSettings := settings.Settings
-		if decideSettings.MinArbitrageDifferenceDollarsPerKWH == 0 {
-			decideSettings.MinArbitrageDifferenceDollarsPerKWH = 0.03
-		}
-		if decideSettings.MinBatteryExportDifferenceDollarsPerKWH == 0 {
-			decideSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
-		}
-		var err error
-		decision, err = s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, decideSettings, latestAction)
-		if err != nil {
-			return nil, "", fmt.Errorf("controller decision failed: %w", err)
-		}
-
-		if hasPlan {
-			decideAct := decision.Action
-			planAct := planDecision.Action
-			diffMode := decideAct.BatteryMode != planAct.BatteryMode
-			diffSolar := decideAct.SolarMode != planAct.SolarMode
-			if diffMode || diffSolar {
-				log.Ctx(ctx).WarnContext(
-					ctx,
-					"plan and decide produced different actions",
-					slog.String("siteID", siteID),
-					slog.Int("decideBatteryMode", int(decideAct.BatteryMode)),
-					slog.Int("planBatteryMode", int(planAct.BatteryMode)),
-					slog.Int("decideSolarMode", int(decideAct.SolarMode)),
-					slog.Int("planSolarMode", int(planAct.SolarMode)),
-					slog.Int("decideChargeToSOC", decideAct.ChargeToSOC),
-					slog.Int("planChargeToSOC", planAct.ChargeToSOC),
-					slog.String("decideReason", string(decideAct.Reason)),
-					slog.String("planReason", string(planAct.Reason)),
-					slog.String("decideDescription", decideAct.Description),
-					slog.String("planDescription", planAct.Description),
-				)
-			}
-			// Attach the generated plan for debugging while executing the Decide action
-			decision.Action.Plan = planDecision.Action.Plan
-		} else if planErr != nil {
-			log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
-		}
+	if planErr != nil {
+		return nil, "", fmt.Errorf("controller plan failed: %w", planErr)
 	}
+	decision := planDecision
 
 	action := decision.Action
 	action.SimulationParams = decision.SimulationParams
@@ -673,7 +617,7 @@ func (s *Server) performSiteUpdate(
 		minSOC = action.ChargeToSOC
 	}
 	var sched *types.TOUSchedule
-	if onlyPlanMode && settings.ManageTOUSchedules && hasPlan && action.Plan != nil {
+	if settings.ManageTOUSchedules && hasPlan && action.Plan != nil {
 		sched = controller.BuildTOUSchedule(action.Plan, s.now(), status.Timestamp.Location())
 	}
 	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, action.SolarMode, types.ModesOptions{

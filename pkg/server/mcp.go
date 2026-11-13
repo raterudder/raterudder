@@ -386,60 +386,45 @@ func (s *Server) callMCPRecentSavings(ctx context.Context, siteID string, days i
 	end := todayStart.AddDate(0, 0, 1)
 	start := todayStart.AddDate(0, 0, -(days - 1))
 
-	var stats types.SavingsStats
-	var dailyBreakdown []MCPDailySavings
-	onlyPlanMode := ffOnlyPlanMode.Enabled(ctx)
-	if onlyPlanMode {
-		periods := make([]savingsPeriod, 0, 1+days)
-		periods = append(periods, savingsPeriod{Start: start, End: end})
-		if days > 1 {
-			for cur := start; cur.Before(end); {
-				next := cur.AddDate(0, 0, 1)
-				if !next.After(cur) {
-					next = cur.Add(24 * time.Hour)
-				}
-				periods = append(periods, savingsPeriod{Start: cur, End: next})
-				cur = next
+	periods := make([]savingsPeriod, 0, 1+days)
+	periods = append(periods, savingsPeriod{Start: start, End: end})
+	if days > 1 {
+		for cur := start; cur.Before(end); {
+			next := cur.AddDate(0, 0, 1)
+			if !next.After(cur) {
+				next = cur.Add(24 * time.Hour)
 			}
+			periods = append(periods, savingsPeriod{Start: cur, End: next})
+			cur = next
 		}
-		periodStats, _, err := s.getSiteSavingsNewWithSettings(ctx, siteID, settings, end, end, periods)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "mcp get_recent_savings getSiteSavingsNew failed", slog.String("siteID", siteID), slog.Any("error", err))
-			return MCPRecentSavingsRes{}, errors.New("failed to calculate recent savings")
-		}
-		if len(periodStats) > 0 {
-			stats = periodStats[0]
-		}
-		if len(periodStats) > 1 {
-			dailyBreakdown = make([]MCPDailySavings, 0, len(periodStats)-1)
-			for _, ds := range periodStats[1:] {
-				dailyBreakdown = append(dailyBreakdown, MCPDailySavings{
-					Date:                          ds.Timestamp.In(loc).Format("2006-01-02"),
-					HomeUsedKWH:                   roundSummaryFloat(ds.HomeUsed, 2),
-					SolarGeneratedKWH:             roundSummaryFloat(ds.SolarGenerated, 2),
-					GridImportedKWH:               roundSummaryFloat(ds.GridImported, 2),
-					GridExportedKWH:               roundSummaryFloat(ds.GridExported, 2),
-					BatteryDischargedKWH:          roundSummaryFloat(ds.BatteryUsed, 2),
-					NetGridCostDollars:            roundSummaryFloat(ds.Cost-ds.Credit, 2),
-					TotalSavingsDollars:           roundSummaryFloat(ds.TotalSavingsDollars, 2),
-					SolarAndBatterySavingsDollars: roundSummaryFloat(ds.SolarAndBatterySavingsDollars, 2),
-					RateRudderSavingsDollars:      roundSummaryFloat(ds.RateRudderSavingsDollars, 2),
-					Estimated:                     ds.Estimated,
-				})
-			}
-		}
-	} else {
-		stats, _, err = s.getSiteSavings(ctx, siteID, start, end)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "mcp get_recent_savings getSiteSavings failed", slog.String("siteID", siteID), slog.Any("error", err))
-			return MCPRecentSavingsRes{}, errors.New("failed to calculate recent savings")
-		}
-		stats.BatterySavings = stats.AvoidedCost - stats.ChargingCost
 	}
-
-	totalSavingsDollars := stats.TotalSavingsDollars
-	if !onlyPlanMode && totalSavingsDollars == 0 {
-		totalSavingsDollars = stats.SolarSavings + stats.BatterySavings + stats.Credit
+	periodStats, _, err := s.getSiteSavingsWithSettings(ctx, siteID, settings, end, end, periods)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "mcp get_recent_savings getSiteSavings failed", slog.String("siteID", siteID), slog.Any("error", err))
+		return MCPRecentSavingsRes{}, errors.New("failed to calculate recent savings")
+	}
+	var stats types.SavingsStats
+	if len(periodStats) > 0 {
+		stats = periodStats[0]
+	}
+	var dailyBreakdown []MCPDailySavings
+	if len(periodStats) > 1 {
+		dailyBreakdown = make([]MCPDailySavings, 0, len(periodStats)-1)
+		for _, ds := range periodStats[1:] {
+			dailyBreakdown = append(dailyBreakdown, MCPDailySavings{
+				Date:                          ds.Timestamp.In(loc).Format("2006-01-02"),
+				HomeUsedKWH:                   roundSummaryFloat(ds.HomeUsed, 2),
+				SolarGeneratedKWH:             roundSummaryFloat(ds.SolarGenerated, 2),
+				GridImportedKWH:               roundSummaryFloat(ds.GridImported, 2),
+				GridExportedKWH:               roundSummaryFloat(ds.GridExported, 2),
+				BatteryDischargedKWH:          roundSummaryFloat(ds.BatteryUsed, 2),
+				NetGridCostDollars:            roundSummaryFloat(ds.Cost-ds.Credit, 2),
+				TotalSavingsDollars:           roundSummaryFloat(ds.TotalSavingsDollars, 2),
+				SolarAndBatterySavingsDollars: roundSummaryFloat(ds.SolarAndBatterySavingsDollars, 2),
+				RateRudderSavingsDollars:      roundSummaryFloat(ds.RateRudderSavingsDollars, 2),
+				Estimated:                     ds.Estimated,
+			})
+		}
 	}
 
 	return MCPRecentSavingsRes{
@@ -453,7 +438,7 @@ func (s *Server) callMCPRecentSavings(ctx context.Context, siteID string, days i
 		GridImportedKWH:               roundSummaryFloat(stats.GridImported, 2),
 		GridExportedKWH:               roundSummaryFloat(stats.GridExported, 2),
 		BatteryDischargedKWH:          roundSummaryFloat(stats.BatteryUsed, 2),
-		TotalSavingsDollars:           roundSummaryFloat(totalSavingsDollars, 2),
+		TotalSavingsDollars:           roundSummaryFloat(stats.TotalSavingsDollars, 2),
 		SolarAndBatterySavingsDollars: roundSummaryFloat(stats.SolarAndBatterySavingsDollars, 2),
 		RateRudderSavingsDollars:      roundSummaryFloat(stats.RateRudderSavingsDollars, 2),
 		SolarSavingsDollars:           roundSummaryFloat(stats.SolarSavings, 2),

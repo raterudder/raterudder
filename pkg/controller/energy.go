@@ -2494,3 +2494,116 @@ func applyProportionalBlockScaling(
 		}
 	}
 }
+
+// TimeProfile holds modeled average solar production and home load for an hour.
+type TimeProfile struct {
+	TSHourStart    time.Time
+	Hour           int
+	AvgSolarKWH    float64
+	AvgHomeLoadKWH float64
+	P75HomeLoadKWH float64
+}
+
+func findTimeProfile(model []TimeProfile, t time.Time) TimeProfile {
+	truncT := t.Truncate(time.Hour)
+	for _, p := range model {
+		if !p.TSHourStart.IsZero() && p.TSHourStart.Equal(truncT) {
+			return p
+		}
+	}
+	return findTimeProfileByHour(model, t.Hour())
+}
+
+func findTimeProfileByHour(model []TimeProfile, hour int) TimeProfile {
+	for _, p := range model {
+		if p.Hour == hour {
+			return p
+		}
+	}
+	return TimeProfile{Hour: hour}
+}
+
+func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model []TimeProfile, settings types.Settings) float64 {
+	if len(history) < 2 {
+		return 1.0
+	}
+
+	// Index history by time for easy lookups
+	statsByTime := make(map[time.Time]types.EnergyStats)
+	var latestTime time.Time
+	currentHour := now.Truncate(time.Hour)
+	for _, h := range history {
+		t := h.TSHourStart.In(now.Location())
+		if t.Equal(currentHour) {
+			continue
+		}
+		statsByTime[t] = h
+		// get the latest time today
+		if t.Year() == now.Year() && t.YearDay() == now.YearDay() && t.After(latestTime) {
+			latestTime = t
+		}
+	}
+
+	if latestTime.IsZero() {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"no recent data",
+			slog.Time("now", now),
+			slog.Int("len(history)", len(history)),
+		)
+		return 1.0
+	}
+
+	// We need the last 2 hours of data
+	t1 := latestTime
+	t2 := t1.Add(-1 * time.Hour)
+
+	s1, ok1 := statsByTime[t1]
+	s2, ok2 := statsByTime[t2]
+
+	if !ok1 || !ok2 {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"not enough recent data",
+			slog.Time("now", now),
+			slog.Time("t1", t1),
+			slog.Time("t2", t2),
+		)
+		return 1.0
+	}
+
+	// Calculate recent actual solar
+	recentSolar := s1.SolarKWH + s2.SolarKWH
+
+	// Calculate model expected solar for these hours
+	m1 := findTimeProfile(model, t1)
+	m2 := findTimeProfile(model, t2)
+
+	modelSolar := m1.AvgSolarKWH + m2.AvgSolarKWH
+
+	// If model expects no solar (e.g. night), we can't calculate a meaningful
+	// trend ratio.
+	if modelSolar < 0.001 {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"model expects no solar",
+			slog.Time("now", now),
+			slog.Time("t1", t1),
+			slog.Time("t2", t2),
+			slog.Float64("modelSolar", modelSolar),
+		)
+		return 1.0
+	}
+
+	// check for > 10% variation
+	diff := recentSolar - modelSolar
+	if diff < 0 {
+		diff = -diff
+	}
+
+	if diff/modelSolar > 0.10 {
+		return min(settings.SolarTrendRatioMax, max(0.0, recentSolar/modelSolar))
+	}
+
+	return 1.0
+}

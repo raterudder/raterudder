@@ -5,7 +5,6 @@ import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
 import DateSelector from '../components/DateSelector';
-import { useFeatureFlag } from '../utils/features';
 import {
     gridChargeCost,
     getActionTimestamp,
@@ -73,7 +72,6 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [savingsPeriods, setSavingsPeriods] = useState<SavingsStats[] | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const onlyPlanMode = useFeatureFlag('onlyPlanMode');
 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
     const [showTOUNotice, setShowTOUNotice] = useState(false);
@@ -215,16 +213,13 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const weekStart = getDateInTimeZone(y, m, d - 6, 0, 0, 0, 0, siteTimeZone);
                 const monthStart = getDateInTimeZone(y, m, d - 29, 0, 0, 0, 0, siteTimeZone);
 
-                const actionsAndSavingsData = onlyPlanMode
-                    ? await fetchActionsAndSavings(start, end, siteID, {
-                          newCalculation: true,
-                          savingsPeriods: [
-                              { start, end },
-                              { start: weekStart, end },
-                              { start: monthStart, end },
-                          ],
-                      })
-                    : await fetchActionsAndSavings(start, end, siteID);
+                const actionsAndSavingsData = await fetchActionsAndSavings(start, end, siteID, {
+                    savingsPeriods: [
+                        { start, end },
+                        { start: weekStart, end },
+                        { start: monthStart, end },
+                    ],
+                });
 
                 if (!isCancelled) {
                     setActions(actionsAndSavingsData.actions || []);
@@ -249,7 +244,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             isCancelled = true;
             clearTimeout(timer);
         };
-    }, [currentDate, siteID, refreshTrigger, onlyPlanMode, siteTimeZone]);
+    }, [currentDate, siteID, refreshTrigger, siteTimeZone]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
@@ -595,13 +590,12 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         </div>
                     )}
                     {siteID !== 'ALL' && isToday && latestAction && (
-                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={onlyPlanMode} timeZone={siteTimeZone} />
+                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} timeZone={siteTimeZone} />
                     )}
 
                     <SavingsHero
                         savings={savings}
                         savingsPeriods={savingsPeriods}
-                        planMode={onlyPlanMode}
                         currentDate={currentDate}
                         isToday={isToday}
                         currencySymbol={currencySymbol}

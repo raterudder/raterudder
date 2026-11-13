@@ -17,8 +17,6 @@ func TestMigrateSettings(t *testing.T) {
 		s, changed, err := MigrateSettings(Settings{}, 0, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
-		assert.Equal(t, 2.0, s.IgnoreHourUsageOverMultiple)
-		assert.Equal(t, 0.5, s.IgnoreHourUsageFloorKWH)
 		assert.Equal(t, 0.0, s.MinArbitrageDifferenceDollarsPerKWH)
 		assert.Equal(t, 20.0, s.MinBatterySOC)
 	})
@@ -61,10 +59,9 @@ func TestMigrateSettings(t *testing.T) {
 	t.Run("v8 to v9: set UpdateGroup", func(t *testing.T) {
 		// Both ESS and Utility configured, UpdateGroup unset (0)
 		old := Settings{
-			ESS:                   "franklin",
-			UtilityProvider:       "comed",
-			EncryptedCredentials:  []byte("creds"),
-			MinStartChargeMinutes: 5,
+			ESS:                  "franklin",
+			UtilityProvider:      "comed",
+			EncryptedCredentials: []byte("creds"),
 		}
 		s, changed, err := MigrateSettings(old, 8, "production")
 		require.NoError(t, err)
@@ -75,8 +72,6 @@ func TestMigrateSettings(t *testing.T) {
 		oldNoUtility := Settings{
 			ESS:                        "franklin",
 			EncryptedCredentials:       []byte("creds"),
-			MinStartChargeMinutes:      5,
-			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldNoUtility, 8, "production")
@@ -87,8 +82,6 @@ func TestMigrateSettings(t *testing.T) {
 		// Utility configured but ESS is not
 		oldNoESS := Settings{
 			UtilityProvider:            "comed",
-			MinStartChargeMinutes:      5,
-			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldNoESS, 8, "production")
@@ -102,8 +95,6 @@ func TestMigrateSettings(t *testing.T) {
 			UtilityProvider:            "pge",
 			EncryptedCredentials:       []byte("creds"),
 			UpdateGroup:                5,
-			MinStartChargeMinutes:      5,
-			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldSet, 8, "production")
@@ -112,33 +103,12 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 5, s.UpdateGroup)
 	})
 
-	t.Run("v9 to v10: default timing values", func(t *testing.T) {
-		old := Settings{
-			MinStartChargeMinutes: 0,
-		}
-		s, changed, err := MigrateSettings(old, 9, "production")
-		require.NoError(t, err)
-		assert.True(t, changed)
-		assert.Equal(t, 5, s.MinStartChargeMinutes)
-	})
-
 	t.Run("v11 to v12: default home load strategy", func(t *testing.T) {
-		old := Settings{
-			IgnoreHourUsageFloorKWH: 0.5,
-		}
+		old := Settings{}
 		s, changed, err := MigrateSettings(old, 11, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "default", s.HomeLoadPredictionStrategy)
-	})
-
-	t.Run("v12 to v13: split buffer settings", func(t *testing.T) {
-		old := Settings{}
-		s, changed, err := MigrateSettings(old, 12, "production")
-		require.NoError(t, err)
-		assert.True(t, changed)
-		assert.Equal(t, 10, s.SolarCapacityBufferMinutes)
-		assert.Equal(t, 20, s.VPPChargingBufferMinutes)
 	})
 
 	t.Run("v13 to v14: bump version for firestore release field", func(t *testing.T) {
@@ -149,16 +119,6 @@ func TestMigrateSettings(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "production", s.Release)
-	})
-
-	t.Run("v14 to v15: add default MinExportHoldDifferenceDollarsPerKWH", func(t *testing.T) {
-		old := Settings{
-			Release: "production",
-		}
-		s, changed, err := MigrateSettings(old, 14, "production")
-		require.NoError(t, err)
-		assert.True(t, changed)
-		assert.Equal(t, 0.02, s.MinExportHoldDifferenceDollarsPerKWH)
 	})
 
 	t.Run("v15 to v16: set CustomGridSettings true for configured ESS", func(t *testing.T) {
@@ -261,41 +221,16 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 0, s6.UpdateGroup)
 	})
 
-	t.Run("v18 to v19: migrate legacy buffer settings to OptimizationProfile", func(t *testing.T) {
-		// Case 1: Conservative (VPPChargingBufferMinutes >= 40)
-		oldCons := Settings{
-			VPPChargingBufferMinutes:   40,
-			SolarCapacityBufferMinutes: 30,
-		}
-		sCons, changedCons, errCons := MigrateSettings(oldCons, 18, "production")
-		require.NoError(t, errCons)
-		assert.True(t, changedCons)
-		assert.Equal(t, "conservative", sCons.OptimizationProfile)
+	t.Run("v18 to v19: default OptimizationProfile to balanced", func(t *testing.T) {
+		// Case 1: Unset OptimizationProfile defaults to balanced
+		sUnset, changedUnset, errUnset := MigrateSettings(Settings{}, 18, "production")
+		require.NoError(t, errUnset)
+		assert.True(t, changedUnset)
+		assert.Equal(t, "balanced", sUnset.OptimizationProfile)
 
-		// Case 2: Aggressive (VPPChargingBufferMinutes <= 10)
-		oldAgg := Settings{
-			VPPChargingBufferMinutes:   10,
-			SolarCapacityBufferMinutes: 0,
-		}
-		sAgg, changedAgg, errAgg := MigrateSettings(oldAgg, 18, "production")
-		require.NoError(t, errAgg)
-		assert.True(t, changedAgg)
-		assert.Equal(t, "aggressive", sAgg.OptimizationProfile)
-
-		// Case 3: Balanced (default 20 mins)
-		oldBal := Settings{
-			VPPChargingBufferMinutes:   20,
-			SolarCapacityBufferMinutes: 10,
-		}
-		sBal, changedBal, errBal := MigrateSettings(oldBal, 18, "production")
-		require.NoError(t, errBal)
-		assert.True(t, changedBal)
-		assert.Equal(t, "balanced", sBal.OptimizationProfile)
-
-		// Case 4: Already set OptimizationProfile is preserved
+		// Case 2: Already set OptimizationProfile is preserved
 		oldSet := Settings{
-			OptimizationProfile:      "aggressive",
-			VPPChargingBufferMinutes: 40,
+			OptimizationProfile: "aggressive",
 		}
 		sSet, changedSet, errSet := MigrateSettings(oldSet, 18, "production")
 		require.NoError(t, errSet)
@@ -368,12 +303,8 @@ func TestMigrateSettings(t *testing.T) {
 			UtilityRate:                             "comed_besh",
 			Release:                                 "production",
 			UpdateGroup:                             7,
-			MinStartChargeMinutes:                   5,
-			SolarCapacityBufferMinutes:              10,
-			VPPChargingBufferMinutes:                20,
 			HomeLoadPredictionStrategy:              "default",
 			OptimizationProfile:                     "balanced",
-			MinExportHoldDifferenceDollarsPerKWH:    0.02,
 			CustomGridSettings:                      true,
 			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
 		}

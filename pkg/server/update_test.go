@@ -348,7 +348,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertNotCalled(t, "SetModes")
 	})
 
-	t.Run("Paused Updates With OnlyPlanMode", func(t *testing.T) {
+	t.Run("Paused Updates Generates Plan", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		now := time.Now().Truncate(time.Hour)
@@ -420,7 +420,6 @@ func TestHandleUpdate(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -436,7 +435,7 @@ func TestHandleUpdate(t *testing.T) {
 		actionMap, ok := resp["action"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, true, actionMap["paused"])
-		assert.NotNil(t, actionMap["plan"], "plan should be generated and attached when onlyPlanMode=true even if paused")
+		assert.NotNil(t, actionMap["plan"], "plan should be generated and attached even if paused")
 
 		mockES.AssertNotCalled(t, "SetModes")
 	})
@@ -694,7 +693,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertNotCalled(t, "SetModes")
 	})
 
-	t.Run("Action - VPP Event Active With OnlyPlanMode", func(t *testing.T) {
+	t.Run("Action - VPP Event Active Generates Plan", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		now := time.Now().Truncate(time.Hour)
@@ -767,7 +766,6 @@ func TestHandleUpdate(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 		srv.handleUpdate(w, req)
@@ -781,7 +779,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertNotCalled(t, "SetModes")
 	})
 
-	t.Run("Action - Grid Unavailable Skips Plan Even With OnlyPlanMode Enabled", func(t *testing.T) {
+	t.Run("Action - Grid Unavailable Skips Plan", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		now := time.Now().Truncate(time.Hour)
@@ -843,7 +841,6 @@ func TestHandleUpdate(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 		srv.handleUpdate(w, req)
@@ -1164,7 +1161,6 @@ func TestHandleUpdate(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1173,12 +1169,12 @@ func TestHandleUpdate(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		require.NotNil(t, insertedAction, "Action must be inserted into storage")
-		assert.NotNil(t, insertedAction.Plan, "When onlyPlanMode is enabled, Action.Plan must be populated by Controller.Plan")
+		assert.NotNil(t, insertedAction.Plan, "Action.Plan must be populated by Controller.Plan")
 		assert.NotEmpty(t, insertedAction.Plan.Periods)
 		assert.Equal(t, "none", insertedAction.SimulationParams.DetectedShift)
 	})
 
-	t.Run("Production Release Dark Launches Plan And Performs Decide Action", func(t *testing.T) {
+	t.Run("Production Release Calls Plan", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		now := time.Now().Truncate(time.Hour)
@@ -1210,16 +1206,12 @@ func TestHandleUpdate(t *testing.T) {
 				},
 			},
 		}, nil)
-		// With BatterySOC=100 and AlwaysChargeUnderDollarsPerKWH=0.20, Decide returns BatteryModeChargeAny
-		// while Plan returns BatteryModeLoad. Also set ManageTOUSchedules=true to verify TOU schedules
-		// are not dispatched during dark launch when onlyPlanMode=false.
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:                "test",
-			MinBatterySOC:                  20.0,
-			GridChargeBatteries:            true,
-			AlwaysChargeUnderDollarsPerKWH: 0.20,
-			ManageTOUSchedules:             true,
-			Release:                        "production",
+			UtilityProvider:     "test",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			ManageTOUSchedules:  true,
+			Release:             "production",
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -1265,7 +1257,6 @@ func TestHandleUpdate(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1274,112 +1265,11 @@ func TestHandleUpdate(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		require.NotNil(t, insertedAction, "Action must be inserted into storage")
-		require.NotNil(t, insertedAction.Plan, "On production dark launch, Action.Plan must be attached for debugging")
-		require.NotEmpty(t, insertedAction.Plan.Periods)
-		assert.Equal(t, types.BatteryModeLoad, insertedAction.Plan.Periods[0].BatteryMode, "Plan should have chosen Load")
-		assert.Equal(t, types.BatteryModeChargeAny, insertedAction.BatteryMode, "Dark launch must still execute Decide's BatteryMode")
-		assert.Equal(t, types.BatteryModeChargeAny, setBatteryMode, "SetModes must receive Decide's BatteryMode")
-		assert.Nil(t, setOpts.Schedule, "Dark launch must not build or send TOU schedule when onlyPlanMode=false")
-	})
-
-	t.Run("Production Release With OnlyPlanMode Calls Plan Without Decide", func(t *testing.T) {
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		now := time.Now().Truncate(time.Hour)
-		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
-			DollarsPerKWH: 0.15,
-			TSStart:       now,
-			TSEnd:         now.Add(time.Hour),
-		}, nil)
-
-		var futurePrices []types.Price
-		for i := 1; i <= 24; i++ {
-			futurePrices = append(futurePrices, types.Price{
-				DollarsPerKWH: 0.15,
-				TSStart:       now.Add(time.Duration(i) * time.Hour),
-				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
-			})
-		}
-		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
-		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
-
-		var insertedAction *types.Action
-		mockS := &mockStorage{}
-		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
-		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
-			{
-				Energy: []types.DailyEnergyStats{
-					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
-				},
-			},
-		}, nil)
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:                "test",
-			MinBatterySOC:                  20.0,
-			GridChargeBatteries:            true,
-			AlwaysChargeUnderDollarsPerKWH: 0.20,
-			ManageTOUSchedules:             true,
-			Release:                        "production",
-		}, types.CurrentSettingsVersion, time.Time{}, nil)
-		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
-		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
-		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			act := args.Get(2).(types.Action)
-			insertedAction = &act
-		}).Return(nil)
-
-		var setBatteryMode types.BatteryMode
-		var setOpts types.ModesOptions
-		mockES := &mockESS{}
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
-			BatteryCapacityKWH: 13.5,
-			BatterySOC:         100,
-			Timestamp:          now,
-			TimeLocation:       "UTC",
-		}, nil)
-		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			setBatteryMode = args.Get(1).(types.BatteryMode)
-			setOpts = args.Get(3).(types.ModesOptions)
-		}).Return(true, nil)
-
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
-
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider(types.SiteIDNone, mockU)
-
-		srv := &Server{
-			utilities:  mockUMap,
-			ess:        mockP,
-			storage:    mockS,
-			listenAddr: ":8080",
-			controller: controller.NewController(),
-			bypassAuth: true,
-			release:    "production", // Production release environment
-		}
-
-		req := httptest.NewRequest("GET", "/api/update", nil)
-		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
-		req = req.WithContext(ctx)
-		w := httptest.NewRecorder()
-
-		srv.handleUpdate(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		require.NotNil(t, insertedAction, "Action must be inserted into storage")
-		assert.NotNil(t, insertedAction.Plan, "On production with onlyPlanMode=true, Action.Plan must be populated by Controller.Plan")
+		assert.NotNil(t, insertedAction.Plan, "On production, Action.Plan must be populated by Controller.Plan")
 		assert.NotEmpty(t, insertedAction.Plan.Periods)
-		assert.Equal(t, types.BatteryModeLoad, insertedAction.BatteryMode, "With onlyPlanMode=true, Plan's BatteryMode must be used")
+		assert.Equal(t, types.BatteryModeLoad, insertedAction.BatteryMode, "Plan's BatteryMode must be used")
 		assert.Equal(t, types.BatteryModeLoad, setBatteryMode, "SetModes must receive Plan's BatteryMode")
-		assert.NotNil(t, setOpts.Schedule, "With onlyPlanMode=true and ManageTOUSchedules=true, TOUSchedule must be built")
+		assert.NotNil(t, setOpts.Schedule, "When ManageTOUSchedules=true, TOUSchedule must be built")
 	})
 
 	t.Run("Combined History Fetch Failure Returns Error", func(t *testing.T) {
@@ -2057,13 +1947,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		}
 
 		mockS := &mockStorage{}
-		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{
-			Features: map[string][]feats.Criteria{
-				"onlyPlanMode": {
-					{SitePercent: 100, Value: true},
-				},
-			},
-		}, time.Time{}, nil).Once()
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(settingsMap, versionsMap, updatedTimesMap, nil)
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{

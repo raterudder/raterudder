@@ -17,19 +17,20 @@ describe('SavingsHero', () => {
         gridExported: 5,
         homeUsed: 40,
         batteryUsed: 10,
+        totalSavingsDollars: 32,
+        solarAndBatterySavingsDollars: 25,
+        rateRudderSavingsDollars: 7,
     };
 
     it('renders net savings correctly', () => {
         render(<SavingsHero savings={defaultSavings} />);
-        // 10 + 20 + 2 = 32
-        expect(screen.getByText('$ 32.00')).toBeInTheDocument();
+        expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('$ 32.00');
     });
 
     it('renders negative savings with a minus sign', () => {
-        const negativeSavings = { ...defaultSavings, batterySavings: -50 };
+        const negativeSavings = { ...defaultSavings, totalSavingsDollars: -28, rateRudderSavingsDollars: 0 };
         render(<SavingsHero savings={negativeSavings} />);
-        // -50 + 20 + 2 = -28
-        expect(screen.getByText('- $ 28.00')).toBeInTheDocument();
+        expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('- $ 28.00');
     });
 
     it('renders individual metrics', () => {
@@ -45,7 +46,7 @@ describe('SavingsHero', () => {
         expect(container.firstChild).toBeNull();
     });
 
-    it('renders planMode multi-period savings and swaps period on click', () => {
+    it('renders multi-period savings and swaps period on click', () => {
         const periods: SavingsStats[] = [
             {
                 ...defaultSavings,
@@ -95,7 +96,6 @@ describe('SavingsHero', () => {
             <SavingsHero
                 savings={periods[0]}
                 savingsPeriods={periods}
-                planMode={true}
                 isToday={true}
             />
         );
@@ -135,7 +135,6 @@ describe('SavingsHero', () => {
             <SavingsHero
                 savings={periods[0]}
                 savingsPeriods={periods}
-                planMode={true}
                 isToday={false}
                 currentDate={new Date(2026, 2, 15)}
             />
@@ -147,7 +146,7 @@ describe('SavingsHero', () => {
         expect(screen.queryByTestId('hero-subcaption')).not.toBeInTheDocument();
     });
 
-    it('formats negative planMode savings and resets selectedPeriodIdx when currentDate changes', () => {
+    it('formats negative savings and resets selectedPeriodIdx when currentDate changes', () => {
         const periods: SavingsStats[] = [
             {
                 ...defaultSavings,
@@ -169,7 +168,6 @@ describe('SavingsHero', () => {
             <SavingsHero
                 savings={periods[0]}
                 savingsPeriods={periods}
-                planMode={true}
                 isToday={false}
                 currentDate={new Date(2026, 2, 15)}
             />
@@ -187,7 +185,6 @@ describe('SavingsHero', () => {
             <SavingsHero
                 savings={periods[0]}
                 savingsPeriods={periods}
-                planMode={true}
                 isToday={false}
                 currentDate={new Date(2026, 2, 14)}
             />

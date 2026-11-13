@@ -75,8 +75,8 @@ func main() {
 	if len(settings.MinBatterySOCPeriods) > 0 {
 		fmt.Printf("Min SOC Periods: %+v\n", settings.MinBatterySOCPeriods)
 	}
-	fmt.Printf("Thresholds:     AlwaysChargeUnder=$%.4f/kWh, MinArbitrageDiff=$%.4f/kWh, MinExportDiff=$%.4f/kWh\n",
-		settings.AlwaysChargeUnderDollarsPerKWH, settings.MinArbitrageDifferenceDollarsPerKWH, settings.MinBatteryExportDifferenceDollarsPerKWH)
+	fmt.Printf("Thresholds:     MinArbitrageDiff=$%.4f/kWh, MinExportDiff=$%.4f/kWh\n",
+		settings.MinArbitrageDifferenceDollarsPerKWH, settings.MinBatteryExportDifferenceDollarsPerKWH)
 	fmt.Printf("EV Standby:     %v\n", settings.EVChargingStandby)
 	fmt.Printf("Optimization:   %+v\n", settings.GetOptimizationParams())
 	fmt.Printf("Manage TOU:     %v\n", settings.ManageTOUSchedules)

@@ -609,6 +609,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 	t.Run("Parse Dates Default", func(t *testing.T) {
 		handler, mockS, mockSBase := setupTestServer(t)
+		mockSBase.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Once()
 		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings", nil)
@@ -620,11 +621,12 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		assert.Equal(t, now, mockS.lastEnd)
-		assert.Equal(t, now.Add(-50*time.Hour), mockS.lastStart)
+		assert.Equal(t, now.Add(-24*time.Hour).AddDate(0, 0, -shadowWarmupLookbackDays), mockS.lastStart)
 	})
 
 	t.Run("Validate 25 Hour Limit", func(t *testing.T) {
 		handler, _, mockSBase := setupTestServer(t)
+		mockSBase.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Once()
 		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 
@@ -662,14 +664,16 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		// preventing the fallback query from duplicating actions.
 		expectedActions := []types.Action{
 			{
-				Timestamp:   start.Add(-25 * time.Hour),
-				BatteryMode: types.BatteryModeStandby,
+				Timestamp:    start.Add(-25 * time.Hour),
+				BatteryMode:  types.BatteryModeStandby,
+				SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0},
 			},
 			{
-				Timestamp:   now.Add(-30 * time.Minute),
-				BatteryMode: types.BatteryModeChargeAny,
-				Reason:      types.ActionReasonSufficientBattery,
-				Description: "Solar charging",
+				Timestamp:    now.Add(-30 * time.Minute),
+				BatteryMode:  types.BatteryModeChargeAny,
+				Reason:       types.ActionReasonSufficientBattery,
+				Description:  "Solar charging",
+				SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0},
 			},
 		}
 		mockS.actions = expectedActions
@@ -678,7 +682,8 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		}
 		mockS.err = nil
 
-		// Mock GetEnergyHistory on the embedded mockStorage
+		// Mock GetHistorySummaries & GetEnergyHistory on the embedded mockStorage
+		mockSBase.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Once()
 		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
 			{
 				TSDayStart: start,
@@ -758,8 +763,8 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 		end := start.Add(24 * time.Hour).UTC()
 
-		startQuery := start.AddDate(0, 0, -1)
-		endQuery := end
+		startQuery := start.AddDate(0, 0, -shadowWarmupLookbackDays)
+		endQuery := end.AddDate(0, 0, nextDayValuationLookaheadDays)
 
 		// Site 1 data
 		mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.MatchedBy(func(t time.Time) bool {
@@ -767,16 +772,15 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		}), mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(endQuery)
 		})).Return([]types.Price{
-			{TSStart: start, DollarsPerKWH: 0.10},
+			{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
 		}, nil)
-		mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(startQuery)
-		}), mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(endQuery)
-		})).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
+		mockStore.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{TSDayStart: start, Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
 		}, nil)
-		mockStore.On("GetActionHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Action{}, nil)
+		mockStore.On("GetActionHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Action{
+			{Timestamp: start, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0}},
+		}, nil)
 		mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		// Site 2 data
@@ -785,16 +789,15 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		}), mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(endQuery)
 		})).Return([]types.Price{
-			{TSStart: start, DollarsPerKWH: 0.20},
+			{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},
 		}, nil)
-		mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(startQuery)
-		}), mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(endQuery)
-		})).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
+		mockStore.On("GetHistorySummaries", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{TSDayStart: start, Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
 		}, nil)
-		mockStore.On("GetActionHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Action{}, nil)
+		mockStore.On("GetActionHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Action{
+			{Timestamp: start, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0}},
+		}, nil)
 		mockStore.On("GetSettings", mock.Anything, "site2").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		req, _ := http.NewRequest("GET", "/api/history/actionsAndSavings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
@@ -945,7 +948,6 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		q := make(url.Values)
 		q.Set("start", dayStart.Format(time.RFC3339))
 		q.Set("end", dayEnd.Format(time.RFC3339))
-		q.Set("newCalculation", "true")
 		q.Set("savingsPeriods", periodsParam)
 
 		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
@@ -974,7 +976,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		assert.InDelta(t, 1.00, res.Savings.TotalSavingsDollars, 0.001)
 	})
 
-	t.Run("Fetch Actions and Savings ALL Sites with NewCalculation and SavingsPeriods", func(t *testing.T) {
+	t.Run("Fetch Actions and Savings ALL Sites with SavingsPeriods", func(t *testing.T) {
 		mockStore := &mockStorage{}
 		mockUtilities := utility.NewMap(mockStore)
 		dayStart := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
@@ -1030,7 +1032,6 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		q.Set("siteID", "ALL")
 		q.Set("start", dayStart.Format(time.RFC3339))
 		q.Set("end", dayEnd.Format(time.RFC3339))
-		q.Set("newCalculation", "true")
 		q.Set("savingsPeriods", periodsParam)
 
 		req, _ := http.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)

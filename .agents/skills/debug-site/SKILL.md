@@ -41,13 +41,12 @@ Useful flags:
 * `--detail-at=HH:MM,HH:MM` (or `all`): Dump the step-by-step `plan.Periods` table for matching local poll times.
 * `--show-recorded-plan`: Print the `action.Plan` stored in Firestore alongside the newly simulated plan.
 * `--chain-actions=false`: Feed the historically recorded previous action as `lastAction` instead of chaining the simulated action across polls.
-* Setting override flags: `--min-soc`, `--period-min-soc`, `--export-margin`, `--arbitrage-diff`, `--always-charge-under`, `--grid-charge`, `--grid-export-batteries`, `--grid-export-solar`.
+* Setting override flags: `--min-soc`, `--period-min-soc`, `--export-margin`, `--arbitrage-diff`, `--grid-charge`, `--grid-export-batteries`, `--grid-export-solar`.
 
 ## Key Investigation Steps
 
 ### 1. Identify Environment & Timezone
 * **Timezone**: Look up `SystemStatus.TimeLocation` (e.g., `America/Los_Angeles`, `America/Chicago`). "Overnight" must be evaluated relative to the site's local timezone, not UTC.
-* **Control Mode**: Check the `onlyPlanMode` feature flag in `features/{release}` in Firestore. If `false`, the site runs legacy `controller.Decide` alongside dark-launched `controller.Plan`. If `true`, it runs `controller.Plan` only.
 
 ### 2. Check Automation Status
 * Check if `settings.Pause` is `true`. When paused, the battery remains in self-consumption (`BatteryModeLoad`) and no automated grid charging/export occurs.

@@ -805,7 +805,7 @@ func TestHandleMCP(t *testing.T) {
 			assert.True(t, respBadArgs.Result.IsError, "arguments %s should be rejected", badArgs)
 		}
 
-		// 2. Success with default 7 days in planMode (onlyPlanMode=true) including daily breakdown
+		// 2. Success with default 7 days including daily breakdown
 		mockStore.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone: "America/Chicago",
@@ -919,108 +919,6 @@ func TestHandleMCP(t *testing.T) {
 			assert.Equal(t, 25.0, respSavings.Result.StructuredContent.Daily[6].SolarGeneratedKWH)
 			assert.Equal(t, 8.0, respSavings.Result.StructuredContent.Daily[6].BatteryDischargedKWH)
 		}
-
-		// 3. Success with custom days (14 days) and legacy calculation (onlyPlanMode=false)
-		legacyMockStore := &mockStorage{}
-		legacySrv := newTestAppsServer(legacyMockStore, fixedNow)
-		legacyToken, legacyTokenHash, err := legacySrv.createAppToken("user-1", "site-1", "app-1")
-		require.NoError(t, err)
-
-		legacyMockStore.On("GetUser", mock.Anything, "user-1").Return(types.User{
-			ID:    "user-1",
-			Email: "user1@example.com",
-			Sites: []types.UserSite{{ID: "site-1"}},
-			Apps: []types.UserApp{
-				{
-					ID:        "app-1",
-					Name:      "Claude Desktop",
-					Type:      types.AppTypeAPIKey,
-					SiteID:    "site-1",
-					TokenHash: legacyTokenHash,
-				},
-			},
-		}, nil).Once()
-		legacyMockStore.On("GetSite", mock.Anything, "site-1").Return(types.Site{
-			ID:          "site-1",
-			Permissions: []types.SitePermissions{{UserID: "user-1"}},
-		}, nil).Once()
-		legacySrv.featsEvaluator = feats.NewEvaluator(feats.Config{
-			Features: map[string][]feats.Criteria{
-				"onlyPlanMode": {
-					{SitePercent: 100, Value: false},
-				},
-			},
-		})
-		legacySrv.featsFetchedAt = fixedNow
-		legacyHandler := legacySrv.setupHandler()
-
-		legacyMockStore.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
-			Location: &types.SiteLocation{
-				TimeZone: "America/Chicago",
-			},
-			MinBatterySOC: 10,
-		}, types.CurrentSettingsVersion, time.Time{}, nil).Maybe()
-
-		legacyMockStore.On("GetPriceHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.Price{
-			{
-				TSStart:       time.Date(2026, 6, 15, 10, 0, 0, 0, loc),
-				TSEnd:         time.Date(2026, 6, 15, 11, 0, 0, 0, loc),
-				DollarsPerKWH: 0.15,
-			},
-		}, nil).Maybe()
-
-		legacyMockStore.On("GetEnergyHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
-			{
-				TSDayStart:   time.Date(2026, 6, 15, 0, 0, 0, 0, loc),
-				TimeLocation: "America/Chicago",
-				Hourly: []types.EnergyStats{
-					{
-						TSHourStart:       time.Date(2026, 6, 15, 10, 0, 0, 0, loc),
-						SolarKWH:          50.0,
-						HomeKWH:           35.0,
-						GridImportKWH:     10.0,
-						GridExportKWH:     25.0,
-						BatteryUsedKWH:    15.0,
-						BatteryChargedKWH: 15.0,
-					},
-				},
-			},
-		}, nil).Maybe()
-
-		legacyMockStore.On("GetActionHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.Action{}, nil).Maybe()
-
-		reqLegacy := newReq(legacyToken, `{
-			"jsonrpc": "2.0",
-			"id": 11,
-			"method": "tools/call",
-			"params": {
-				"name": "get_recent_savings",
-				"arguments": {"days": 14}
-			}
-		}`, nil)
-
-		wLegacy := httptest.NewRecorder()
-		legacyHandler.ServeHTTP(wLegacy, reqLegacy)
-		require.Equal(t, http.StatusOK, wLegacy.Code)
-
-		var respLegacy struct {
-			Result struct {
-				Content           []toolContent       `json:"content"`
-				StructuredContent MCPRecentSavingsRes `json:"structuredContent"`
-				IsError           bool                `json:"isError"`
-			} `json:"result"`
-		}
-		require.NoError(t, json.NewDecoder(wLegacy.Body).Decode(&respLegacy))
-		assert.False(t, respLegacy.Result.IsError, respLegacy.Result.Content)
-		require.Len(t, respLegacy.Result.Content, 1)
-		var contentLegacySavings MCPRecentSavingsRes
-		require.NoError(t, json.Unmarshal([]byte(respLegacy.Result.Content[0].Text), &contentLegacySavings))
-		assert.Equal(t, respLegacy.Result.StructuredContent, contentLegacySavings)
-
-		assert.Equal(t, 14, respLegacy.Result.StructuredContent.Days)
-		assert.Equal(t, 50.0, respLegacy.Result.StructuredContent.SolarGeneratedKWH)
-		assert.Equal(t, 15.0, respLegacy.Result.StructuredContent.BatteryDischargedKWH)
-		assert.NotContains(t, wLegacy.Body.String(), "hourlyDebugging")
 	})
 
 	t.Run("ToolsCall_DailyHistory", func(t *testing.T) {

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,6 +15,56 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+//go:embed testdata/history/*.json
+var historyFS embed.FS
+
+func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
+	targetHour := ts.In(loc).Truncate(time.Hour)
+	for _, day := range history {
+		for _, hour := range day.Hourly {
+			if hour.TSHourStart.In(loc).Truncate(time.Hour).Equal(targetHour) {
+				return hour, true
+			}
+		}
+	}
+	return types.EnergyStats{}, false
+}
+
+func findPrice(priceHistory []types.Price, ts time.Time) (types.Price, bool) {
+	for _, p := range priceHistory {
+		if p.Contains(ts) {
+			return p, true
+		}
+	}
+	// Fallback to exact match of TSStart truncated to hour
+	targetHour := ts.UTC().Truncate(time.Hour)
+	for _, p := range priceHistory {
+		if p.TSStart.UTC().Truncate(time.Hour).Equal(targetHour) {
+			return p, true
+		}
+	}
+	return types.Price{}, false
+}
+
+func calculateMinFuturePrice(priceHistory []types.Price, start time.Time) float64 {
+	minPrice := -999.0
+	hasPrice := false
+	windowEnd := start.Add(24 * time.Hour)
+	for _, p := range priceHistory {
+		if !p.TSStart.Before(start) && p.TSStart.Before(windowEnd) {
+			cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
+			if !hasPrice || cost < minPrice {
+				minPrice = cost
+				hasPrice = true
+			}
+		}
+	}
+	if !hasPrice {
+		return 0.0
+	}
+	return minPrice
+}
 
 var planBaselines = map[string]float64{
 	"site1_march.json":           -3.910,
@@ -45,8 +96,7 @@ var planBaselines = map[string]float64{
 	"site5_mid-october.json":     1.789,
 }
 
-// TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets
-// to benchmark financial savings and battery performance against the historical baselines established by Decide().
+// TestPlanHistory evaluates the Plan engine against real-world recorded site history datasets.
 func TestPlanHistory(t *testing.T) {
 	ctx := context.Background()
 	c := NewController()
@@ -553,7 +603,6 @@ func TestPlanHistory(t *testing.T) {
 			}
 
 			baseNetCost, hasBaseline := planBaselines[fileName]
-			decideBaseCost, _ := fileBaselines[fileName]
 			if !hasBaseline {
 				var baselineCostVal, baselineCreditVal float64
 				for _, stat := range dataset.ActionHistory {
@@ -585,12 +634,6 @@ func TestPlanHistory(t *testing.T) {
 			batteryAssetValue := deltaEnergyKWH * lastGridImportPrice
 			simAdjustedNetCost := simNetCost - batteryAssetValue
 
-			savingsVsDecide := decideBaseCost - simAdjustedNetCost
-			var pctSavingsVsDecide float64
-			if decideBaseCost != 0 {
-				pctSavingsVsDecide = (savingsVsDecide / decideBaseCost) * 100.0
-			}
-
 			modeCounts := make(map[types.BatteryMode]int)
 			for _, m := range planModes {
 				modeCounts[m]++
@@ -599,8 +642,8 @@ func TestPlanHistory(t *testing.T) {
 			for _, r := range planReasons {
 				reasonCounts[r]++
 			}
-			t.Logf("%-20s | Cash: $%7.3f | SOC: %5.1f%% -> %5.1f%% (dE: %+6.2f kWh, AssetVal: $%+6.3f) | PlanAdjNetCost: $%7.3f | PlanBase: $%7.3f | DecideBase: $%7.3f | SavVsDecide: $%+6.3f (%5.1f%%) | Modes: %v | Reasons: %v | Cost: $%.2f Credit: $%.2f",
-				fileName, simNetCost, initialSOC, simSOC, deltaEnergyKWH, batteryAssetValue, simAdjustedNetCost, baseNetCost, decideBaseCost, savingsVsDecide, pctSavingsVsDecide, modeCounts, reasonCounts, simCost, simCredit)
+			t.Logf("%-20s | Cash: $%7.3f | SOC: %5.1f%% -> %5.1f%% (dE: %+6.2f kWh, AssetVal: $%+6.3f) | PlanAdjNetCost: $%7.3f | PlanBase: $%7.3f | Modes: %v | Reasons: %v | Cost: $%.2f Credit: $%.2f",
+				fileName, simNetCost, initialSOC, simSOC, deltaEnergyKWH, batteryAssetValue, simAdjustedNetCost, baseNetCost, modeCounts, reasonCounts, simCost, simCredit)
 
 			mu.Lock()
 			totalSimCost += simAdjustedNetCost

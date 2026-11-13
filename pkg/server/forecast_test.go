@@ -19,12 +19,21 @@ import (
 
 func TestHandleForecast(t *testing.T) {
 	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	defaultFuturePrices := make([]types.Price, 24)
+	for i := 0; i < 24; i++ {
+		pStart := now.Add(time.Duration(i) * time.Hour)
+		defaultFuturePrices[i] = types.Price{
+			DollarsPerKWH: 0.10,
+			TSStart:       pStart,
+			TSEnd:         pStart.Add(time.Hour),
+		}
+	}
 
-	t.Run("Returns 24 SimHours", func(t *testing.T) {
+	t.Run("Returns Plan", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		mockS := &mockStorage{}
@@ -60,11 +69,11 @@ func TestHandleForecast(t *testing.T) {
 			storage:    mockS,
 			controller: controller.NewController(),
 			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
 		}
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -77,7 +86,8 @@ func TestHandleForecast(t *testing.T) {
 		var data ForecastRes
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
-		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
+		require.NotNil(t, data.Plan, "should return plan")
+		assert.NotEmpty(t, data.Plan.Periods, "should return plan periods")
 
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 		mockU.AssertCalled(t, "GetFuturePrices", mock.Anything)
@@ -90,7 +100,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		mockS := &mockStorage{}
@@ -152,6 +162,7 @@ func TestHandleForecast(t *testing.T) {
 			storage:    mockS,
 			controller: controller.NewController(),
 			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
 		}
 
 		// Make request with query param overrideHomeLoadPredictionStrategy=conservative
@@ -169,15 +180,16 @@ func TestHandleForecast(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
-		// Check the predicted load for hour 12.
+		// Check the predicted load for hour 12 in plan periods.
+		require.NotNil(t, data.Plan)
 		var foundHour12 bool
-		for _, hour := range data.Simulation {
-			if hour.Hour == 12 {
+		for _, p := range data.Plan.Periods {
+			if p.TSStart.Hour() == 12 {
 				foundHour12 = true
-				assert.Greater(t, hour.AvgHomeLoadKWH, 4.5, "should override home load prediction strategy to conservative")
+				assert.Greater(t, p.LoadKWH, 4.5*p.DurationHours, "should override home load prediction strategy to conservative")
 			}
 		}
-		assert.True(t, foundHour12, "should find hour 12 in simulation")
+		assert.True(t, foundHour12, "should find hour 12 in plan periods")
 	})
 
 	t.Run("Settings Error Returns 500", func(t *testing.T) {
@@ -284,7 +296,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		mockS := &mockStorage{}
@@ -320,6 +332,7 @@ func TestHandleForecast(t *testing.T) {
 			storage:    mockS,
 			controller: controller.NewController(),
 			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
 		}
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
@@ -408,11 +421,11 @@ func TestHandleForecast(t *testing.T) {
 			storage:    mockS,
 			controller: controller.NewController(),
 			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
 		}
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -425,7 +438,8 @@ func TestHandleForecast(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
-		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
+		require.NotNil(t, data.Plan, "should return plan")
+		assert.NotEmpty(t, data.Plan.Periods, "should return plan periods")
 
 		assert.Len(t, data.EnergyHistory, 2)
 		for _, eh := range data.EnergyHistory {
@@ -458,7 +472,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
@@ -511,7 +525,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -526,21 +539,22 @@ func TestHandleForecast(t *testing.T) {
 
 		mockU.AssertCalled(t, "GetVPPInfo", mock.Anything)
 
+		require.NotNil(t, data.Plan)
 		var vppEventReflected bool
-		for _, simHour := range data.Simulation {
-			if simHour.TS.Equal(now.Add(2*time.Hour)) || simHour.TS.Equal(now.Add(3*time.Hour)) || simHour.TS.Equal(now.Add(4*time.Hour)) {
-				assert.Equal(t, now.Add(5*time.Hour), simHour.VPPEndAt)
+		for _, p := range data.Plan.Periods {
+			if !p.TSStart.Before(now.Add(2*time.Hour)) && p.TSStart.Before(now.Add(5*time.Hour)) &&
+				(p.Reason == types.ActionReasonVPPActive || p.ReserveSOC >= 20.0) {
 				vppEventReflected = true
 			}
 		}
-		assert.True(t, vppEventReflected, "Expected simulation to reflect the VPP event")
+		assert.True(t, vppEventReflected, "Expected plan to reflect the VPP event")
 	})
 
 	t.Run("Uses Status from Recent Action", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		actionTime := now.Add(-30 * time.Minute)
@@ -586,7 +600,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -599,7 +612,8 @@ func TestHandleForecast(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
-		assert.Equal(t, actionTime.Unix(), data.Updated.Unix())
+		require.NotNil(t, data.Plan)
+		assert.Equal(t, now.Unix(), data.Updated.Unix())
 		mockES.AssertNotCalled(t, "GetStatus", mock.Anything)
 	})
 
@@ -607,7 +621,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		actionTime := now.Add(-2 * time.Hour)
@@ -658,7 +672,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -736,7 +749,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -753,111 +765,11 @@ func TestHandleForecast(t *testing.T) {
 		assert.Equal(t, 24, data.Plan.HorizonHours)
 		assert.Len(t, data.Plan.Periods, 1)
 		require.NotNil(t, data.LatestAction)
-		assert.Empty(t, data.Simulation, "fast-path should not return simulation")
 		mockES.AssertNotCalled(t, "GetStatus", mock.Anything)
 		mockU.AssertNotCalled(t, "GetCurrentPrice", mock.Anything)
 	})
 
-	t.Run("Dark-launched plan in latestAction does not trigger fast-path when onlyPlanMode is false", func(t *testing.T) {
-		mockS := &mockStorage{}
-		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			MinBatterySOC:   5.0,
-			UtilityProvider: "test",
-			ESS:             "mock",
-		}, types.CurrentSettingsVersion, time.Time{}, nil)
-
-		plan := &types.Plan{
-			TSCreated:          now.Add(-10 * time.Minute),
-			HorizonHours:       24,
-			TotalProjectedCost: 2.50,
-			Periods: []types.PlanPeriod{
-				{
-					TSStart:       now,
-					TSEnd:         now.Add(time.Hour),
-					DurationHours: 1,
-					BatteryMode:   types.BatteryModeStandby,
-					StartSOC:      50,
-					EndSOC:        50,
-				},
-			},
-		}
-
-		action := &types.Action{
-			Timestamp:    now.Add(-10 * time.Minute),
-			BatteryMode:  types.BatteryModeStandby,
-			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)},
-			Plan:         plan,
-			SystemStatus: types.SystemStatus{
-				BatterySOC:         50,
-				BatteryCapacityKWH: 10.0,
-				Timestamp:          now.Add(-10 * time.Minute),
-			},
-		}
-
-		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(action, nil)
-		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
-
-		mockES := &mockESS{}
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
-
-		futurePrices := make([]types.Price, 24)
-		for i := 0; i < 24; i++ {
-			pStart := now.Add(time.Duration(i) * time.Hour)
-			futurePrices[i] = types.Price{
-				DollarsPerKWH: 0.12,
-				TSStart:       pStart,
-				TSEnd:         pStart.Add(time.Hour),
-			}
-		}
-
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
-			DollarsPerKWH: 0.10,
-			TSStart:       now,
-			TSEnd:         now.Add(time.Hour),
-		}, nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
-		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider(types.SiteIDNone, mockU)
-
-		srv := &Server{
-			utilities:  mockUMap,
-			ess:        mockP,
-			storage:    mockS,
-			controller: controller.NewController(),
-			bypassAuth: true,
-			release:    "production",
-			nowFunc:    func() time.Time { return now },
-		}
-
-		req := httptest.NewRequest("GET", "/api/forecast", nil)
-		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, false)
-		req = req.WithContext(ctx)
-		w := httptest.NewRecorder()
-
-		srv.handleForecast(w, req)
-
-		resp := w.Result()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var data ForecastRes
-		err := json.NewDecoder(resp.Body).Decode(&data)
-		require.NoError(t, err)
-
-		assert.Nil(t, data.Plan, "dark-launched plan must not be returned when onlyPlanMode is false")
-		assert.NotEmpty(t, data.Simulation, "legacy simulation must be returned when onlyPlanMode is false")
-	})
-
-	t.Run("Real-time plan fallback when plan is stale and onlyPlanMode is enabled", func(t *testing.T) {
+	t.Run("Real-time plan fallback when plan is stale", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
@@ -929,7 +841,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -942,14 +853,14 @@ func TestHandleForecast(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
-		require.NotNil(t, data.Plan, "onlyPlanMode fallback should run controller.Plan and return plan")
+		require.NotNil(t, data.Plan, "fallback should run controller.Plan and return plan")
 		assert.Greater(t, data.Plan.HorizonHours, 0)
 		require.NotNil(t, data.LatestAction)
 		mockES.AssertCalled(t, "GetStatus", mock.Anything)
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 	})
 
-	t.Run("Production With OnlyPlanMode Runs Plan", func(t *testing.T) {
+	t.Run("Production Runs Plan", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		now := time.Now().Truncate(time.Hour)
@@ -1030,7 +941,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1043,7 +953,7 @@ func TestHandleForecast(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
-		require.NotNil(t, data.Plan, "onlyPlanMode=true on production should run controller.Plan and return plan")
+		require.NotNil(t, data.Plan, "on production should run controller.Plan and return plan")
 		assert.Greater(t, data.Plan.HorizonHours, 0)
 		require.NotNil(t, data.LatestAction)
 		mockES.AssertCalled(t, "GetStatus", mock.Anything)
@@ -1095,7 +1005,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1109,7 +1018,6 @@ func TestHandleForecast(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Nil(t, data.Plan, "Fault state must not generate a plan")
-		assert.Empty(t, data.Simulation, "Fault state must not run simulation")
 		require.NotNil(t, data.LatestAction)
 		assert.True(t, data.LatestAction.Fault)
 		assert.Equal(t, "Grid is unavailable", data.LatestAction.Description)
@@ -1158,7 +1066,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1172,7 +1079,6 @@ func TestHandleForecast(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Nil(t, data.Plan, "Realtime fault state must not generate a plan")
-		assert.Empty(t, data.Simulation, "Realtime fault state must not run simulation")
 		require.NotNil(t, data.LatestAction)
 		assert.True(t, data.LatestAction.Fault)
 		assert.Equal(t, "Grid is unavailable", data.LatestAction.Description)
@@ -1234,7 +1140,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -1485,7 +1390,6 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
-		ctx = ffOnlyPlanMode.With(ctx, true)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 

@@ -6,11 +6,10 @@ import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue, getActionLoadSu
 interface CurrentStatusProps {
     action: Action;
     currencySymbol?: string;
-    planMode?: boolean;
     timeZone?: string;
 }
 
-const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = '$', planMode = true, timeZone }) => {
+const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = '$', timeZone }) => {
     const hasSOC = action.systemStatus?.batterySOC !== undefined && action.systemStatus?.batterySOC !== null;
     const soc = hasSOC ? action.systemStatus!.batterySOC! : 0;
     const isUninitializedPrice = Boolean(action.currentPrice?.tsStart?.startsWith('0001-01-01') || action.currentPrice?.tsEnd?.startsWith('0001-01-01'));
@@ -115,7 +114,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? action.targetBatteryMode
         : action.batteryMode;
     const mode = effectiveBatteryMode;
-    const loadSubType = getActionLoadSubType(planMode ? action : { ...action, plan: undefined });
+    const loadSubType = getActionLoadSubType(action);
     const isSolarCharging = mode === BatteryMode.Load && loadSubType === 'solarCharge';
     const isSolarFull = mode === BatteryMode.Load && loadSubType === 'solarFull';
 
@@ -164,7 +163,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
     }
 
     const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
-    const planSubvalue = planMode ? getPlanStatusSubvalue(action, refTs, currencySymbol, timeZone) : null;
+    const planSubvalue = getPlanStatusSubvalue(action, refTs, currencySymbol, timeZone);
 
     const isAbnormalUsage = isBatteryAtReserve &&
         Boolean(action.recentHomeUsageAbnormal) &&

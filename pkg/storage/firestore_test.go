@@ -44,9 +44,9 @@ func TestFirestoreProvider(t *testing.T) {
 
 	t.Run("Settings", func(t *testing.T) {
 		settings := types.Settings{
-			DryRun:                         true,
-			AlwaysChargeUnderDollarsPerKWH: 1.2,
-			MinBatterySOC:                  5.5,
+			DryRun:                              true,
+			MinArbitrageDifferenceDollarsPerKWH: 1.2,
+			MinBatterySOC:                       5.5,
 		}
 		// Pass version 1
 		setUpdate1, err := f.SetSettings(ctx, "test-site", settings, 1, time.Time{})
@@ -57,9 +57,8 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, version)
 		assert.False(t, updatedTime.IsZero())
-		assert.Equal(t, settings.AlwaysChargeUnderDollarsPerKWH, gotSettings.AlwaysChargeUnderDollarsPerKWH)
+		assert.Equal(t, settings.MinArbitrageDifferenceDollarsPerKWH, gotSettings.MinArbitrageDifferenceDollarsPerKWH)
 		assert.Equal(t, settings.MinBatterySOC, gotSettings.MinBatterySOC)
-		assert.Equal(t, settings.DryRun, gotSettings.DryRun)
 		assert.Equal(t, settings.DryRun, gotSettings.DryRun)
 	})
 

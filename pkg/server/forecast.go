@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
@@ -47,13 +46,12 @@ type WeatherRes struct {
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
 type ForecastRes struct {
-	Plan          *types.Plan          `json:"plan,omitempty"`
-	LatestAction  *types.Action        `json:"latestAction,omitempty"`
-	Simulation    []controller.SimHour `json:"simulation,omitempty"`
-	EnergyHistory []EnergyHistoryRes   `json:"energyHistory"`
-	PriceHistory  []PriceHistoryRes    `json:"priceHistory"`
-	FuturePrices  []PriceHistoryRes    `json:"futurePrices,omitempty"`
-	Updated       time.Time            `json:"updated"`
+	Plan          *types.Plan        `json:"plan,omitempty"`
+	LatestAction  *types.Action      `json:"latestAction,omitempty"`
+	EnergyHistory []EnergyHistoryRes `json:"energyHistory"`
+	PriceHistory  []PriceHistoryRes  `json:"priceHistory"`
+	FuturePrices  []PriceHistoryRes  `json:"futurePrices,omitempty"`
+	Updated       time.Time          `json:"updated"`
 }
 
 func buildEnergyHistoryRes(stats []types.EnergyStats, start, end time.Time) []EnergyHistoryRes {
@@ -224,12 +222,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	onlyPlanMode := ffOnlyPlanMode.Enabled(ctx)
-
-	// FAST-PATH: If we have a fresh plan generated within the last hour (and onlyPlanMode is active),
+	// FAST-PATH: If we have a fresh plan generated within the last hour,
 	// bypass the 35-day historical query, ESS status fetch, and controller simulation.
-	isFreshPlan := onlyPlanMode &&
-		!regeneratePlan &&
+	isFreshPlan := !regeneratePlan &&
 		latestAction != nil &&
 		latestAction.Plan != nil &&
 		len(latestAction.Plan.Periods) > 0 &&
@@ -440,62 +435,43 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 	priceRes := buildPriceHistoryRes(priceHistory24)
 
-	// Try real-time Plan fallback if onlyPlanMode is enabled or if regeneratePlan is requested
-	// TODO: remove this and just return an error if we have a stale plan
-	if regeneratePlan || onlyPlanMode {
-		planStatus := status
-		planStatus.Timestamp = now
-		planDecision, freshPlan, planErr := s.controller.Plan(
-			ctx, planStatus, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
-		)
-		if planErr == nil {
-			act := planDecision.Action
-			if settings.Pause {
-				act.Paused = true
-				act.Description = "Automation is paused"
-			} else if status.VPPActive {
-				act.Reason = types.ActionReasonVPPActive
-				act.Description = "VPP event active"
-			}
-			res := ForecastRes{
-				Plan:          &freshPlan,
-				LatestAction:  &act,
-				EnergyHistory: energyRes,
-				PriceHistory:  priceRes,
-				FuturePrices:  reconstructFuturePrices(&freshPlan, currentPrice),
-				Updated:       now,
-			}
-			if regeneratePlan {
-				w.Header().Set("Cache-Control", "no-store")
-			} else {
-				w.Header().Set("Cache-Control", "private, max-age=300")
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			if err := json.NewEncoder(w).Encode(res); err != nil {
-				panic(http.ErrAbortHandler)
-			}
-			return
-		}
+	planStatus := status
+	planStatus.Timestamp = now
+	planDecision, freshPlan, planErr := s.controller.Plan(
+		ctx, planStatus, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
+	)
+	if planErr != nil {
 		if regeneratePlan {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to regenerate plan", slog.Any("error", planErr))
 			writeJSONError(w, "failed to regenerate plan", http.StatusInternalServerError)
 			return
 		}
-		log.Ctx(ctx).WarnContext(ctx, "real-time plan fallback failed, falling back to simulation", slog.Any("error", planErr))
+		log.Ctx(ctx).ErrorContext(ctx, "failed to generate plan", slog.Any("error", planErr))
+		writeJSONError(w, "failed to generate plan", http.StatusInternalServerError)
+		return
 	}
 
-	// 7. Run Simulation
-	simHours, _ := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
-
+	act := planDecision.Action
+	if settings.Pause {
+		act.Paused = true
+		act.Description = "Automation is paused"
+	} else if status.VPPActive {
+		act.Reason = types.ActionReasonVPPActive
+		act.Description = "VPP event active"
+	}
 	res := ForecastRes{
-		Simulation:    simHours,
+		Plan:          &freshPlan,
+		LatestAction:  &act,
 		EnergyHistory: energyRes,
 		PriceHistory:  priceRes,
-		Updated:       updatedTime,
+		FuturePrices:  reconstructFuturePrices(&freshPlan, currentPrice),
+		Updated:       now,
 	}
-
-	w.Header().Set("Cache-Control", "private, max-age=300")
+	if regeneratePlan {
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=300")
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(res); err != nil {
