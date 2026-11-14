@@ -41,6 +41,7 @@ type UtilityRateOption struct {
 	Choices     []UtilityOptionChoice `json:"choices,omitempty"` // Populated if Type is UtilityOptionTypeSelect
 	Default     any                   `json:"default,omitempty"`
 	Hidden      bool                  `json:"hidden,omitempty"`
+	DependsOn   map[string][]any      `json:"dependsOn,omitempty"`
 }
 
 // UtilityOptionChoice represents a single choice in a select-type utility option.

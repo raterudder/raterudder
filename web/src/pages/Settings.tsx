@@ -109,6 +109,38 @@ interface UtilityFormProps {
     onUtilityChange?: (provider: string, rate: string, options: Record<string, any>) => void;
 }
 
+const getEffectiveOptionValue = (
+    opt: UtilityRateOption,
+    rateOptions: Record<string, any> | undefined
+) => {
+    const val = rateOptions?.[opt.field];
+    if (val !== undefined && val !== null && val !== '') {
+        return val;
+    }
+    if (opt.type === 'switch') {
+        return !!opt.default;
+    }
+    return opt.default;
+};
+
+const isUtilityOptionVisible = (
+    opt: UtilityRateOption,
+    allOptions: UtilityRateOption[],
+    rateOptions: Record<string, any> | undefined
+): boolean => {
+    if (opt.hidden) {
+        return false;
+    }
+    if (!opt.dependsOn) {
+        return true;
+    }
+    return Object.entries(opt.dependsOn).every(([depField, allowedValues]) => {
+        const depOpt = allOptions.find(o => o.field === depField);
+        const val = depOpt ? getEffectiveOptionValue(depOpt, rateOptions) : rateOptions?.[depField];
+        return allowedValues.includes(val);
+    });
+};
+
 const UtilityForm = ({
     settings,
     onChange,
@@ -262,7 +294,10 @@ const UtilityForm = ({
                 const provider = utilities.find(u => u.id === settings.utilityProvider);
                 const rate = (provider?.rates || []).find(r => r.id === settings.utilityRate);
                 if (!rate || !rate.options) return null;
-                const visibleOptions = rate.options.filter((opt: UtilityRateOption) => !opt.hidden);
+                const rateOptions = rate.options;
+                const visibleOptions = rateOptions.filter((opt: UtilityRateOption) =>
+                    isUtilityOptionVisible(opt, rateOptions, settings.utilityRateOptions)
+                );
                 if (visibleOptions.length === 0) return null;
 
                 return (

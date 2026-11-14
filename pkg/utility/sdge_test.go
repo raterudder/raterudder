@@ -260,3 +260,24 @@ func TestSDGENBTPeriods(t *testing.T) {
 		assert.True(t, foundNBT, "expected to find SDG&E NBT Weekday Export Credit period")
 	})
 }
+
+func TestSdgeUtilityInfo(t *testing.T) {
+	t.Run("Location option only visible for SDCP generation rates", func(t *testing.T) {
+		info := sdgeUtilityInfo()
+		require.NotEmpty(t, info.Rates)
+
+		for _, rate := range info.Rates {
+			var locationOpt *types.UtilityRateOption
+			for i := range rate.Options {
+				if rate.Options[i].Field == "location" {
+					locationOpt = &rate.Options[i]
+					break
+				}
+			}
+			require.NotNil(t, locationOpt, "rate %q should include location option", rate.ID)
+			assert.Equal(t, map[string][]any{
+				"generationRate": {"sdcp_power_base", "sdcp_power_on", "sdcp_power_100"},
+			}, locationOpt.DependsOn)
+		}
+	})
+}

@@ -129,6 +129,18 @@ func TestHandleListUtilities(t *testing.T) {
 							assert.NotEmpty(t, c.Name)
 						}
 					}
+
+					for depField, allowedVals := range opt.DependsOn {
+						assert.NotEmpty(t, allowedVals, "dependsOn %q for option %q in rate %q must have allowed values", depField, opt.Field, rate.ID)
+						foundDep := false
+						for _, other := range rate.Options {
+							if other.Field == depField {
+								foundDep = true
+								break
+							}
+						}
+						assert.True(t, foundDep, "dependsOn %q for option %q in rate %q must reference an option on the same rate", depField, opt.Field, rate.ID)
+					}
 				}
 			}
 		}

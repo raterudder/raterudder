@@ -224,6 +224,7 @@ export interface UtilityRateOption {
     choices?: UtilityOptionChoice[];
     default?: any;
     hidden?: boolean;
+    dependsOn?: Record<string, any[]>;
 }
 
 export interface UtilityProviderInfo {

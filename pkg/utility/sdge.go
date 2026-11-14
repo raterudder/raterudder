@@ -2022,6 +2022,9 @@ func sdgeUtilityInfo() types.UtilityProviderInfo {
 				{Value: "unincorporated", Name: "National City and Unincorporated County of San Diego"},
 			},
 			Default: "san_diego",
+			DependsOn: map[string][]any{
+				"generationRate": {"sdcp_power_base", "sdcp_power_on", "sdcp_power_100"},
+			},
 		},
 		{
 			Field:       "netMeteringScheme",

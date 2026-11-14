@@ -770,6 +770,100 @@ describe('App & Settings', () => {
         expect(screen.queryByRole('switch', { name: /Hidden Option/i })).not.toBeInTheDocument();
     });
 
+    it('shows and hides options based on dependsOn conditions', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'sdge',
+            utilityRate: 'sdge_tou_dr1',
+            utilityRateOptions: {}
+        });
+        (api.fetchUtilities as any).mockResolvedValue([
+            {
+                id: 'sdge',
+                name: 'San Diego Gas & Electric (SDG&E)',
+                rates: [
+                    {
+                        id: 'sdge_tou_dr1',
+                        name: 'Schedule TOU-DR1 (Standard Residential TOU)',
+                        options: [
+                            {
+                                field: 'generationRate',
+                                name: 'Generation Rate',
+                                type: 'select',
+                                choices: [
+                                    { value: 'sdge', name: 'SDG&E Bundled' },
+                                    { value: 'sdcp_power_on', name: 'SDCP PowerOn' },
+                                    { value: 'sdcp_power_100', name: 'SDCP Power100' },
+                                ],
+                                default: 'sdcp_power_on',
+                            },
+                            {
+                                field: 'location',
+                                name: 'Location / Community',
+                                type: 'select',
+                                choices: [
+                                    { value: 'san_diego', name: 'Chula Vista, Encinitas, Imperial Beach, La Mesa and San Diego' },
+                                    { value: 'unincorporated', name: 'National City and Unincorporated County of San Diego' },
+                                ],
+                                default: 'san_diego',
+                                dependsOn: {
+                                    generationRate: ['sdcp_power_on', 'sdcp_power_100'],
+                                },
+                            },
+                            {
+                                field: 'sdcpUnincorporatedNote',
+                                name: 'Unincorporated Note',
+                                type: 'switch',
+                                default: false,
+                                dependsOn: {
+                                    generationRate: ['sdcp_power_on', 'sdcp_power_100'],
+                                    location: ['unincorporated'],
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+        ] as any);
+
+        await navigateToSettings();
+
+        await screen.findByText('Configured');
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Utility Service' }));
+
+        // Default generationRate is sdcp_power_on, so Location / Community should be visible
+        // Multi-key dependsOn should remain hidden until location is also 'unincorporated'
+        const genSelect = await screen.findByLabelText('Generation Rate');
+        expect(screen.getByLabelText('Location / Community')).toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: 'Unincorporated Note' })).not.toBeInTheDocument();
+
+        // Select 'unincorporated' -> both keys in dependsOn match, so Unincorporated Note appears
+        await user.click(screen.getByLabelText('Location / Community'));
+        await user.click(await screen.findByRole('option', { name: 'National City and Unincorporated County of San Diego' }));
+        await waitFor(() => {
+            expect(screen.getByRole('switch', { name: 'Unincorporated Note' })).toBeInTheDocument();
+        });
+
+        // Switch to SDG&E Bundled -> Location / Community and Unincorporated Note should both be hidden
+        await user.click(genSelect);
+        await user.click(await screen.findByRole('option', { name: 'SDG&E Bundled' }));
+
+        await waitFor(() => {
+            expect(screen.queryByLabelText('Location / Community')).not.toBeInTheDocument();
+            expect(screen.queryByRole('switch', { name: 'Unincorporated Note' })).not.toBeInTheDocument();
+        });
+
+        // Switch back to SDCP Power100 -> both Location / Community and Unincorporated Note should reappear
+        await user.click(genSelect);
+        await user.click(await screen.findByRole('option', { name: 'SDCP Power100' }));
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Location / Community')).toBeInTheDocument();
+            expect(screen.getByRole('switch', { name: 'Unincorporated Note' })).toBeInTheDocument();
+        });
+    });
+
     it('can select SCE utility and net metering options', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({
