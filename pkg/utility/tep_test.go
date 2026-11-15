@@ -195,6 +195,87 @@ func TestTEPPeriods(t *testing.T) {
 		assert.InDelta(t, 0.126352, p.DollarsPerKWH, 1e-6)
 	})
 
+	t.Run("Demand Super Off-Peak EV (TRDSOTE) rates and Map.Site integration", func(t *testing.T) {
+		m := NewMap(nil)
+		siteUtil, err := m.Site(context.Background(), "site-tep", types.Settings{
+			UtilityProvider: "tep",
+			UtilityRate:     "tep_trdsote",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, siteUtil)
+
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "tep",
+			UtilityRate:     "tep_trdsote",
+		})
+		require.NoError(t, err)
+
+		// Summer On-Peak: Wed, July 15, 2026 at 4:00 PM -> $0.044556 + $0.099166 = $0.143722
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 16, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.143722, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "On-Peak", p.PeriodName)
+
+		// Summer Off-Peak: Wed, July 15, 2026 at 12:00 PM -> $0.044556 + $0.028296 = $0.072852
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.072852, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Off-Peak", p.PeriodName)
+
+		// Summer Super Off-Peak (10 PM - 5 AM daily):
+		// Wed, July 15, 2026 at 10:00 PM -> $0.044556 + $0.019908 = $0.064464
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 22, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.064464, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Super Off-Peak", p.PeriodName)
+
+		// Sat, July 18, 2026 at 2:00 AM -> Super Off-Peak $0.064464
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 2, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.064464, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Super Off-Peak", p.PeriodName)
+
+		// Summer holiday (Fri, July 3, 2026): daytime 4:00 PM is Off-Peak, night 11:00 PM is Super Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.July, 3, 16, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.072852, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Off-Peak", p.PeriodName)
+
+		p, err = u.priceForTime(time.Date(2026, time.July, 3, 23, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.064464, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Super Off-Peak", p.PeriodName)
+
+		// Winter On-Peak: Wed, Dec 16, 2026 at 7:00 AM -> $0.044556 + $0.039694 = $0.084250
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 7, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.084250, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "On-Peak", p.PeriodName)
+
+		// Winter Off-Peak: Wed, Dec 16, 2026 at 12:00 PM -> $0.044556 + $0.031266 = $0.075822
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 12, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.075822, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Off-Peak", p.PeriodName)
+
+		// Winter Super Off-Peak: Wed, Dec 16, 2026 at 11:00 PM and 4:00 AM -> $0.044556 + $0.019076 = $0.063632
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 23, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.063632, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Super Off-Peak", p.PeriodName)
+
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 4, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.063632, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Super Off-Peak", p.PeriodName)
+
+		// Winter boundary: 5:00 AM is Off-Peak (Super Off-Peak ends at 5:00 AM)
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 5, 0, 0, 0, mstLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.075822, p.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Off-Peak", p.PeriodName)
+	})
+
 	t.Run("Rider-14 RCP Export Cohorts vs Rider-4 Net Metering", func(t *testing.T) {
 		// Default RCP ($0.0462/kWh)
 		err := u.ApplySettings(context.Background(), types.Settings{

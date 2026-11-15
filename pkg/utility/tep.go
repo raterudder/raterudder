@@ -8,7 +8,7 @@ import (
 )
 
 // TEP residential tariff rates from Tucson Electric Power tariff sheets
-// (TRRES, TRREST, TRRESD, TRRESDT) approved under ACC Decision No. 79065
+// (TRRES, TRREST, TRRESD, TRRESDT, TRDSOTE) approved under ACC Decision No. 79065
 // (effective September 1, 2023) and Rider-14 Resource Comparison Proxy (RCP)
 // export rates from TEP's Statement of Charges on tep.com.
 const (
@@ -17,17 +17,21 @@ const (
 	// (<= 500, 501-1,000, > 1,000 kWh); we assume Tier 1 usage.
 	tepBasicDeliveryDollarsPerKWH  = 0.086720 // Tier 1 (0 - 500 kWh)
 	tepTOUDeliveryDollarsPerKWH    = 0.093556 // Tier 1 (0 - 500 kWh)
-	tepDemandDeliveryDollarsPerKWH = 0.044556 // Flat across all kWh for TRRESD and TRRESDT
+	tepDemandDeliveryDollarsPerKWH = 0.044556 // Flat across all kWh for TRRESD, TRRESDT, and TRDSOTE
 
 	// Base Power Supply Charges ($/kWh) - Non-TOU (TRRES and TRRESD)
 	tepSummerBaseSupplyDollarsPerKWH = 0.043711 // May - September
 	tepWinterBaseSupplyDollarsPerKWH = 0.039632 // October - April
 
-	// Base Power Supply Charges ($/kWh) - TOU (TRREST and TRRESDT)
+	// Base Power Supply Charges ($/kWh) - TOU (TRREST, TRRESDT, and TRDSOTE)
 	tepSummerOnPeakSupplyDollarsPerKWH  = 0.099166 // May - September On-Peak
 	tepSummerOffPeakSupplyDollarsPerKWH = 0.028296 // May - September Off-Peak
 	tepWinterOnPeakSupplyDollarsPerKWH  = 0.039694 // October - April On-Peak
 	tepWinterOffPeakSupplyDollarsPerKWH = 0.031266 // October - April Off-Peak
+
+	// Base Power Supply Charges ($/kWh) - Super Off-Peak EV (TRDSOTE)
+	tepSummerSuperOffPeakSupplyDollarsPerKWH = 0.019908 // May - September Super Off-Peak (10 PM - 5 AM daily)
+	tepWinterSuperOffPeakSupplyDollarsPerKWH = 0.019076 // October - April Super Off-Peak (10 PM - 5 AM daily)
 )
 
 func shiftTEPWeekendHoliday(t time.Time) time.Time {
@@ -87,77 +91,116 @@ func tepRCPExportDollarsPerKWH(options types.UtilityRateOptions) (float64, bool)
 	}
 }
 
+type tepTOUPeriodRates struct {
+	summerOnPeakDollarsPerKWH       float64
+	summerOffPeakDollarsPerKWH      float64
+	summerSuperOffPeakDollarsPerKWH float64
+	winterOnPeakDollarsPerKWH       float64
+	winterOffPeakDollarsPerKWH      float64
+	winterSuperOffPeakDollarsPerKWH float64
+}
+
 func buildTEPTOUPeriods(
 	year int,
 	holidays []string,
-	summerOnPeakDollarsPerKWH float64,
-	summerOffPeakDollarsPerKWH float64,
-	winterOnPeakDollarsPerKWH float64,
-	winterOffPeakDollarsPerKWH float64,
+	rates tepTOUPeriodRates,
 	planLabel string,
 ) []touSimplifiedPeriod {
+	superOffPeakHours := []types.UtilityHourPeriod{
+		{HourStart: 22, HourEnd: 24},
+		{HourStart: 0, HourEnd: 5},
+	}
+
+	var summerHolidayHoursAndDays []touSimplifiedHoursAndDays
+	summerRegularHoursAndDays := []touSimplifiedHoursAndDays{
+		{
+			Name:          "On-Peak",
+			Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
+			Weekday:       true,
+			DollarsPerKWH: rates.summerOnPeakDollarsPerKWH,
+			Description:   planLabel + " Summer On-Peak",
+		},
+	}
+	if rates.summerSuperOffPeakDollarsPerKWH > 0 {
+		summerSuperOffPeak := touSimplifiedHoursAndDays{
+			Name:          "Super Off-Peak",
+			Hours:         superOffPeakHours,
+			DollarsPerKWH: rates.summerSuperOffPeakDollarsPerKWH,
+			Description:   planLabel + " Summer Super Off-Peak",
+		}
+		summerHolidayHoursAndDays = append(summerHolidayHoursAndDays, summerSuperOffPeak)
+		summerRegularHoursAndDays = append(summerRegularHoursAndDays, summerSuperOffPeak)
+	}
+
+	var winterHolidayHoursAndDays []touSimplifiedHoursAndDays
+	winterRegularHoursAndDays := []touSimplifiedHoursAndDays{
+		{
+			Name: "On-Peak",
+			Hours: []types.UtilityHourPeriod{
+				{HourStart: 6, HourEnd: 9},
+				{HourStart: 18, HourEnd: 21},
+			},
+			Weekday:       true,
+			DollarsPerKWH: rates.winterOnPeakDollarsPerKWH,
+			Description:   planLabel + " Winter On-Peak",
+		},
+	}
+	if rates.winterSuperOffPeakDollarsPerKWH > 0 {
+		winterSuperOffPeak := touSimplifiedHoursAndDays{
+			Name:          "Super Off-Peak",
+			Hours:         superOffPeakHours,
+			DollarsPerKWH: rates.winterSuperOffPeakDollarsPerKWH,
+			Description:   planLabel + " Winter Super Off-Peak",
+		}
+		winterHolidayHoursAndDays = append(winterHolidayHoursAndDays, winterSuperOffPeak)
+		winterRegularHoursAndDays = append(winterRegularHoursAndDays, winterSuperOffPeak)
+	}
+
 	return []touSimplifiedPeriod{
-		// Summer Holidays (May - September): Off-Peak all day
+		// Summer Holidays (May - September): Off-Peak (and Super Off-Peak if applicable)
 		{
 			Year:               year,
 			MonthStart:         time.May,
 			MonthEnd:           time.September,
 			SpecificDates:      holidays,
+			HoursAndDays:       summerHolidayHoursAndDays,
 			OtherName:          "Off-Peak",
-			OtherDollarsPerKWH: summerOffPeakDollarsPerKWH,
+			OtherDollarsPerKWH: rates.summerOffPeakDollarsPerKWH,
 			OtherDescription:   planLabel + " Summer Holiday Off-Peak",
 		},
 		// Summer Regular (May - September): On-Peak 3:00 PM - 7:00 PM Mon-Fri
 		{
-			Year:             year,
-			MonthStart:       time.May,
-			MonthEnd:         time.September,
-			SpecificDates:    holidays,
-			SpecificDatesNot: true,
-			HoursAndDays: []touSimplifiedHoursAndDays{
-				{
-					Name:          "On-Peak",
-					Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
-					Weekday:       true,
-					DollarsPerKWH: summerOnPeakDollarsPerKWH,
-					Description:   planLabel + " Summer On-Peak",
-				},
-			},
+			Year:               year,
+			MonthStart:         time.May,
+			MonthEnd:           time.September,
+			SpecificDates:      holidays,
+			SpecificDatesNot:   true,
+			HoursAndDays:       summerRegularHoursAndDays,
 			OtherName:          "Off-Peak",
-			OtherDollarsPerKWH: summerOffPeakDollarsPerKWH,
+			OtherDollarsPerKWH: rates.summerOffPeakDollarsPerKWH,
 			OtherDescription:   planLabel + " Summer Off-Peak",
 		},
-		// Winter Holidays (October - April): Off-Peak all day
+		// Winter Holidays (October - April): Off-Peak (and Super Off-Peak if applicable)
 		{
 			Year:               year,
 			MonthStart:         time.October,
 			MonthEnd:           time.April,
 			SpecificDates:      holidays,
+			HoursAndDays:       winterHolidayHoursAndDays,
 			OtherName:          "Off-Peak",
-			OtherDollarsPerKWH: winterOffPeakDollarsPerKWH,
+			OtherDollarsPerKWH: rates.winterOffPeakDollarsPerKWH,
 			OtherDescription:   planLabel + " Winter Holiday Off-Peak",
 		},
 		// Winter Regular (October - April): On-Peak 6:00 AM - 9:00 AM and 6:00 PM - 9:00 PM Mon-Fri
 		{
-			Year:             year,
-			MonthStart:       time.October,
-			MonthEnd:         time.April,
-			SpecificDates:    holidays,
-			SpecificDatesNot: true,
-			HoursAndDays: []touSimplifiedHoursAndDays{
-				{
-					Name: "On-Peak",
-					Hours: []types.UtilityHourPeriod{
-						{HourStart: 6, HourEnd: 9},
-						{HourStart: 18, HourEnd: 21},
-					},
-					Weekday:       true,
-					DollarsPerKWH: winterOnPeakDollarsPerKWH,
-					Description:   planLabel + " Winter On-Peak",
-				},
-			},
+			Year:               year,
+			MonthStart:         time.October,
+			MonthEnd:           time.April,
+			SpecificDates:      holidays,
+			SpecificDatesNot:   true,
+			HoursAndDays:       winterRegularHoursAndDays,
 			OtherName:          "Off-Peak",
-			OtherDollarsPerKWH: winterOffPeakDollarsPerKWH,
+			OtherDollarsPerKWH: rates.winterOffPeakDollarsPerKWH,
 			OtherDescription:   planLabel + " Winter Off-Peak",
 		},
 	}
@@ -195,10 +238,12 @@ func tepPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			periods = append(periods, buildPeriods(mstLocation, buildTEPTOUPeriods(
 				year,
 				holidays,
-				tepTOUDeliveryDollarsPerKWH+tepSummerOnPeakSupplyDollarsPerKWH,
-				tepTOUDeliveryDollarsPerKWH+tepSummerOffPeakSupplyDollarsPerKWH,
-				tepTOUDeliveryDollarsPerKWH+tepWinterOnPeakSupplyDollarsPerKWH,
-				tepTOUDeliveryDollarsPerKWH+tepWinterOffPeakSupplyDollarsPerKWH,
+				tepTOUPeriodRates{
+					summerOnPeakDollarsPerKWH:  tepTOUDeliveryDollarsPerKWH + tepSummerOnPeakSupplyDollarsPerKWH,
+					summerOffPeakDollarsPerKWH: tepTOUDeliveryDollarsPerKWH + tepSummerOffPeakSupplyDollarsPerKWH,
+					winterOnPeakDollarsPerKWH:  tepTOUDeliveryDollarsPerKWH + tepWinterOnPeakSupplyDollarsPerKWH,
+					winterOffPeakDollarsPerKWH: tepTOUDeliveryDollarsPerKWH + tepWinterOffPeakSupplyDollarsPerKWH,
+				},
 				"TEP TOU (TRREST)",
 			))...)
 
@@ -211,10 +256,12 @@ func tepPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			periods = append(periods, buildPeriods(mstLocation, buildTEPTOUPeriods(
 				year,
 				holidays,
-				summerDollarsPerKWH,
-				summerDollarsPerKWH,
-				winterDollarsPerKWH,
-				winterDollarsPerKWH,
+				tepTOUPeriodRates{
+					summerOnPeakDollarsPerKWH:  summerDollarsPerKWH,
+					summerOffPeakDollarsPerKWH: summerDollarsPerKWH,
+					winterOnPeakDollarsPerKWH:  winterDollarsPerKWH,
+					winterOffPeakDollarsPerKWH: winterDollarsPerKWH,
+				},
 				"TEP Peak Demand (TRRESD)",
 			))...)
 
@@ -223,11 +270,29 @@ func tepPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			periods = append(periods, buildPeriods(mstLocation, buildTEPTOUPeriods(
 				year,
 				holidays,
-				tepDemandDeliveryDollarsPerKWH+tepSummerOnPeakSupplyDollarsPerKWH,
-				tepDemandDeliveryDollarsPerKWH+tepSummerOffPeakSupplyDollarsPerKWH,
-				tepDemandDeliveryDollarsPerKWH+tepWinterOnPeakSupplyDollarsPerKWH,
-				tepDemandDeliveryDollarsPerKWH+tepWinterOffPeakSupplyDollarsPerKWH,
+				tepTOUPeriodRates{
+					summerOnPeakDollarsPerKWH:  tepDemandDeliveryDollarsPerKWH + tepSummerOnPeakSupplyDollarsPerKWH,
+					summerOffPeakDollarsPerKWH: tepDemandDeliveryDollarsPerKWH + tepSummerOffPeakSupplyDollarsPerKWH,
+					winterOnPeakDollarsPerKWH:  tepDemandDeliveryDollarsPerKWH + tepWinterOnPeakSupplyDollarsPerKWH,
+					winterOffPeakDollarsPerKWH: tepDemandDeliveryDollarsPerKWH + tepWinterOffPeakSupplyDollarsPerKWH,
+				},
 				"TEP Demand TOU (TRRESDT)",
+			))...)
+
+		case "tep_trdsote":
+			// Residential Demand Super Off-Peak Time-of-Use Electric Vehicle (Rate TRDSOTE)
+			periods = append(periods, buildPeriods(mstLocation, buildTEPTOUPeriods(
+				year,
+				holidays,
+				tepTOUPeriodRates{
+					summerOnPeakDollarsPerKWH:       tepDemandDeliveryDollarsPerKWH + tepSummerOnPeakSupplyDollarsPerKWH,
+					summerOffPeakDollarsPerKWH:      tepDemandDeliveryDollarsPerKWH + tepSummerOffPeakSupplyDollarsPerKWH,
+					summerSuperOffPeakDollarsPerKWH: tepDemandDeliveryDollarsPerKWH + tepSummerSuperOffPeakSupplyDollarsPerKWH,
+					winterOnPeakDollarsPerKWH:       tepDemandDeliveryDollarsPerKWH + tepWinterOnPeakSupplyDollarsPerKWH,
+					winterOffPeakDollarsPerKWH:      tepDemandDeliveryDollarsPerKWH + tepWinterOffPeakSupplyDollarsPerKWH,
+					winterSuperOffPeakDollarsPerKWH: tepDemandDeliveryDollarsPerKWH + tepWinterSuperOffPeakSupplyDollarsPerKWH,
+				},
+				"TEP Demand Super Off-Peak EV (TRDSOTE)",
 			))...)
 		}
 
@@ -278,6 +343,14 @@ func tepUtilityInfo() types.UtilityProviderInfo {
 				Options: []types.UtilityRateOption{exportOption},
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return tepPeriods("tep_trresdt", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:      "tep_trdsote",
+				Name:    "Demand Super Off-Peak EV (TRDSOTE)",
+				Options: []types.UtilityRateOption{exportOption},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return tepPeriods("tep_trdsote", opts, []int{2026, 2027}), nil
 				},
 			},
 			{

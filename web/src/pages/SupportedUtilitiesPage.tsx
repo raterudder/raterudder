@@ -109,7 +109,7 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
     tep: {
         region: 'Arizona',
         category: 'tou',
-        blurb: 'Models Tucson Electric Power Demand TOU (TRRESDT), Time-of-Use (TRREST), Peak Demand (TRRESD), and Basic (TRRES) schedules paired with Rider-14 Resource Comparison Proxy (RCP) 10-year solar export cohorts.'
+        blurb: 'Models Tucson Electric Power Demand TOU (TRRESDT), Demand Super Off-Peak EV (TRDSOTE), Time-of-Use (TRREST), Peak Demand (TRRESD), and Basic (TRRES) schedules paired with Rider-14 Resource Comparison Proxy (RCP) 10-year solar export cohorts.'
     },
     heco: {
         region: 'Hawai‘i (O‘ahu)',
@@ -160,6 +160,11 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
         region: 'Pennsylvania',
         category: 'tou',
         blurb: 'Supports Duquesne Light Co. Residential Service (RS) and Time-of-Use Supply Rate Pilot schedules.'
+    },
+    meted: {
+        region: 'Pennsylvania',
+        category: 'tou',
+        blurb: 'Models Metropolitan Edison (Met-Ed) Residential Service (RS) and Time-of-Use (TOU) Default Service schedules.'
     },
     gp: {
         region: 'Georgia',
