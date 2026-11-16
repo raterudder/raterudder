@@ -241,6 +241,11 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
         category: 'tou',
         blurb: 'Models Rutherford Electric Time of Day Service with Super Off-Peak overnight charging and separate generation export credits.'
     },
+    carteret_craven: {
+        region: 'North Carolina',
+        category: 'tou',
+        blurb: 'Models Carteret-Craven Electric Cooperative (CCEC) Schedule R, All-Energy Time-of-Use (Schedule R-TU-E), and Rider RQF Buy-All / Sell-All solar credits.'
+    },
     centerpoint_indiana: {
         region: 'Indiana',
         category: 'tou',

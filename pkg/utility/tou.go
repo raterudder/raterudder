@@ -1156,6 +1156,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		metedUtilityInfo(),
 		sawneeUtilityInfo(),
 		waltonUtilityInfo(),
+		carteretCravenUtilityInfo(),
 		idahoUtilityInfo(),
 		psegliUtilityInfo(),
 		pseUtilityInfo(),
