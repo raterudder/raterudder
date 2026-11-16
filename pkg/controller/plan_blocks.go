@@ -79,18 +79,21 @@ const (
 // timelineBlock represents a contiguous segment of timeline periods that share
 // compatible tariff rates and operational constraints (same reserve floor, VPP state, and solar window).
 type timelineBlock struct {
-	startIdx       int     // Inclusive start interval index in timeline
-	endIdx         int     // Inclusive end interval index in timeline
-	durationHours  float64 // Total duration across [startIdx..endIdx] in hours
-	minSOC         float64 // Active reserve floor (%) across this block
-	avgImportRate  float64 // Duration-weighted average import rate ($/kWh)
-	minImportRate  float64 // Lowest period import rate ($/kWh) inside the block
-	maxImportRate  float64 // Highest period import rate ($/kWh) inside the block
-	maxExportRate  float64 // Highest period export rate ($/kWh) inside the block
-	minExportRate  float64 // Lowest period export rate ($/kWh) inside the block
-	netSolarKWH    float64 // Total (solarKWH - loadKWH) across the block
-	isLowestPrice  bool    // True if this block contains the horizon-wide minimum import rate
-	isHighestPrice bool    // True if this block contains the horizon-wide maximum import rate (when spread is material)
+	startIdx             int     // Inclusive start interval index in timeline
+	endIdx               int     // Inclusive end interval index in timeline
+	durationHours        float64 // Total duration across [startIdx..endIdx] in hours
+	minSOC               float64 // Active reserve floor (%) across this block
+	avgImportRate        float64 // Duration-weighted average import rate ($/kWh)
+	minImportRate        float64 // Lowest period import rate ($/kWh) inside the block
+	maxImportRate        float64 // Highest period import rate ($/kWh) inside the block
+	maxExportRate        float64 // Highest period solar export / generation credit rate ($/kWh) inside the block
+	minExportRate        float64 // Lowest period solar export / generation credit rate ($/kWh) inside the block
+	maxBatteryExportRate float64 // Highest period battery export rate ($/kWh) inside the block
+	minBatteryExportRate float64 // Lowest period battery export rate ($/kWh) inside the block
+	netSolarKWH          float64 // Total (solarKWH - loadKWH) across the block
+	buyAllSellAll        bool    // True if prices in this block use Buy-All / Sell-All dual metering
+	isLowestPrice        bool    // True if this block contains the horizon-wide minimum import rate
+	isHighestPrice       bool    // True if this block contains the horizon-wide maximum import rate (when spread is material)
 }
 
 type blockActionType int
@@ -328,7 +331,9 @@ func buildTimelineBlocks(
 	for i := 0; i < len(timeline); i++ {
 		split := hasHardSplit(i)
 		if !split && i+1 < len(timeline) {
-			samePrice := isSamePrice(timeline[i].importRate, timeline[i].exportRate, timeline[i+1].importRate, timeline[i+1].exportRate)
+			samePrice := isSamePrice(timeline[i].importRate, timeline[i].exportRate, timeline[i+1].importRate, timeline[i+1].exportRate) &&
+				math.Abs(timeline[i].batteryExportRate-timeline[i+1].batteryExportRate) <= priceEpsilonForEquality &&
+				timeline[i].price.BuyAllSellAll == timeline[i+1].price.BuyAllSellAll
 			if !samePrice {
 				split = true
 			}
@@ -346,6 +351,8 @@ func buildTimelineBlocks(
 		maxImp := -math.MaxFloat64
 		minExp := math.MaxFloat64
 		maxExp := -math.MaxFloat64
+		minBatExp := math.MaxFloat64
+		maxBatExp := -math.MaxFloat64
 		for k := ib.startIdx; k <= ib.endIdx; k++ {
 			d := timeline[k].durationHours
 			durHrs += d
@@ -363,22 +370,32 @@ func buildTimelineBlocks(
 			if timeline[k].exportRate > maxExp {
 				maxExp = timeline[k].exportRate
 			}
+			batExp := timeline[k].batteryExportRate
+			if batExp < minBatExp {
+				minBatExp = batExp
+			}
+			if batExp > maxBatExp {
+				maxBatExp = batExp
+			}
 		}
 		avgImp := minImp
 		if durHrs > 0 {
 			avgImp = impWeighted / durHrs
 		}
 		return timelineBlock{
-			startIdx:      ib.startIdx,
-			endIdx:        ib.endIdx,
-			durationHours: durHrs,
-			minSOC:        timeline[ib.startIdx].minSOC,
-			avgImportRate: avgImp,
-			minImportRate: minImp,
-			maxImportRate: maxImp,
-			minExportRate: minExp,
-			maxExportRate: maxExp,
-			netSolarKWH:   netSolar,
+			startIdx:             ib.startIdx,
+			endIdx:               ib.endIdx,
+			durationHours:        durHrs,
+			minSOC:               timeline[ib.startIdx].minSOC,
+			avgImportRate:        avgImp,
+			minImportRate:        minImp,
+			maxImportRate:        maxImp,
+			minExportRate:        minExp,
+			maxExportRate:        maxExp,
+			minBatteryExportRate: minBatExp,
+			maxBatteryExportRate: maxBatExp,
+			netSolarKWH:          netSolar,
+			buyAllSellAll:        timeline[ib.startIdx].price.BuyAllSellAll,
 		}
 	}
 
@@ -405,10 +422,16 @@ func buildTimelineBlocks(
 		bestPair := -1
 		minDiff := math.MaxFloat64
 		for k := 0; k < len(blocks)-1; k++ {
-			if hasHardSplit(blocks[k].endIdx) {
+			if hasHardSplit(blocks[k].endIdx) || blocks[k].buyAllSellAll != blocks[k+1].buyAllSellAll {
 				continue
 			}
-			diff := max(math.Abs(blocks[k].avgImportRate-blocks[k+1].avgImportRate), math.Abs(blocks[k].maxExportRate-blocks[k+1].maxExportRate))
+			diff := max(
+				math.Abs(blocks[k].avgImportRate-blocks[k+1].avgImportRate),
+				max(
+					math.Abs(blocks[k].maxExportRate-blocks[k+1].maxExportRate),
+					math.Abs(blocks[k].maxBatteryExportRate-blocks[k+1].maxBatteryExportRate),
+				),
+			)
 			if diff < minDiff {
 				minDiff = diff
 				bestPair = k
@@ -574,7 +597,13 @@ func buildTimelineBlocks(
 			endIdx := blocks[k].endIdx
 			cause := hardSplitReason(endIdx)
 			if cause == "" {
-				diff := max(math.Abs(blocks[k].avgImportRate-blocks[k+1].avgImportRate), math.Abs(blocks[k].maxExportRate-blocks[k+1].maxExportRate))
+				diff := max(
+					math.Abs(blocks[k].avgImportRate-blocks[k+1].avgImportRate),
+					max(
+						math.Abs(blocks[k].maxExportRate-blocks[k+1].maxExportRate),
+						math.Abs(blocks[k].maxBatteryExportRate-blocks[k+1].maxBatteryExportRate),
+					),
+				)
 				cause = fmt.Sprintf("priceGap($%.3f)", diff)
 			}
 			splitCauses = append(splitCauses, fmt.Sprintf("b%d->b%d(idx=%d,%s):%s",
@@ -703,10 +732,10 @@ func findSolarExportStartIdx(
 	return 0, false
 }
 
-// findBestRateWindows scans all contiguous K-interval windows in [startIdx .. endIdx] and returns
+// findBestBatteryRateWindows scans all contiguous K-interval windows in [startIdx .. endIdx] and returns
 // the start indices of all windows whose average import rate (when importRate is true) or average
-// export rate (when importRate is false) is within priceEpsilonForEquality of the block's best K-window rate.
-func findBestRateWindows(timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
+// battery export rate (when importRate is false) is within priceEpsilonForEquality of the block's best K-window rate.
+func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
 	bestAvg := -math.MaxFloat64
 	if importRate {
 		bestAvg = math.MaxFloat64
@@ -717,7 +746,7 @@ func findBestRateWindows(timeline []planInterval, startIdx, endIdx, K int, impor
 			if importRate {
 				sum += timeline[t].importRate
 			} else {
-				sum += timeline[t].exportRate
+				sum += timeline[t].batteryExportRate
 			}
 		}
 		avg := sum / float64(K)
@@ -732,7 +761,7 @@ func findBestRateWindows(timeline []planInterval, startIdx, endIdx, K int, impor
 			if importRate {
 				sum += timeline[t].importRate
 			} else {
-				sum += timeline[t].exportRate
+				sum += timeline[t].batteryExportRate
 			}
 		}
 		avg := sum / float64(K)
@@ -889,7 +918,7 @@ func expandBlockAction(
 			// dynamic-tariff block (spread <= $0.06/kWh), sliding this K-interval window locks onto the cheapest
 			// sub-window (e.g. the cheapest hour plus the cheaper of its two neighbors if K > 3) while keeping
 			// charging contiguous.
-			tiedPositions := findBestRateWindows(timeline, block.startIdx, block.endIdx, K, true)
+			tiedPositions := findBestBatteryRateWindows(timeline, block.startIdx, block.endIdx, K, true)
 			// Tie-breaking among equal-rate windows:
 			// - If the battery enters the block in an active reserve deficit (startState.soc < block.minSOC),
 			//   charging must begin immediately at block.startIdx (or at step 1 only when block.startIdx == 0
@@ -1008,10 +1037,10 @@ func expandBlockAction(
 		chosenK := L
 		chosenStart := block.startIdx
 		isContinuingExport := block.startIdx == 0 && lastAction != nil && lastAction.BatteryMode == types.BatteryModeExport
-		isSuperSpike := block.maxExportRate > block.avgImportRate+priceMaterialityThresholdDollars
+		isSuperSpike := block.maxBatteryExportRate > block.avgImportRate+priceMaterialityThresholdDollars
 
 		for K := 1; K <= L; K++ {
-			tiedPositions := findBestRateWindows(timeline, block.startIdx, block.endIdx, K, false)
+			tiedPositions := findBestBatteryRateWindows(timeline, block.startIdx, block.endIdx, K, false)
 			// Tie-breaking among windows that share the block's highest average export rate:
 			// - Default to the latest tied position (tiedPositions[len(tiedPositions)-1]) so on a normal TOU peak
 			//   block (where exportRate <= importRate), the battery covers peak home load first and dumps remaining
@@ -1160,7 +1189,7 @@ func isBlockActionAllowed(
 				requiredImportGate = wear.gridChargePerKWH
 			}
 			if blocks[j].maxImportRate-block.minImportRate >= requiredImportGate-priceEpsilonForEquality ||
-				(settings.GridExportBatteries && blocks[j].maxExportRate-block.minImportRate >= wear.exportGatePerKWH-priceEpsilonForEquality) {
+				(settings.GridExportBatteries && blocks[j].maxBatteryExportRate-block.minImportRate >= wear.exportGatePerKWH-priceEpsilonForEquality) {
 				hasArbitrageAhead = true
 				break
 			}
@@ -1194,30 +1223,32 @@ func isBlockActionAllowed(
 			}
 		}
 
-		if block.maxExportRate <= 0 {
+		blockMaxBatExp := block.maxBatteryExportRate
+		if blockMaxBatExp <= 0 {
 			return false
 		}
 		minHorizonImportRate := block.minImportRate
-		minHorizonExportRate := block.maxExportRate
-		maxHorizonExportRate := block.maxExportRate
+		minHorizonExportRate := blockMaxBatExp
+		maxHorizonExportRate := blockMaxBatExp
 		for _, b := range blocks {
 			if b.minImportRate < minHorizonImportRate {
 				minHorizonImportRate = b.minImportRate
 			}
-			if b.maxExportRate < minHorizonExportRate {
-				minHorizonExportRate = b.maxExportRate
+			bMaxBatExp := b.maxBatteryExportRate
+			if bMaxBatExp < minHorizonExportRate {
+				minHorizonExportRate = bMaxBatExp
 			}
-			if b.maxExportRate > maxHorizonExportRate {
-				maxHorizonExportRate = b.maxExportRate
+			if bMaxBatExp > maxHorizonExportRate {
+				maxHorizonExportRate = bMaxBatExp
 			}
 		}
 		// Never export battery energy during the lowest-price block, below the cheapest horizon import rate,
 		// or at the lowest export tier of a multi-tier export tariff unless a wholesale export super-spike
-		// (exportRate > avgImportRate + $0.03/kWh) occurs within the block.
-		isSuperSpike := block.maxExportRate > block.avgImportRate+priceMaterialityThresholdDollars
+		// (batteryExportRate > avgImportRate + $0.03/kWh) occurs within the block.
+		isSuperSpike := blockMaxBatExp > block.avgImportRate+priceMaterialityThresholdDollars
 		isLowestExportTier := maxHorizonExportRate-minHorizonExportRate >= priceMaterialityThresholdDollars &&
-			block.maxExportRate <= minHorizonExportRate+priceEpsilonForEquality
-		isLessThanMinImport := (minHorizonImportRate > 0 && block.maxExportRate < minHorizonImportRate)
+			blockMaxBatExp <= minHorizonExportRate+priceEpsilonForEquality
+		isLessThanMinImport := (minHorizonImportRate > 0 && blockMaxBatExp < minHorizonImportRate)
 		if !isSuperSpike && (block.isLowestPrice || isLowestExportTier || isLessThanMinImport) {
 			return false
 		}
@@ -1227,7 +1258,7 @@ func isBlockActionAllowed(
 		return true
 
 	case blockActionDirectSolarExport:
-		if !settings.ManageTOUSchedules || !settings.GridExportSolar || isFlatNEM {
+		if !settings.ManageTOUSchedules || !settings.GridExportSolar || isFlatNEM || block.buyAllSellAll {
 			return false
 		}
 
@@ -1288,17 +1319,44 @@ func isBlockActionAllowed(
 		return false
 
 	case blockActionStandby:
+		// Under Buy-All / Sell-All tariffs with solar export enabled on a site with rooftop solar,
+		// discharging 1 AC kWh outside of peak hours saves block.minImportRate, whereas recharging
+		// that energy from solar at rate R_solar incurs R_solar / effRT in on-site consumption charges.
+		// Holding in Standby is only justified on non-peak blocks when R_solar > block.minImportRate * effRT
+		// (avoiding unconditional Standby during On-Peak or on battery-only sites without solar).
+		buyAllSolarAvoidance := false
+		if block.buyAllSellAll && settings.GridExportSolar && !block.isHighestPrice {
+			siteHasSolar := false
+			for k := range timeline {
+				if timeline[k].solarKWH > minSolarGenerationKW*timeline[k].durationHours {
+					siteHasSolar = true
+					break
+				}
+			}
+			if siteHasSolar {
+				if knownPostHorizonRate > block.minImportRate*effRT+priceEpsilonForEquality {
+					buyAllSolarAvoidance = true
+				}
+				for j := blockIdx + 1; j < len(blocks) && !buyAllSolarAvoidance; j++ {
+					if blocks[j].maxImportRate > block.minImportRate*effRT+priceEpsilonForEquality {
+						buyAllSolarAvoidance = true
+					}
+				}
+			}
+		}
+
 		// Disallow holding in Standby on any block when no VPP event, no higher import rate
 		// (in downstream blocks or post-horizon slices), no export rate exceeding this block's
-		// minimum import rate, and no higher reserve floor (minSOC step-up) lies ahead.
+		// minimum import rate, no Buy-All/Sell-All solar recharge avoidance, and no higher reserve floor lies ahead.
 		// Using block.minImportRate (without gating on block.isHighestPrice) handles <$0.10 TOU
 		// spreads (such as Eversource CT Rate 7) as well as merged dynamic-tariff blocks safely.
-		if !hasVPPAhead {
+		if !hasVPPAhead && !buyAllSolarAvoidance {
 			hasReasonToHold := knownPostHorizonRate > block.minImportRate+priceEpsilonForEquality
 			for j := blockIdx + 1; j < len(blocks) && !hasReasonToHold; j++ {
 				if blocks[j].maxImportRate > block.minImportRate+priceEpsilonForEquality ||
 					blocks[j].minSOC > block.minSOC+socTargetTolerancePct ||
-					((settings.GridExportBatteries || settings.GridExportSolar) && blocks[j].maxExportRate > block.minImportRate+priceEpsilonForEquality) {
+					(settings.GridExportBatteries && blocks[j].maxBatteryExportRate > block.minImportRate+priceEpsilonForEquality) ||
+					(settings.GridExportSolar && !blocks[j].buyAllSellAll && blocks[j].maxExportRate > block.minImportRate+priceEpsilonForEquality) {
 					hasReasonToHold = true
 				}
 			}
@@ -1307,26 +1365,37 @@ func isBlockActionAllowed(
 			}
 		}
 		if blockIdx == 0 && startState.soc >= almostFullSOC && !block.isHighestPrice && !hasVPPAhead {
-			// 1. If solar in Block 0 already covers load (netSolarKWH >= 0), BatteryModeLoad keeps the
-			// nearly-full battery at ~100% SOC without idling in Standby.
+			// 1. If solar already covers load in every interval of Block 0, BatteryModeLoad keeps the
+			// nearly-full battery at ~100% SOC without idling in Standby. (On multi-hour or 24h flat blocks,
+			// block.netSolarKWH >= 0 can still hide dark overnight intervals where Load would drain the battery.)
 			if block.netSolarKWH >= 0 {
-				return false
+				hasNetLoadStep := false
+				if buyAllSolarAvoidance {
+					for k := block.startIdx; k <= block.endIdx; k++ {
+						if timeline[k].loadKWH > timeline[k].solarKWH+1e-6 {
+							hasNetLoadStep = true
+							break
+						}
+					}
+				}
+				if !hasNetLoadStep {
+					return false
+				}
 			}
-			// 2. Otherwise (netSolarKWH < 0), holding a >=98% battery in Standby during an off-peak/shoulder
-			// block is only worthwhile if either:
+			// 2. Otherwise, holding a >=98% battery in Standby during an off-peak/shoulder block is only worthwhile if:
 			//   (a) A more expensive block is ahead and intervening solar will not simply refill the battery
-			//       back to 100% SOC for free (cumNetKWH < 0), or
-			//   (b) A sunny block is ahead with an export rate higher than the current import rate (e.g. when
-			//       ManageTOUSchedules is false and staying near 100% SOC allows excess solar to overflow at a profit).
+			//       back to 100% SOC for free (cumNetKWH < 0),
+			//   (b) A sunny block is ahead with an export rate higher than the current import rate, or
+			//   (c) Buy-All / Sell-All solar recharge avoidance makes holding at 100% SOC cheaper than cycling.
 			hasUnrefilledPeakAhead := false
-			hasProfitableSolarOverflowAhead := false
+			hasProfitableSolarOverflowAhead := buyAllSolarAvoidance
 			var cumNetKWH float64
 			for j := 1; j < len(blocks); j++ {
 				cumNetKWH += blocks[j].netSolarKWH
 				if blocks[j].maxImportRate > block.avgImportRate+priceMaterialityThresholdDollars && cumNetKWH < 0 {
 					hasUnrefilledPeakAhead = true
 				}
-				if blocks[j].netSolarKWH > 0 && blocks[j].maxExportRate > block.avgImportRate+priceMaterialityThresholdDollars {
+				if blocks[j].netSolarKWH > 0 && !blocks[j].buyAllSellAll && blocks[j].maxExportRate > block.avgImportRate+priceMaterialityThresholdDollars {
 					hasProfitableSolarOverflowAhead = true
 				}
 			}
@@ -1394,6 +1463,17 @@ func validateCandidateTrajectory(
 	//   Saving that battery energy at i to cover load at j is strictly superior.
 	// - ExportBelowFutureReserve: Exporting battery energy below a downstream interval's minSOC reserve floor
 	//   before any profitable grid recharge or full solar refill can recover it.
+	// marginalExportRate returns the export rate earned by the marginal kWh of battery discharge
+	// during a BatteryModeExport interval: batteryExportRate whenever battery energy is directly
+	// exported to the grid (batExportKWH > 0), or solar exportRate when battery discharge only
+	// covers household load so rooftop solar can export (batExportKWH == 0 && solarExportKWH > 0).
+	marginalExportRate := func(idx int) float64 {
+		if metrics[idx].batExportKWH <= 1e-6 && metrics[idx].solarExportKWH > 1e-6 {
+			return timeline[idx].exportRate
+		}
+		return timeline[idx].batteryExportRate
+	}
+
 	for i := 0; i < len(timeline); i++ {
 		if actions[i].batteryMode == types.BatteryModeStandby &&
 			actions[i].reason != types.ActionReasonVPPPrep &&
@@ -1426,6 +1506,17 @@ func validateCandidateTrajectory(
 					if standbyImportedFromGrid && states[j+1].soc < minSOCSinceStandby-socTargetTolerancePct {
 						minExportDiff = wear.exportGatePerKWH - priceEpsilonForEquality
 					}
+					if marginalExportRate(j)-timeline[i].importRate < minExportDiff {
+						return false, "HoldThenCheaperExport"
+					}
+				} else if actions[j].batteryMode == types.BatteryModeLoad &&
+					actions[j].solarMode == types.SolarModeExport &&
+					metrics[j].batSuppliedHomeKWH > minSignificantBatteryPowerKW*timeline[j].durationHours &&
+					metrics[j].solarExportKWH > minSolarGenerationKW*timeline[j].durationHours {
+					minExportDiff := -dominatedPeriodPriceGapDollars
+					if standbyImportedFromGrid && states[j+1].soc < minSOCSinceStandby-socTargetTolerancePct {
+						minExportDiff = wear.solarExportPerKWH - priceEpsilonForEquality
+					}
 					if timeline[j].exportRate-timeline[i].importRate < minExportDiff {
 						return false, "HoldThenCheaperExport"
 					}
@@ -1441,6 +1532,7 @@ func validateCandidateTrajectory(
 
 		if actions[i].batteryMode == types.BatteryModeExport &&
 			actions[i].reason != types.ActionReasonVPPActive {
+			expRateI := marginalExportRate(i)
 			for j := i + 1; j < len(timeline); j++ {
 				if actions[j].reason == types.ActionReasonVPPPrep || actions[j].reason == types.ActionReasonVPPActive {
 					break
@@ -1448,7 +1540,7 @@ func validateCandidateTrajectory(
 				// Reject exports that leave a subsequent interval below its reserve floor before a profitable
 				// grid-recharge window (exportRate - importRate >= wear.exportGatePerKWH) or full solar refill.
 				if settings.GridChargeBatteries && !initialState.chargingDisabled &&
-					timeline[i].exportRate-timeline[j].importRate >= wear.exportGatePerKWH-priceEpsilonForEquality {
+					expRateI-timeline[j].importRate >= wear.exportGatePerKWH-priceEpsilonForEquality {
 					break
 				}
 				if timeline[j].minSOC > timeline[i].minSOC && states[j].soc < timeline[j].minSOC-socTargetTolerancePct {
@@ -1464,7 +1556,7 @@ func validateCandidateTrajectory(
 					if metrics[j].gridImportKWH > minSolarGenerationKW*timeline[j].durationHours {
 						minExportDiff = wear.exportGatePerKWH - priceEpsilonForEquality
 					}
-					if timeline[i].exportRate-timeline[j].importRate < minExportDiff {
+					if expRateI-timeline[j].importRate < minExportDiff {
 						return false, "ExportThenCostlierHold"
 					}
 				}
@@ -1484,7 +1576,7 @@ func validateCandidateTrajectory(
 		if actions[i].batteryMode == types.BatteryModeExport &&
 			metrics[i].batExportKWH > minSignificantBatteryPowerKW*timeline[i].durationHours &&
 			hasPriorCharge {
-			if timeline[i].exportRate-maxPriorChargeRate < wear.exportGatePerKWH-priceEpsilonForEquality {
+			if timeline[i].batteryExportRate-maxPriorChargeRate < wear.exportGatePerKWH-priceEpsilonForEquality {
 				return false, "UnprofitableGridChargeToExport"
 			}
 		}
@@ -1526,7 +1618,7 @@ func validateCandidateTrajectory(
 				}
 				if actions[j].batteryMode == types.BatteryModeChargeAny &&
 					metrics[j].gridChargeKWH > minSignificantBatteryPowerKW*timeline[j].durationHours {
-					if timeline[i].exportRate-timeline[j].importRate < wear.exportGatePerKWH-priceEpsilonForEquality {
+					if timeline[i].batteryExportRate-timeline[j].importRate < wear.exportGatePerKWH-priceEpsilonForEquality {
 						return false, "UnprofitableExportToGridCharge"
 					}
 				}
@@ -1839,7 +1931,7 @@ func critiqueBlockPlan(
 			hasHigherPeakAhead := false
 			for p := k + 1; p < len(blocks); p++ {
 				if blocks[p].maxImportRate > blocks[k].avgImportRate+priceMaterialityThresholdDollars ||
-					(settings.GridExportBatteries && blocks[p].maxExportRate > blocks[k].avgImportRate+priceMaterialityThresholdDollars) {
+					(settings.GridExportBatteries && blocks[p].maxBatteryExportRate > blocks[k].avgImportRate+priceMaterialityThresholdDollars) {
 					hasHigherPeakAhead = true
 					break
 				}
@@ -2570,7 +2662,10 @@ func optimizeBlockTargets(
 				}
 				initialE := choices[b].targetSOC
 				if choices[b].actionType == blockActionStandby {
-					if blocks[b].startIdx >= len(initStates) || len(timeline) == 0 {
+					if blocks[b].startIdx >= len(initStates) || len(timeline) == 0 || blocks[b].buyAllSellAll {
+						// Under Buy-All / Sell-All, solar generation earns VoS whether exported or stored, while
+						// solar recharging the battery incurs retail consumption charges plus round-trip efficiency
+						// loss. Never shed Standby battery SOC just to "make room" for incoming solar.
 						continue
 					}
 					startSOC := initStates[blocks[b].startIdx].soc

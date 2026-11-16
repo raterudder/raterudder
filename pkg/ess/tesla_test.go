@@ -3970,4 +3970,118 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 8, superOffPeriods[0].toHour)
 		}
 	})
+
+	t.Run("SetModes Autonomous TOU Mode Uses PvOnly Unless BatteryExport Upcoming", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		currentTime := time.Date(2026, 7, 15, 10, 30, 0, 0, loc)
+		currentExportRule := teslaExportRuleBatteryOk
+		var gridImportExportCalls int
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "autonomous",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "America/Chicago",
+						"components": map[string]any{
+							"solar":                          true,
+							"battery":                        true,
+							"customer_preferred_export_rule": currentExportRule,
+							"disallow_charge_from_grid_with_solar_installed": false,
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 75.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/grid_import_export":
+				gridImportExportCalls++
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				if rule, ok := body["customer_preferred_export_rule"].(string); ok {
+					currentExportRule = rule
+				}
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			default:
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			}
+		})
+
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			keyPEM:       keyPEM,
+			pubPEM:       pubPEM,
+			baseURLs:     map[string]string{"NA": "http://tesla.mock/"},
+			tokenURL:     "http://tesla.mock/oauth2/v3/token",
+			authURL:      "http://tesla.mock/oauth2/v3/authorize",
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		sys, err := m.Site(ctx, "test-site-autonomous-tou", types.Settings{
+			ESS:                 "tesla",
+			ManageTOUSchedules:  true,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			MinBatterySOC:       20,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = "http://tesla.mock"
+		teslaSys.nowFunc = func() time.Time { return currentTime }
+
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, ImportDollars: 0.12, ExportDollars: 0.12, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.12, ExportDollars: 0.12, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+
+		// 1. In autonomous (TOU) mode at 10:30 AM (7.5 hours before battery export): must switch battery_ok -> pv_only.
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 20,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, gridImportExportCalls)
+		assert.Equal(t, teslaExportRulePvOnly, currentExportRule, "Autonomous TOU mode must not leave battery_ok enabled when no battery export is within 1 hour")
+
+		// 2. In autonomous (TOU) mode at 5:20 PM (40 minutes before 6:00 PM BatteryModeExport): must switch pv_only -> battery_ok.
+		currentTime = time.Date(2026, 7, 15, 17, 20, 0, 0, loc)
+		teslaSys.siteInfoExpiry = time.Time{}
+		changed, err = teslaSys.SetModes(ctx, types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 20,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 2, gridImportExportCalls)
+		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule, "Autonomous TOU mode should enable battery_ok when a BatteryModeExport period starts within 1 hour")
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }

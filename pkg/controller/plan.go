@@ -211,7 +211,8 @@ type planInterval struct {
 	durationHours     float64
 	price             types.Price
 	importRate        float64 // Total delivered retail rate: supply + grid use/delivery fees ($/kWh)
-	exportRate        float64 // Total compensation for exported energy to grid ($/kWh)
+	exportRate        float64 // Total compensation for solar generation / exported solar energy ($/kWh)
+	batteryExportRate float64 // Total compensation for battery energy discharged to grid ($/kWh)
 	loadKWH           float64 // Projected total home load energy for this interval (kWh)
 	solarKWH          float64 // Projected total rooftop solar generation energy for this interval (kWh)
 	minSOC            float64 // Active reserve limit for this interval (%)
@@ -578,12 +579,19 @@ func selectPlanningHorizonEnd(
 	maxImp := -math.MaxFloat64
 	minExp := math.MaxFloat64
 	maxExp := -math.MaxFloat64
+	minBatExp := math.MaxFloat64
+	maxBatExp := -math.MaxFloat64
+	allBuyAllSellAll := true
 	for _, p := range allPrices {
 		if !p.TSEnd.After(now) || !p.TSStart.Before(scanLimit) {
 			continue
 		}
+		if !p.BuyAllSellAll {
+			allBuyAllSellAll = false
+		}
 		imp := p.ImportRateDollars()
 		exp := p.ExportRateDollars(settings, allPrices)
+		batExp := p.BatteryExportRateDollars(settings, allPrices)
 		if imp < minImp {
 			minImp = imp
 		}
@@ -596,24 +604,38 @@ func selectPlanningHorizonEnd(
 		if exp > maxExp {
 			maxExp = exp
 		}
+		if batExp < minBatExp {
+			minBatExp = batExp
+		}
+		if batExp > maxBatExp {
+			maxBatExp = batExp
+		}
 	}
 
 	minSpread := minDeficitPriceSpread(settings)
 	hasImportPeak := maxImp-max(0.0, minImp) >= minSpread
-	hasExportPeak := (settings.GridExportBatteries || settings.GridExportSolar) &&
+	hasSolarExportPeak := settings.GridExportSolar &&
 		!settings.UtilityRateOptions.IsFlatNetMetering() &&
+		!allBuyAllSellAll &&
 		maxExp-max(0.0, minExp) >= priceMaterialityThresholdDollars
-	if !hasImportPeak && !hasExportPeak {
+	hasBatExportPeak := settings.GridExportBatteries &&
+		!settings.UtilityRateOptions.IsFlatNetMetering() &&
+		maxBatExp-max(0.0, minBatExp) >= priceMaterialityThresholdDollars
+	if !hasImportPeak && !hasSolarExportPeak && !hasBatExportPeak {
 		return defaultEnd
 	}
 
 	importPeakThreshold := maxImp - priceMaterialityThresholdDollars
 	exportPeakThreshold := maxExp - priceMaterialityThresholdDollars
+	batExportPeakThreshold := maxBatExp - priceMaterialityThresholdDollars
 	isElevatedPrice := func(p types.Price) bool {
 		if hasImportPeak && p.ImportRateDollars() >= importPeakThreshold {
 			return true
 		}
-		if hasExportPeak && p.ExportRateDollars(settings, allPrices) >= exportPeakThreshold {
+		if hasSolarExportPeak && p.ExportRateDollars(settings, allPrices) >= exportPeakThreshold {
+			return true
+		}
+		if hasBatExportPeak && p.BatteryExportRateDollars(settings, allPrices) >= batExportPeakThreshold {
 			return true
 		}
 		return false
@@ -850,6 +872,7 @@ func (c *Controller) buildPlanningTimeline(
 			crossesBoundary := false
 			currImport := currentPrice.ImportRateDollars()
 			currExport := currentPrice.ExportRateDollars(settings, allPrices)
+			currBatExport := currentPrice.BatteryExportRateDollars(settings, allPrices)
 			currMinSOC := settings.GetMinBatterySOC(ctx, currentTime, currentTime.Location(), currentPrice)
 			coveredUntil := currentTime
 			if !currentPrice.TSEnd.IsZero() && currentPrice.TSEnd.After(coveredUntil) {
@@ -866,6 +889,7 @@ func (c *Controller) buildPlanningTimeline(
 				}
 				pImport := p.ImportRateDollars()
 				pExport := p.ExportRateDollars(settings, allPrices)
+				pBatExport := p.BatteryExportRateDollars(settings, allPrices)
 				evalTime := p.TSStart
 				if evalTime.Before(currentTime) {
 					evalTime = currentTime
@@ -873,6 +897,8 @@ func (c *Controller) buildPlanningTimeline(
 				pMinSOC := settings.GetMinBatterySOC(ctx, evalTime, currentTime.Location(), p)
 				if math.Abs(pImport-currImport) > priceEpsilonForEquality ||
 					math.Abs(pExport-currExport) > priceEpsilonForEquality ||
+					math.Abs(pBatExport-currBatExport) > priceEpsilonForEquality ||
+					p.BuyAllSellAll != currentPrice.BuyAllSellAll ||
 					math.Abs(pMinSOC-currMinSOC) > priceEpsilonForEquality {
 					crossesBoundary = true
 					break
@@ -990,24 +1016,29 @@ func (c *Controller) buildPlanningTimeline(
 
 		importRate := currentPrice.ImportRateDollars()
 		exportRate := currentPrice.ExportRateDollars(settings, allPrices)
+		batteryExportRate := currentPrice.BatteryExportRateDollars(settings, allPrices)
 		for _, vpp := range vppEvents {
 			if vpp.price > 0 && !currentTime.Before(vpp.eventStart) && currentTime.Before(vpp.eventEnd) {
-				exportRate = vpp.price
+				if !currentPrice.BuyAllSellAll {
+					exportRate = vpp.price
+				}
+				batteryExportRate = vpp.price
 				break
 			}
 		}
 		minSOC := settings.GetMinBatterySOC(ctx, currentTime, currentTime.Location(), currentPrice)
 
 		interval := planInterval{
-			startTime:     currentTime,
-			endTime:       stepEnd,
-			durationHours: durationHrs,
-			price:         currentPrice,
-			importRate:    importRate,
-			exportRate:    exportRate,
-			loadKWH:       loadKWH,
-			solarKWH:      solarKWH,
-			minSOC:        minSOC,
+			startTime:         currentTime,
+			endTime:           stepEnd,
+			durationHours:     durationHrs,
+			price:             currentPrice,
+			importRate:        importRate,
+			exportRate:        exportRate,
+			batteryExportRate: batteryExportRate,
+			loadKWH:           loadKWH,
+			solarKWH:          solarKWH,
+			minSOC:            minSOC,
 		}
 
 		timeline = append(timeline, interval)
@@ -1417,8 +1448,16 @@ func stepPhysics(
 	newEnergy = max(0.0, min(capacityKWH, newEnergy))
 
 	totalGridExportKWH := solarExportKWH + batExportKWH
-	grossImportCost := gridImportKWH * interval.importRate
-	grossExportCredits := totalGridExportKWH * interval.exportRate
+	var grossImportCost, grossExportCredits float64
+	if interval.price.BuyAllSellAll {
+		uncurtailedSolarKWH := max(0.0, totalSolarKWH-solarCurtailedKWH)
+		solarConsumedOnSiteKWH := solarToHomeKWH + solarToBatKWH
+		grossImportCost = (solarConsumedOnSiteKWH + gridImportKWH) * interval.importRate
+		grossExportCredits = uncurtailedSolarKWH*interval.exportRate + batExportKWH*interval.batteryExportRate
+	} else {
+		grossImportCost = gridImportKWH * interval.importRate
+		grossExportCredits = solarExportKWH*interval.exportRate + batExportKWH*interval.batteryExportRate
+	}
 	intervalCostDollars := grossImportCost - grossExportCredits
 
 	endingSOC := (newEnergy / capacityKWH) * 100.0
@@ -1630,6 +1669,23 @@ func calculateTerminalValuation(
 	//         solar or off-peak replenishment opportunity.
 	remainingKWH := energyDeltaKWH
 	var totalCredit float64
+	if len(timeline) > 0 && timeline[len(timeline)-1].price.BuyAllSellAll && settings.GridExportSolar {
+		hasSolar := postHorizon.postHorizonSolarSurplusKWH > 0
+		for i := range timeline {
+			if timeline[i].solarKWH > minSolarGenerationKW*timeline[i].durationHours {
+				hasSolar = true
+				break
+			}
+		}
+		if hasSolar {
+			// Under Buy-All / Sell-All on a solar site, draining stored DC energy now saves oneWayEff * R,
+			// whereas recharging that DC energy from solar incurs (1 / oneWayEff) * R in on-site solar
+			// consumption charges. Valuing retained DC energy at replacementRate (1.0 * R) BEFORE
+			// postHorizonSlices avoids draining the battery on flat/uniform rates while remaining strictly
+			// below grid-charge cost ((1 / oneWayEff) * R * discount + wear) so it never induces grid charging.
+			return -(remainingKWH * replacementRate)
+		}
+	}
 	for _, slice := range postHorizon.postHorizonSlices {
 		if remainingKWH <= 0 {
 			break
@@ -1805,7 +1861,7 @@ func resolvePlanActionReason(
 
 		// 2. Battery Export Arbitrage: Upcoming battery export window scheduled in plan
 		for j := stepIdx + 1; j < len(winningPath.actions) && j < len(timeline); j++ {
-			if winningPath.actions[j].batteryMode == types.BatteryModeExport && timeline[j].exportRate > importRate {
+			if winningPath.actions[j].batteryMode == types.BatteryModeExport && timeline[j].batteryExportRate > importRate {
 				return types.ActionReasonArbitrageHoldExport,
 					"Preserving battery in standby for upcoming export window.", &timeline[j].price
 			}
@@ -1823,6 +1879,11 @@ func resolvePlanActionReason(
 				return types.ActionReasonArbitrageHoldExport,
 					"Preserving battery in standby for upcoming export window.", &timeline[j].price
 			}
+		}
+
+		if interval.price.BuyAllSellAll && (peakIdx == -1 || timeline[peakIdx].importRate <= importRate+priceEpsilonForEquality) {
+			return types.ActionReasonHoldSimilarPrice,
+				"Holding battery in standby: round-trip efficiency loss exceeds price spread.", nil
 		}
 
 		// 5. Fallback
@@ -2058,12 +2119,17 @@ func finalizeDecisionAndPlan(
 		totalCostDollars += metrics.grossImportCostDollars
 		totalExportCredits += metrics.grossExportCreditDollars
 
+		exportDollars := interval.exportRate
+		if action.batteryMode == types.BatteryModeExport {
+			exportDollars = interval.batteryExportRate
+		}
+
 		periods = append(periods, types.PlanPeriod{
 			TSStart:       interval.startTime,
 			TSEnd:         interval.endTime,
 			DurationHours: interval.durationHours,
 			ImportDollars: interval.importRate,
-			ExportDollars: interval.exportRate,
+			ExportDollars: exportDollars,
 			BatteryMode:   action.batteryMode,
 			SolarMode:     action.solarMode,
 			Reason:        action.reason,

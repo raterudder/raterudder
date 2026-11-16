@@ -1346,6 +1346,32 @@ func hasUpcomingSolarOnlyExportWithinHour(sched *types.TOUSchedule, now time.Tim
 	return found && isSolarOnly
 }
 
+// hasUpcomingBatteryExportWithinHour reports whether the next scheduled export
+// period in sched starts in less than 1 hour (< 60 minutes) from now and includes
+// battery export (BatteryModeExport).
+func hasUpcomingBatteryExportWithinHour(sched *types.TOUSchedule, now time.Time) bool {
+	if sched == nil || now.IsZero() {
+		return false
+	}
+	nowMin := now.Hour()*60 + now.Minute()
+	bestDiff := 60
+	var found bool
+	var isBatteryExport bool
+	for _, p := range sched.Periods {
+		if p.BatteryMode != types.BatteryModeExport && p.SolarMode != types.SolarModeExport {
+			continue
+		}
+		startMin := p.StartHour*60 + p.StartMinute
+		diff := (startMin - nowMin + 1440) % 1440
+		if diff > 0 && diff < bestDiff {
+			bestDiff = diff
+			found = true
+			isBatteryExport = p.BatteryMode == types.BatteryModeExport
+		}
+	}
+	return found && isBatteryExport
+}
+
 // SetModes sets the operating modes of the system.
 func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
@@ -1609,15 +1635,26 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 			}
 		case types.SolarModeAny:
 			targetRule := teslaExportRuleNever
+			isAutonomous := targetMode == "autonomous" || (targetMode == "" && siteInfo.DefaultRealMode == "autonomous")
 			if b.settings.GridExportBatteries {
-				targetRule = teslaExportRuleBatteryOk
-				// Since all planned export windows are included as ON_PEAK in the TOU schedule
-				// and we do not control the exact moment the Powerwall starts an ON_PEAK period
-				// (or our control loop may run slightly late), switch to pv_only less than an hour
-				// ahead of an upcoming solar-only export period so the battery does not export
-				// when that ON_PEAK window begins. There is no need to switch earlier than 1 hour ahead.
-				if hasUpcomingSolarOnlyExportWithinHour(opts.Schedule, b.now(siteInfo)) {
-					targetRule = teslaExportRulePvOnly
+				if isAutonomous {
+					// When in autonomous (TOU) mode, Powerwall firmware controls peak exports on its own,
+					// so do not set battery_ok unless a planned BatteryModeExport window starts within 1 hour.
+					if hasUpcomingBatteryExportWithinHour(opts.Schedule, b.now(siteInfo)) {
+						targetRule = teslaExportRuleBatteryOk
+					} else if b.settings.GridExportSolar {
+						targetRule = teslaExportRulePvOnly
+					}
+				} else {
+					targetRule = teslaExportRuleBatteryOk
+					// Since all planned export windows are included as ON_PEAK in the TOU schedule
+					// and we do not control the exact moment the Powerwall starts an ON_PEAK period
+					// (or our control loop may run slightly late), switch to pv_only less than an hour
+					// ahead of an upcoming solar-only export period so the battery does not export
+					// when that ON_PEAK window begins. There is no need to switch earlier than 1 hour ahead.
+					if hasUpcomingSolarOnlyExportWithinHour(opts.Schedule, b.now(siteInfo)) {
+						targetRule = teslaExportRulePvOnly
+					}
 				}
 			} else if b.settings.GridExportSolar {
 				targetRule = teslaExportRulePvOnly

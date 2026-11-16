@@ -282,6 +282,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 				var candidateLoc *time.Location
 				first := true
 				var hasSolar bool
+				var hasBattery bool
 				var hasAdditional bool
 				var hasSubHourly bool
 				for _, p := range periods {
@@ -295,6 +296,9 @@ func TestRatesCoverAllTime(t *testing.T) {
 					}
 					if p.SeparateGenerationCredit {
 						hasSolar = true
+					}
+					if p.SeparateBatteryGenerationCredit {
+						hasBattery = true
 					}
 					if p.GridAdditional {
 						hasAdditional = true
@@ -390,6 +394,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 
 							var applicableNames []string
 							var applicableSolarNames []string
+							var applicableBatteryNames []string
 							var additionalNames []string
 							for i := range periods {
 								ok, _, err := periods[i].Contains(ts)
@@ -401,6 +406,8 @@ func TestRatesCoverAllTime(t *testing.T) {
 								if ok {
 									if periods[i].SeparateGenerationCredit {
 										applicableSolarNames = append(applicableSolarNames, periods[i].Description)
+									} else if periods[i].SeparateBatteryGenerationCredit {
+										applicableBatteryNames = append(applicableBatteryNames, periods[i].Description)
 									} else if periods[i].GridAdditional {
 										additionalNames = append(additionalNames, periods[i].Description)
 									} else {
@@ -436,6 +443,14 @@ func TestRatesCoverAllTime(t *testing.T) {
 									return
 								}
 								assert.Fail(t, "missing or overlapping solar periods", "Hour %v should have 1 period (found %v)", ts, applicableSolarNames)
+							}
+							if hasBattery && len(applicableBatteryNames) != 1 {
+								failures++
+								if failures > 10 {
+									assert.Fail(t, "too many failures")
+									return
+								}
+								assert.Fail(t, "missing or overlapping battery export periods", "Hour %v should have 1 period (found %v)", ts, applicableBatteryNames)
 							}
 							// we allow multiple additional periods
 							if hasAdditional && len(additionalNames) < 1 {

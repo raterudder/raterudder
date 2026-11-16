@@ -502,8 +502,8 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		assert.Equal(t, 0.65, credit, "Export credit must reflect tariff value and not be zeroed out for NEM")
 
 		// BatteryModeExport / blockActionExport is gated when ManageTOUSchedules is false
-		block := timelineBlock{startIdx: 0, endIdx: 0, maxExportRate: credit, avgImportRate: 0.65, minSOC: 20}
-		timeline := []planInterval{{startTime: now, endTime: now.Add(time.Hour), importRate: 0.65, exportRate: credit, minSOC: 20}}
+		block := timelineBlock{startIdx: 0, endIdx: 0, minExportRate: credit, maxExportRate: credit, minBatteryExportRate: credit, maxBatteryExportRate: credit, avgImportRate: 0.65, minSOC: 20}
+		timeline := []planInterval{{startTime: now, endTime: now.Add(time.Hour), importRate: 0.65, exportRate: credit, batteryExportRate: credit, minSOC: 20}}
 		allowed := isBlockActionAllowed(
 			0,
 			block,
@@ -1516,12 +1516,13 @@ func TestStepPhysics(t *testing.T) {
 	t.Parallel()
 
 	interval := planInterval{
-		durationHours: 1.0,
-		importRate:    0.10,
-		exportRate:    0.05,
-		loadKWH:       2.0,
-		solarKWH:      0.0,
-		minSOC:        20,
+		durationHours:     1.0,
+		importRate:        0.10,
+		exportRate:        0.05,
+		batteryExportRate: 0.05,
+		loadKWH:           2.0,
+		solarKWH:          0.0,
+		minSOC:            20,
 	}
 
 	settings := types.Settings{
@@ -1665,7 +1666,8 @@ func TestStepPhysics(t *testing.T) {
 
 		dumpInterval := interval
 		dumpInterval.exportRate = 0.15 // Export rate
-		dumpInterval.loadKWH = 1.0     // 1 kW home load
+		dumpInterval.batteryExportRate = 0.15
+		dumpInterval.loadKWH = 1.0 // 1 kW home load
 
 		exportSettings := settings
 		exportSettings.GridExportBatteries = true
@@ -1933,6 +1935,7 @@ func TestStepPhysics(t *testing.T) {
 
 		exportInterval := interval
 		exportInterval.exportRate = 0.50
+		exportInterval.batteryExportRate = 0.50
 		exportInterval.loadKWH = 0.0 // No home load; pure export
 
 		nextState, metrics := stepPhysics(stateAt45, vppExportAction, exportInterval, exportSettings, 0.90)
@@ -1952,12 +1955,13 @@ func TestStepPhysics(t *testing.T) {
 		}
 
 		testInterval := planInterval{
-			durationHours: 1.0,
-			importRate:    0.20,
-			exportRate:    0.08,
-			loadKWH:       3.0,
-			solarKWH:      2.5,
-			minSOC:        20,
+			durationHours:     1.0,
+			importRate:        0.20,
+			exportRate:        0.08,
+			batteryExportRate: 0.08,
+			loadKWH:           3.0,
+			solarKWH:          2.5,
+			minSOC:            20,
 		}
 
 		exportSettings := settings
@@ -2011,6 +2015,7 @@ func TestStepPhysics(t *testing.T) {
 
 		exportInterval := interval
 		exportInterval.exportRate = 1.00
+		exportInterval.batteryExportRate = 1.00
 		exportInterval.loadKWH = 0.0
 
 		nextState, metrics := stepPhysics(stateAt20, vppMinAction, exportInterval, exportSettings, 0.90)
@@ -2053,6 +2058,7 @@ func TestStepPhysics(t *testing.T) {
 		lowReserveInterval.minSOC = 5.0
 		lowReserveInterval.loadKWH = 0.0
 		lowReserveInterval.exportRate = 0.25
+		lowReserveInterval.batteryExportRate = 0.25
 
 		exportSettings := settings
 		exportSettings.MinBatterySOC = 5.0
@@ -2085,6 +2091,7 @@ func TestStepPhysics(t *testing.T) {
 		exportInterval.minSOC = 20.0
 		exportInterval.loadKWH = 0.0
 		exportInterval.exportRate = 0.25
+		exportInterval.batteryExportRate = 0.25
 
 		exportSettings := settings
 		exportSettings.MinBatterySOC = 20.0
@@ -2105,6 +2112,88 @@ func TestStepPhysics(t *testing.T) {
 
 		nextState, _ := stepPhysics(stateAt30, action, exportInterval, exportSettings, 0.90)
 		assert.InDelta(t, 20.0, nextState.soc, 0.01, "Non-VPP BatteryModeExport must never discharge below interval.minSOC (20%) even if targetSOC is 10")
+	})
+
+	t.Run("SeparateBatteryExport_And_BuyAllSellAll", func(t *testing.T) {
+		t.Parallel()
+
+		// 1. Separate battery export ($0.00) vs solar export ($0.25)
+		sepInterval := planInterval{
+			startTime:         interval.startTime,
+			endTime:           interval.endTime,
+			durationHours:     1.0,
+			importRate:        0.15,
+			exportRate:        0.25,
+			batteryExportRate: 0.00,
+			loadKWH:           1.0,
+			solarKWH:          3.0,
+			minSOC:            20.0,
+			price: types.Price{
+				DollarsPerKWH:                        0.15,
+				GenerationCreditDollarsPerKWH:        0.25,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: 0.00,
+				SeparateBatteryGenerationCredit:      true,
+			},
+		}
+		stateAt80 := planState{
+			energyKWH:      10.8,
+			soc:            80.0,
+			capacityKWH:    13.5,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+		// In BatteryModeExport (max 5 kW discharge): 1 kWh goes to home load, 4 kWh battery exports to grid,
+		// and all 3 kWh of solar exports to grid. Only the 3 kWh of solar earns $0.25 ($0.75); the 4 kWh of
+		// battery export earns $0.00.
+		_, sepMetrics := stepPhysics(stateAt80, actionCandidate{
+			batteryMode: types.BatteryModeExport,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   20,
+		}, sepInterval, settings, 0.90)
+		assert.InDelta(t, 3.0, sepMetrics.solarExportKWH, 1e-6)
+		assert.InDelta(t, 4.0, sepMetrics.batExportKWH, 1e-6)
+		assert.InDelta(t, 0.75, sepMetrics.grossExportCreditDollars, 1e-6)
+		assert.InDelta(t, 0.0, sepMetrics.grossImportCostDollars, 1e-6)
+
+		// 2. Buy-All / Sell-All (Austin Energy VoS $0.1289, retail $0.1168, battery export $0.00)
+		// With 5 kWh solar and 2 kWh home load in BatteryModeLoad on a 50% battery:
+		// 2 kWh solar -> home, 3 kWh solar -> battery (0 exported).
+		// All 5 kWh solar earns $0.1289 ($0.6445), and all 5 kWh consumed on-site (2 home + 3 battery) pays $0.1168 ($0.5840).
+		vosInterval := planInterval{
+			startTime:         interval.startTime,
+			endTime:           interval.endTime,
+			durationHours:     1.0,
+			importRate:        0.1168,
+			exportRate:        0.1289,
+			batteryExportRate: 0.00,
+			loadKWH:           2.0,
+			solarKWH:          5.0,
+			minSOC:            20.0,
+			price: types.Price{
+				DollarsPerKWH:                        0.1168,
+				GenerationCreditDollarsPerKWH:        0.1289,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: 0.00,
+				SeparateBatteryGenerationCredit:      true,
+				BuyAllSellAll:                        true,
+			},
+		}
+		stateAt50 := planState{
+			energyKWH:      6.75,
+			soc:            50.0,
+			capacityKWH:    13.5,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+		_, vosMetrics := stepPhysics(stateAt50, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, vosInterval, settings, 0.90)
+		assert.InDelta(t, 0.0, vosMetrics.solarExportKWH, 1e-6)
+		assert.InDelta(t, 5.0*0.1289, vosMetrics.grossExportCreditDollars, 1e-6)
+		assert.InDelta(t, 5.0*0.1168, vosMetrics.grossImportCostDollars, 1e-6)
+		assert.InDelta(t, 5.0*(0.1168-0.1289), vosMetrics.costDollars, 1e-6)
 	})
 }
 
@@ -2308,6 +2397,44 @@ func TestCalculateTerminalValuation(t *testing.T) {
 		remAfterTier1 := 6.5 - (3.0 / oneWayEff)
 		expected65 := -(tier1Full + remAfterTier1*tier2Rate)
 		assert.InDelta(t, expected65, val65, 1e-6, "Tier 2 must value surplus at replacementRate and not double-subtract postHorizonLoadKWH from unfilledBySolarKWH")
+	})
+
+	t.Run("BuyAllSellAll_PrioritizesAvoidedSolarRechargeBeforePostHorizonSlices", func(t *testing.T) {
+		t.Parallel()
+		targetEnergy := capacityKWH * 0.20 // 2.7 kWh
+		vosPrice := types.Price{
+			DollarsPerKWH: 0.1168,
+			BuyAllSellAll: true,
+		}
+		sunnyTL := []planInterval{
+			{durationHours: 1.0, price: vosPrice, importRate: 0.1168, solarKWH: 3.0, minSOC: 20.0},
+		}
+		// Dark post-horizon slices (6.0 kWh load) that would completely exhaust a small 2.0 kWh DC delta
+		// and apply the 0.95 * oneWayEff (~0.901x) haircut if evaluated before BuyAllSellAll.
+		darkPostHorizon := postHorizonValuation{
+			knownPostHorizonRate: 0.1168,
+			postHorizonSlices: []postHorizonLoadSlice{
+				{loadKWH: 6.0, importRate: 0.1168},
+			},
+		}
+		vosSettings := settings
+		vosSettings.GridExportSolar = true
+
+		stateSmallDelta := planState{
+			energyKWH: targetEnergy + 2.0,
+			soc:       ((targetEnergy + 2.0) / capacityKWH) * 100.0,
+		}
+		valSolarSite := calculateTerminalValuation(stateSmallDelta, darkPostHorizon, vosSettings, sunnyTL, capacityKWH, roundTripEff)
+		assert.InDelta(t, -(2.0 * 0.1168), valSolarSite, 1e-6,
+			"BuyAllSellAll solar site must credit retained DC energy at replacementRate (1.0x) even when postHorizonSlices would exhaust remainingKWH")
+
+		// Battery-only site (zero solar in timeline and post-horizon) falls through to normal Tier 1 slice valuation.
+		darkTL := []planInterval{
+			{durationHours: 1.0, price: vosPrice, importRate: 0.1168, solarKWH: 0.0, minSOC: 20.0},
+		}
+		valBatOnly := calculateTerminalValuation(stateSmallDelta, darkPostHorizon, vosSettings, darkTL, capacityKWH, roundTripEff)
+		assert.InDelta(t, -(2.0 * 0.1168 * math.Sqrt(roundTripEff) * terminalTier1DiscountFactor), valBatOnly, 1e-6,
+			"Battery-only BuyAllSellAll site without solar uses standard postHorizonSlices valuation")
 	})
 }
 
@@ -2592,29 +2719,32 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 		// Step 0 Standby must NOT be labeled WaitingToCharge; it is holding for the intervening export window.
 		solarExportThenChargeTimeline := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.05,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(time.Hour),
-				endTime:       now.Add(2 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.25,
-				solarKWH:      4.0,
-				minSOC:        20.0,
+				startTime:         now.Add(time.Hour),
+				endTime:           now.Add(2 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.25,
+				batteryExportRate: 0.25,
+				solarKWH:          4.0,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(2 * time.Hour),
-				endTime:       now.Add(3 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.08,
-				exportRate:    0.05,
-				minSOC:        20.0,
+				startTime:         now.Add(2 * time.Hour),
+				endTime:           now.Add(3 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.08,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				minSOC:            20.0,
 			},
 		}
 		solarExportThenChargePath := &planPath{
@@ -2738,20 +2868,22 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 
 		exportTimeline := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    0.12,
-				exportRate:    0.04,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        0.12,
+				exportRate:        0.04,
+				batteryExportRate: 0.04,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(4 * time.Hour),
-				endTime:       now.Add(5 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.40,
-				exportRate:    0.75, // massive export rate
-				minSOC:        20.0,
+				startTime:         now.Add(4 * time.Hour),
+				endTime:           now.Add(5 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.40,
+				exportRate:        0.75, // massive export rate
+				batteryExportRate: 0.75,
+				minSOC:            20.0,
 			},
 		}
 
@@ -2842,13 +2974,14 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 				minSOC:        20.0,
 			},
 			{
-				startTime:     now.Add(4 * time.Hour),
-				endTime:       now.Add(5 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.40,
-				exportRate:    0.25, // export rate > 0.10 + 0.05
-				solarKWH:      6.0,  // high solar
-				minSOC:        20.0,
+				startTime:         now.Add(4 * time.Hour),
+				endTime:           now.Add(5 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.40,
+				exportRate:        0.25, // export rate > 0.10 + 0.05
+				batteryExportRate: 0.25,
+				solarKWH:          6.0, // high solar
+				minSOC:            20.0,
 			},
 		}
 
@@ -2977,13 +3110,14 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 				minSOC: 20.0,
 			},
 			{
-				startTime:     now.Add(6 * time.Hour),
-				endTime:       now.Add(7 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.12,
-				solarKWH:      5.0,
-				minSOC:        20.0,
+				startTime:         now.Add(6 * time.Hour),
+				endTime:           now.Add(7 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.12,
+				batteryExportRate: 0.12,
+				solarKWH:          5.0,
+				minSOC:            20.0,
 			},
 		}
 
@@ -3029,13 +3163,14 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 				minSOC:        30.0,
 			},
 			{
-				startTime:     now.Add(4 * time.Hour),
-				endTime:       now.Add(5 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.20,
-				exportRate:    0.15,
-				solarKWH:      5.0,
-				minSOC:        30.0,
+				startTime:         now.Add(4 * time.Hour),
+				endTime:           now.Add(5 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.20,
+				exportRate:        0.15,
+				batteryExportRate: 0.15,
+				solarKWH:          5.0,
+				minSOC:            30.0,
 			},
 		}
 
@@ -5372,6 +5507,287 @@ func TestPlanScenarios(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeChargeAny, decDyn.Action.BatteryMode,
 			"Planner must pre-charge immediately at 00:00 ($0.300/kWh) rather than procrastinating into a costlier $0.304/kWh hour at t=14h")
+	})
+
+	t.Run("SeparateBatteryExport_SolarExportsButBatteryDoesNotDump", func(t *testing.T) {
+		t.Parallel()
+		ctLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		tStart := time.Date(2026, 10, 15, 13, 0, 0, 0, ctLoc)
+
+		mkPrice := func(ts time.Time) types.Price {
+			h := ts.Hour()
+			imp := 0.10
+			exp := 0.08
+			if h >= 13 && h < 17 {
+				imp = 0.25
+				exp = 0.38 // High solar export rate, but battery export pays $0.00
+			}
+			return types.Price{
+				TSStart:                              ts,
+				TSEnd:                                ts.Add(time.Hour),
+				DollarsPerKWH:                        imp,
+				GenerationCreditDollarsPerKWH:        exp,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: 0.00,
+				SeparateBatteryGenerationCredit:      true,
+			}
+		}
+		currP := mkPrice(tStart)
+		var futP []types.Price
+		for h := 1; h <= 30; h++ {
+			futP = append(futP, mkPrice(tStart.Add(time.Duration(h)*time.Hour)))
+		}
+		var hist []types.EnergyStats
+		for d := 1; d <= 5; d++ {
+			day := time.Date(tStart.Year(), tStart.Month(), tStart.Day(), 0, 0, 0, 0, ctLoc).AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				sol := 0.0
+				if h >= 9 && h < 17 {
+					sol = 4.0
+				}
+				hist = append(hist, types.EnergyStats{
+					TSHourStart:  day.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.8,
+					SolarKWH:     sol,
+					TimeLocation: "America/Chicago",
+				})
+			}
+		}
+		st := types.SystemStatus{
+			Timestamp:             tStart,
+			TimeLocation:          "America/Chicago",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            85.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.8,
+			SolarKW:               4.0,
+		}
+		cfg := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+		dec, plan, err := c.Plan(ctx, st, currP, futP, hist, nil, cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.SolarModeExport, dec.Action.SolarMode, "Sunny $0.38 solar export block should use DirectSolarExport")
+		for _, pp := range plan.Periods {
+			assert.NotEqual(t, types.BatteryModeExport, pp.BatteryMode, "BatteryModeExport must never be scheduled when batteryExportRate is $0.00")
+		}
+	})
+
+	t.Run("BuyAllSellAll_FlatRate_HoldsFullBatteryInStandby", func(t *testing.T) {
+		t.Parallel()
+		ctLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		var hist []types.EnergyStats
+		baseDay := time.Date(2026, 10, 15, 0, 0, 0, 0, ctLoc)
+		for d := 1; d <= 5; d++ {
+			day := baseDay.AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				sol := 0.0
+				if h >= 9 && h < 17 {
+					sol = 3.5
+				}
+				hist = append(hist, types.EnergyStats{
+					TSHourStart:  day.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.9,
+					SolarKWH:     sol,
+					TimeLocation: "America/Chicago",
+				})
+			}
+		}
+		cfg := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+		mkFlatVoS := func(ts time.Time) types.Price {
+			return types.Price{
+				TSStart:                              ts,
+				TSEnd:                                ts.Add(time.Hour),
+				DollarsPerKWH:                        0.11680,
+				GenerationCreditDollarsPerKWH:        0.1289,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: 0.00,
+				SeparateBatteryGenerationCredit:      true,
+				BuyAllSellAll:                        true,
+			}
+		}
+
+		// Check 100%, 50%, and 35% initial SOC (35% exercises low-SOC terminal valuation before postHorizonSlices)
+		// across morning (06:00), midday (12:00), sunset (18:00), and midnight (00:00): across all 24 hours of the plan,
+		// the battery must never discharge below its starting SOC on a flat BuyAllSellAll solar tariff (no Pass 2 Standby
+		// shedding and no end-of-horizon terminal-valuation drain).
+		for _, initSOC := range []float64{100.0, 50.0, 35.0} {
+			for _, startHour := range []int{0, 6, 12, 18} {
+				tNow := baseDay.Add(time.Duration(startHour) * time.Hour)
+				currP := mkFlatVoS(tNow)
+				var futP []types.Price
+				for h := 1; h <= 30; h++ {
+					futP = append(futP, mkFlatVoS(tNow.Add(time.Duration(h)*time.Hour)))
+				}
+				solNow := 0.0
+				if startHour >= 9 && startHour < 17 {
+					solNow = 3.5
+				}
+				st := types.SystemStatus{
+					Timestamp:             tNow,
+					TimeLocation:          "America/Chicago",
+					BatteryCapacityKWH:    13.5,
+					BatterySOC:            initSOC,
+					BatteryAboveMinSOC:    true,
+					MaxBatteryChargeKW:    5.0,
+					MaxBatteryDischargeKW: 5.0,
+					HomeKW:                0.9,
+					SolarKW:               solNow,
+				}
+				dec, plan, err := c.Plan(ctx, st, currP, futP, hist, nil, cfg, nil)
+				require.NoError(t, err)
+				if solNow == 0 {
+					assert.Equal(t, types.BatteryModeStandby, dec.Action.BatteryMode,
+						"At dark startHour=%d initSOC=%.0f on flat BuyAllSellAll tariff, battery must hold in Standby", startHour, initSOC)
+					assert.Equal(t, types.ActionReasonHoldSimilarPrice, dec.Action.Reason,
+						"Flat BuyAllSellAll Standby should report ActionReasonHoldSimilarPrice rather than DeficitSaveForPeak")
+				}
+				for idx, pp := range plan.Periods {
+					assert.GreaterOrEqual(t, pp.EndSOC, initSOC-0.5,
+						"At startHour=%d initSOC=%.0f period=%d on flat BuyAllSellAll tariff, battery should never discharge", startHour, initSOC, idx)
+					assert.NotEqual(t, types.BatteryModeExport, pp.BatteryMode)
+					assert.NotEqual(t, types.SolarModeExport, pp.SolarMode)
+				}
+			}
+		}
+
+		// Battery-only home (0 solar in history and live status) on flat BuyAllSellAll tariff:
+		// With no solar recharge to avoid, Standby is pruned and BatteryModeLoad self-consumption is used normally.
+		var noSolarHist []types.EnergyStats
+		for d := 1; d <= 5; d++ {
+			day := baseDay.AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				noSolarHist = append(noSolarHist, types.EnergyStats{
+					TSHourStart:  day.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.9,
+					SolarKWH:     0.0,
+					TimeLocation: "America/Chicago",
+				})
+			}
+		}
+		tDusk := baseDay.Add(18 * time.Hour)
+		var futNoSol []types.Price
+		for h := 1; h <= 30; h++ {
+			futNoSol = append(futNoSol, mkFlatVoS(tDusk.Add(time.Duration(h)*time.Hour)))
+		}
+		decNoSol, _, err := c.Plan(ctx, types.SystemStatus{
+			Timestamp:             tDusk,
+			TimeLocation:          "America/Chicago",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            80.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.9,
+			SolarKW:               0.0,
+		}, mkFlatVoS(tDusk), futNoSol, noSolarHist, nil, cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, decNoSol.Action.BatteryMode,
+			"Battery-only home without solar on flat BuyAllSellAll tariff should not be locked in Standby")
+	})
+
+	t.Run("BuyAllSellAll_TOU_PreservesBatteryForOnPeakOnly", func(t *testing.T) {
+		t.Parallel()
+		ctLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		// Start Wednesday 22:00 CT (Off-Peak $0.10311) with 65% SOC remaining
+		tNow := time.Date(2026, 10, 14, 22, 0, 0, 0, ctLoc)
+
+		mkTOUVoS := func(ts time.Time) types.Price {
+			h := ts.Hour()
+			wd := ts.Weekday() >= time.Monday && ts.Weekday() <= time.Friday
+			imp := 0.10311 // Off-Peak
+			if wd {
+				if h >= 15 && h < 18 {
+					imp = 0.15788 // On-Peak
+				} else if (h >= 7 && h < 15) || (h >= 18 && h < 22) {
+					imp = 0.11680 // Mid-Peak
+				}
+			}
+			return types.Price{
+				TSStart:                              ts,
+				TSEnd:                                ts.Add(time.Hour),
+				DollarsPerKWH:                        imp,
+				GenerationCreditDollarsPerKWH:        0.1289,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: 0.00,
+				SeparateBatteryGenerationCredit:      true,
+				BuyAllSellAll:                        true,
+			}
+		}
+		currP := mkTOUVoS(tNow)
+		var futP []types.Price
+		for h := 1; h <= 30; h++ {
+			futP = append(futP, mkTOUVoS(tNow.Add(time.Duration(h)*time.Hour)))
+		}
+		var hist []types.EnergyStats
+		for d := 1; d <= 5; d++ {
+			day := time.Date(tNow.Year(), tNow.Month(), tNow.Day(), 0, 0, 0, 0, ctLoc).AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				sol := 0.0
+				if h >= 9 && h < 17 {
+					sol = 3.0
+				}
+				load := 1.0
+				if h >= 15 && h < 18 {
+					load = 2.5
+				}
+				hist = append(hist, types.EnergyStats{
+					TSHourStart:  day.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      load,
+					SolarKWH:     sol,
+					TimeLocation: "America/Chicago",
+				})
+			}
+		}
+		st := types.SystemStatus{
+			Timestamp:             tNow,
+			TimeLocation:          "America/Chicago",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            65.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                1.0,
+			SolarKW:               0.0,
+		}
+		cfg := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+		dec, plan, err := c.Plan(ctx, st, currP, futP, hist, nil, cfg, nil)
+		require.NoError(t, err)
+		assert.NotEqual(t, types.BatteryModeLoad, dec.Action.BatteryMode,
+			"At 22:00 Off-Peak ($0.10311), battery should not discharge stored energy that would have to be refilled at Mid-Peak ($0.11680) solar")
+		sawOnPeakLoad := false
+		for _, pp := range plan.Periods {
+			assert.NotEqual(t, types.BatteryModeExport, pp.BatteryMode)
+			if pp.TSStart.In(ctLoc).Hour() >= 15 && pp.TSStart.In(ctLoc).Hour() < 18 && pp.BatteryMode == types.BatteryModeLoad {
+				sawOnPeakLoad = true
+			}
+		}
+		assert.True(t, sawOnPeakLoad, "Battery should discharge to cover home load during On-Peak 15:00-18:00 ($0.15788)")
 	})
 }
 

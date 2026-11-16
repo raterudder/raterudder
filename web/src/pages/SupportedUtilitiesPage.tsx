@@ -36,6 +36,11 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
         category: 'texas',
         blurb: 'Optimizes Direct Energy Twelve Hour Power (9 PM to 9 AM free energy and waived TDU delivery) and fixed plans with automatic Texas TDU delivery fee modeling.'
     },
+    austin_energy: {
+        region: 'Texas (Austin)',
+        category: 'texas',
+        blurb: 'Models Austin Energy Standard Residential tiered rates, the Residential Time-of-Use pilot (Off-Peak 10 PM-7 AM and weekends, Mid-Peak, On-Peak 3-6 PM), and Value of Solar dual-metered credits for Inside and Outside City Limits.'
+    },
     pg_e: {
         region: 'California',
         category: 'california',

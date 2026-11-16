@@ -30,14 +30,15 @@ func TestBuildTimelineBlocks(t *testing.T) {
 			ti := now.Add(time.Duration(i*30) * time.Minute)
 			rate := 0.05 + 0.35*math.Sin(float64(i)/48.0*math.Pi)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    rate,
-				exportRate:    rate * 0.9,
-				solarKWH:      0.0,
-				loadKWH:       0.5,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        rate,
+				exportRate:        rate * 0.9,
+				batteryExportRate: rate * 0.9,
+				solarKWH:          0.0,
+				loadKWH:           0.5,
+				minSOC:            20.0,
 			}
 		}
 
@@ -62,14 +63,15 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				minSOC = 50.0 // Reserve change at i=12
 			}
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(1 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.12,
-				solarKWH:      0.0,
-				loadKWH:       0.5,
-				minSOC:        minSOC,
+				startTime:         ti,
+				endTime:           ti.Add(1 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.12,
+				batteryExportRate: 0.12,
+				solarKWH:          0.0,
+				loadKWH:           0.5,
+				minSOC:            minSOC,
 			}
 		}
 
@@ -105,12 +107,13 @@ func TestBuildTimelineBlocks(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			ti := nightNow.Add(time.Duration(i*30) * time.Minute)
 			timelineEV[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    0.15,
-				exportRate:    0.12,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        0.15,
+				exportRate:        0.12,
+				batteryExportRate: 0.12,
+				minSOC:            20.0,
 			}
 		}
 		statusEV := types.SystemStatus{HomeKW: 9.5} // Large EV draw
@@ -132,12 +135,13 @@ func TestBuildTimelineBlocks(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			ti := now.Add(time.Duration(i*30) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    rates[i],
-				exportRate:    rates[i] * 0.9,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        rates[i],
+				exportRate:        rates[i] * 0.9,
+				batteryExportRate: rates[i] * 0.9,
+				minSOC:            20.0,
 			}
 		}
 		blocks := buildTimelineBlocks(ctx, timeline, nil, baseSettings, types.SystemStatus{}, nil)
@@ -168,12 +172,13 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				rate = -0.05
 			}
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    rate,
-				exportRate:    0.05,
-				minSOC:        minSOC,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        rate,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				minSOC:            minSOC,
 			}
 		}
 
@@ -200,14 +205,15 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				solar = 2.0
 			}
 			timelineSolar[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    0.12,
-				exportRate:    0.05,
-				solarKWH:      solar,
-				loadKWH:       0.8,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        0.12,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          solar,
+				loadKWH:           0.8,
+				minSOC:            20.0,
 			}
 		}
 		var solarLogBuf bytes.Buffer
@@ -234,14 +240,15 @@ func TestBuildTimelineBlocks(t *testing.T) {
 		for i := 0; i < 24; i++ {
 			ti := now.Add(time.Duration(i) * time.Hour)
 			timelineNoSolar[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    0.12,
-				exportRate:    0.05,
-				solarKWH:      0.0,
-				loadKWH:       0.8,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        0.12,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          0.0,
+				loadKWH:           0.8,
+				minSOC:            20.0,
 			}
 		}
 		blocksNoSolar := buildTimelineBlocks(ctx, timelineNoSolar, nil, baseSettings, types.SystemStatus{}, nil)
@@ -269,14 +276,15 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				solar = 3.0 // Net-positive solar 08:00-16:00 (idx 2..9)
 			}
 			timelineTOU[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    rate,
-				exportRate:    0.05,
-				solarKWH:      solar,
-				loadKWH:       1.0,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        rate,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          solar,
+				loadKWH:           1.0,
+				minSOC:            20.0,
 			}
 		}
 		blocksTOU := buildTimelineBlocks(ctx, timelineTOU, nil, baseSettings, types.SystemStatus{}, nil)
@@ -312,14 +320,15 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    rates[i],
-				exportRate:    rates[i] * 0.8,
-				solarKWH:      0.0,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        rates[i],
+				exportRate:        rates[i] * 0.8,
+				batteryExportRate: rates[i] * 0.8,
+				solarKWH:          0.0,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 2.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.15, maxImportRate: 0.20}
@@ -343,14 +352,15 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.10,
-				exportRate:    0.08,
-				solarKWH:      0.0,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.10,
+				exportRate:        0.08,
+				batteryExportRate: 0.08,
+				solarKWH:          0.0,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 2.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.10, maxImportRate: 0.10}
@@ -367,14 +377,15 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.10,
-				exportRate:    0.08,
-				solarKWH:      0.0,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.10,
+				exportRate:        0.08,
+				batteryExportRate: 0.08,
+				solarKWH:          0.0,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.10}
@@ -399,17 +410,18 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.35,
-				exportRate:    0.30,
-				solarKWH:      0.0,
-				loadKWH:       0.5,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.35,
+				exportRate:        0.30,
+				batteryExportRate: 0.30,
+				solarKWH:          0.0,
+				loadKWH:           0.5,
+				minSOC:            20.0,
 			}
 		}
-		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, avgImportRate: 0.35, maxExportRate: 0.30}
+		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, avgImportRate: 0.35, minExportRate: 0.30, maxExportRate: 0.30, minBatteryExportRate: 0.30, maxBatteryExportRate: 0.30}
 
 		actsLoadPre := expandBlockAction(block, blockActionChoice{actionType: blockActionExport, targetSOC: 40.0, useSolarExportPrefix: false}, state80, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, actsLoadPre, 4)
@@ -446,23 +458,26 @@ func TestExpandBlockAction(t *testing.T) {
 				load = 1.5
 			}
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.35,
-				exportRate:    0.30,
-				solarKWH:      solar,
-				loadKWH:       load,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.35,
+				exportRate:        0.30,
+				batteryExportRate: 0.30,
+				solarKWH:          solar,
+				loadKWH:           load,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{
-			startIdx:      0,
-			endIdx:        5,
-			durationHours: 2.0,
-			minSOC:        20.0,
-			avgImportRate: 0.35,
-			maxExportRate: 0.30,
+			startIdx:             0,
+			endIdx:               5,
+			durationHours:        2.0,
+			minSOC:               20.0,
+			avgImportRate:        0.35,
+			maxExportRate:        0.30,
+			minBatteryExportRate: 0.30,
+			maxBatteryExportRate: 0.30,
 		}
 		stateLow := planState{soc: 22.0, energyKWH: 13.5 * 0.22, capacityKWH: 13.5, time: now}
 		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateLow, timeline, nil, settings, types.SystemStatus{}, nil, nil)
@@ -482,14 +497,15 @@ func TestExpandBlockAction(t *testing.T) {
 				solar = 3.0 // 3.0 kWh solar in intervals 4-5
 			}
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    0.10,
-				exportRate:    0.08,
-				solarKWH:      solar,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        0.10,
+				exportRate:        0.08,
+				batteryExportRate: 0.08,
+				solarKWH:          solar,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			}
 		}
 		vppEvents := []vppAnchor{
@@ -511,14 +527,15 @@ func TestExpandBlockAction(t *testing.T) {
 		evTime := time.Date(2026, 6, 15, 3, 0, 0, 0, time.UTC)
 		timeline := []planInterval{
 			{
-				startTime:     evTime,
-				endTime:       evTime.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.05,
-				exportRate:    0.04,
-				solarKWH:      0.0,
-				loadKWH:       3.33,
-				minSOC:        20.0,
+				startTime:         evTime,
+				endTime:           evTime.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.05,
+				exportRate:        0.04,
+				batteryExportRate: 0.04,
+				solarKWH:          0.0,
+				loadKWH:           3.33,
+				minSOC:            20.0,
 			},
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 0, durationHours: 1.0 / 3.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.05}
@@ -540,13 +557,14 @@ func TestExpandBlockAction(t *testing.T) {
 		evTime := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
 		timeline := []planInterval{
 			{
-				startTime:     evTime,
-				endTime:       evTime.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.05,
-				exportRate:    0.04,
-				loadKWH:       1.87,
-				minSOC:        20.0,
+				startTime:         evTime,
+				endTime:           evTime.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.05,
+				exportRate:        0.04,
+				batteryExportRate: 0.04,
+				loadKWH:           1.87,
+				minSOC:            20.0,
 			},
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 0, durationHours: 1.0 / 3.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.05}
@@ -599,20 +617,22 @@ func TestExpandBlockAction(t *testing.T) {
 		}
 		timeline := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    0.15,
-				exportRate:    0.05,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(30 * time.Minute),
-				endTime:       now.Add(60 * time.Minute),
-				durationHours: 0.5,
-				importRate:    0.15,
-				exportRate:    0.05,
-				minSOC:        20.0,
+				startTime:         now.Add(30 * time.Minute),
+				endTime:           now.Add(60 * time.Minute),
+				durationHours:     0.5,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				minSOC:            20.0,
 			},
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 1, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.15, avgImportRate: 0.15}
@@ -632,14 +652,15 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.12,
-				exportRate:    0.05,
-				solarKWH:      0.0,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.12,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          0.0,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.12, avgImportRate: 0.12, maxImportRate: 0.12}
@@ -659,17 +680,18 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			ti := now.Add(time.Duration(i) * time.Hour)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(time.Hour),
-				durationHours: 1.0,
-				importRate:    0.35,
-				exportRate:    0.25,
-				solarKWH:      4.0,
-				loadKWH:       1.0,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        0.35,
+				exportRate:        0.25,
+				batteryExportRate: 0.25,
+				solarKWH:          4.0,
+				loadKWH:           1.0,
+				minSOC:            20.0,
 			}
 		}
-		block := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 3.0, minSOC: 20.0, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, maxExportRate: 0.25}
+		block := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 3.0, minSOC: 20.0, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, minExportRate: 0.25, maxExportRate: 0.25, minBatteryExportRate: 0.25, maxBatteryExportRate: 0.25}
 		stateFull := planState{soc: 90.0, energyKWH: 13.5 * 0.90, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 
 		// When ManageTOUSchedules is true, findSolarExportStartIdx returns (0, true) and DirectSolarExport exports solar.
@@ -703,9 +725,9 @@ func TestExpandBlockAction(t *testing.T) {
 		// Disallowed when initiating a new solar export, but sustained at step 0 when continuing an active SolarModeExport
 		// session with SOC safely above minSOC + solarExportReserveMarginPct.
 		trickleTimeline := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.25, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.15, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.25, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.15, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
 		}
 		_, foundFreshTrickle := findSolarExportStartIdx(block, stateFull, trickleTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, nil)
 		assert.False(t, foundFreshTrickle, "Trickle solar (< 0.5 kW) must not initiate a new DirectSolarExport without prior SolarModeExport")
@@ -729,9 +751,9 @@ func TestExpandBlockAction(t *testing.T) {
 
 		// Zero solar after sunset (< minSolarGenerationKW) must exit SolarModeExport even when continuing.
 		darkTimeline := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, batteryExportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
 		}
 		_, foundDark := findSolarExportStartIdx(block, stateFull, darkTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, lastSolarExport)
 		assert.False(t, foundDark, "Post-sunset zero solar must exit SolarModeExport")
@@ -744,13 +766,14 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			ti := now.Add(time.Duration(i*20) * time.Minute)
 			timeline[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    0.20,
-				exportRate:    0.15,
-				loadKWH:       0.94868,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.20,
+				exportRate:        0.15,
+				batteryExportRate: 0.15,
+				loadKWH:           0.94868,
+				minSOC:            20.0,
 			}
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20}
@@ -800,18 +823,20 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		isHighestPrice: false,
 	}
 	blockExpensive := timelineBlock{
-		startIdx:       3,
-		endIdx:         5,
-		minImportRate:  0.40,
-		avgImportRate:  0.40,
-		maxImportRate:  0.40,
-		minExportRate:  0.35,
-		maxExportRate:  0.35,
-		minSOC:         20.0,
-		durationHours:  1.0,
-		netSolarKWH:    5.0,
-		isLowestPrice:  false,
-		isHighestPrice: true,
+		startIdx:             3,
+		endIdx:               5,
+		minImportRate:        0.40,
+		avgImportRate:        0.40,
+		maxImportRate:        0.40,
+		minExportRate:        0.35,
+		maxExportRate:        0.35,
+		minBatteryExportRate: 0.35,
+		maxBatteryExportRate: 0.35,
+		minSOC:               20.0,
+		durationHours:        1.0,
+		netSolarKWH:          5.0,
+		isLowestPrice:        false,
+		isHighestPrice:       true,
 	}
 	blocks := []timelineBlock{blockCheap, blockExpensive}
 	baseTimeline := make([]planInterval, 6)
@@ -826,14 +851,15 @@ func TestIsBlockActionAllowed(t *testing.T) {
 			solar = 2.0
 		}
 		baseTimeline[i] = planInterval{
-			startTime:     ti,
-			endTime:       ti.Add(20 * time.Minute),
-			durationHours: 1.0 / 3.0,
-			importRate:    imp,
-			exportRate:    exp,
-			solarKWH:      solar,
-			loadKWH:       0.3,
-			minSOC:        20.0,
+			startTime:         ti,
+			endTime:           ti.Add(20 * time.Minute),
+			durationHours:     1.0 / 3.0,
+			importRate:        imp,
+			exportRate:        exp,
+			batteryExportRate: exp,
+			solarKWH:          solar,
+			loadKWH:           0.3,
+			minSOC:            20.0,
 		}
 	}
 
@@ -923,11 +949,13 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			trickleTimeline[i].importRate = 0.40
 			trickleTimeline[i].exportRate = 0.35
+			trickleTimeline[i].batteryExportRate = 0.35
 			trickleTimeline[i].solarKWH = 0.08 // 0.24 kW over 20m
 		}
 		for i := 3; i < 6; i++ {
 			trickleTimeline[i].importRate = 0.05
 			trickleTimeline[i].exportRate = 0.04
+			trickleTimeline[i].batteryExportRate = 0.04
 			trickleTimeline[i].solarKWH = 0.0
 		}
 
@@ -999,8 +1027,8 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		// Case 1: Almost-full battery (98% SOC) 1 hour before a heavy Peak block that needs the full battery.
 		// Standby must be allowed (and chosen) in Block 0 to preserve the battery for the upcoming peak.
 		timelinePrePeak := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.05, loadKWH: 2.0, solarKWH: 0.0, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.40, exportRate: 0.05, loadKWH: 10.5, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 2.0, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.40, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 10.5, solarKWH: 0.0, minSOC: 20.0},
 		}
 		blocksPrePeak := buildTimelineBlocks(ctx, timelinePrePeak, nil, settings, types.SystemStatus{}, nil)
 		require.Len(t, blocksPrePeak, 2)
@@ -1017,8 +1045,8 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		noTOUSettings := settings
 		noTOUSettings.ManageTOUSchedules = false
 		timelineSolarOverflow := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.08, loadKWH: 1.5, solarKWH: 0.0, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.15, exportRate: 0.28, loadKWH: 1.5, solarKWH: 12.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.08, batteryExportRate: 0.08, loadKWH: 1.5, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.15, exportRate: 0.28, batteryExportRate: 0.28, loadKWH: 1.5, solarKWH: 12.0, minSOC: 20.0},
 		}
 		blocksSolarOverflow := buildTimelineBlocks(ctx, timelineSolarOverflow, nil, noTOUSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksSolarOverflow, 2)
@@ -1037,9 +1065,9 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		// - Off-Peak (Block 1): import $0.105, export $0.024 (isLowestPrice = false, but export $0.024 < minHorizonImport $0.055 and is at the lowest export tier)
 		// - On-Peak (Block 2): import $0.314, export $0.094 (isHighestPrice = true, dark evening block with 0 solar)
 		threeTierBlocks := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.055, avgImportRate: 0.055, maxImportRate: 0.055, minExportRate: 0.024, maxExportRate: 0.024, minSOC: 20.0, durationHours: 1.0, isLowestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.105, avgImportRate: 0.105, maxImportRate: 0.105, minExportRate: 0.024, maxExportRate: 0.024, minSOC: 20.0, durationHours: 1.0, netSolarKWH: 3.0},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.314, avgImportRate: 0.314, maxImportRate: 0.314, minExportRate: 0.094, maxExportRate: 0.094, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.055, avgImportRate: 0.055, maxImportRate: 0.055, minExportRate: 0.024, maxExportRate: 0.024, minBatteryExportRate: 0.024, maxBatteryExportRate: 0.024, minSOC: 20.0, durationHours: 1.0, isLowestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.105, avgImportRate: 0.105, maxImportRate: 0.105, minExportRate: 0.024, maxExportRate: 0.024, minBatteryExportRate: 0.024, maxBatteryExportRate: 0.024, minSOC: 20.0, durationHours: 1.0, netSolarKWH: 3.0},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.314, avgImportRate: 0.314, maxImportRate: 0.314, minExportRate: 0.094, maxExportRate: 0.094, minBatteryExportRate: 0.094, maxBatteryExportRate: 0.094, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
 		}
 		state80 := planState{soc: 80.0, capacityKWH: 13.5, time: now}
 
@@ -1086,9 +1114,9 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		peakSettings := settings
 		peakSettings.MinBatterySOC = 30.0
 		peakTimeline := []planInterval{
-			{startTime: now, endTime: now.Add(5 * time.Hour), durationHours: 5.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 2.2, minSOC: 30.0},
-			{startTime: now.Add(5 * time.Hour), endTime: now.Add(21 * time.Hour), durationHours: 16.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 4.0, solarKWH: 2.0, minSOC: 30.0},
-			{startTime: now.Add(21 * time.Hour), endTime: now.Add(29 * time.Hour), durationHours: 8.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 4.0, solarKWH: 3.0, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(5 * time.Hour), durationHours: 5.0, importRate: 0.29982, exportRate: 0.29482, batteryExportRate: 0.29482, loadKWH: 2.2, minSOC: 30.0},
+			{startTime: now.Add(5 * time.Hour), endTime: now.Add(21 * time.Hour), durationHours: 16.0, importRate: 0.20754, exportRate: 0.20254, batteryExportRate: 0.20254, loadKWH: 4.0, solarKWH: 2.0, minSOC: 30.0},
+			{startTime: now.Add(21 * time.Hour), endTime: now.Add(29 * time.Hour), durationHours: 8.0, importRate: 0.29982, exportRate: 0.29482, batteryExportRate: 0.29482, loadKWH: 4.0, solarKWH: 3.0, minSOC: 30.0},
 		}
 		// Build blocks through buildTimelineBlocks: on Eversource CT Rate 7 ($0.29982 - $0.20754 = $0.09228 < $0.10 minPeakRateSpreadDollars),
 		// isHighestPrice is false on all blocks, proving Standby pruning does not rely on isHighestPrice.
@@ -1102,8 +1130,8 @@ func TestIsBlockActionAllowed(t *testing.T) {
 
 		// Also disallowed on a flat tariff ($0.22/kWh import, $0.08/kWh export) with no VPP or reserve step-up ahead.
 		flatTimeline := []planInterval{
-			{startTime: now, endTime: now.Add(6 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, minSOC: 30.0},
-			{startTime: now.Add(6 * time.Hour), endTime: now.Add(12 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, solarKWH: 4.0, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(6 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, batteryExportRate: 0.08, loadKWH: 3.0, minSOC: 30.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(12 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, batteryExportRate: 0.08, loadKWH: 3.0, solarKWH: 4.0, minSOC: 30.0},
 		}
 		flatBlocks := buildTimelineBlocks(ctx, flatTimeline, nil, peakSettings, types.SystemStatus{}, nil)
 		require.NotEmpty(t, flatBlocks)
@@ -1122,9 +1150,9 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		// With 11 initial blocks (> targetTimelineBlocks = 10), buildTimelineBlocks merges the closest pair
 		// (intervals 0 and 1: |$0.310 - $0.260| = $0.050 <= $0.06) into Block 0 while leaving intervals 2..10 distinct.
 		mergedDynTimeline := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.310, exportRate: 0.05, solarKWH: 3.0, loadKWH: 0.5, minSOC: 30.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.260, exportRate: 0.05, solarKWH: 0.0, loadKWH: 2.5, minSOC: 30.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.284, exportRate: 0.15, solarKWH: 0.0, loadKWH: 2.0, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.310, exportRate: 0.05, batteryExportRate: 0.05, solarKWH: 3.0, loadKWH: 0.5, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.260, exportRate: 0.05, batteryExportRate: 0.05, solarKWH: 0.0, loadKWH: 2.5, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.284, exportRate: 0.15, batteryExportRate: 0.15, solarKWH: 0.0, loadKWH: 2.0, minSOC: 30.0},
 		}
 		for k := 3; k < 11; k++ {
 			imp := 0.09
@@ -1132,13 +1160,14 @@ func TestIsBlockActionAllowed(t *testing.T) {
 				imp = 0.18 // |$0.18 - $0.09| = $0.09 > $0.06 maxPriceBandMergeDollars, and < $0.260
 			}
 			mergedDynTimeline = append(mergedDynTimeline, planInterval{
-				startTime:     now.Add(time.Duration(k) * time.Hour),
-				endTime:       now.Add(time.Duration(k+1) * time.Hour),
-				durationHours: 1.0,
-				importRate:    imp,
-				exportRate:    0.05,
-				loadKWH:       1.0,
-				minSOC:        30.0,
+				startTime:         now.Add(time.Duration(k) * time.Hour),
+				endTime:           now.Add(time.Duration(k+1) * time.Hour),
+				durationHours:     1.0,
+				importRate:        imp,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				loadKWH:           1.0,
+				minSOC:            30.0,
 			})
 		}
 		mergedDynBlocks := buildTimelineBlocks(ctx, mergedDynTimeline, nil, peakSettings, types.SystemStatus{}, nil)
@@ -1169,7 +1198,7 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		// disallowed when both GridExportSolar and GridExportBatteries are false.
 		exportSpikeBlocks := []timelineBlock{
 			equalPeakBlocks[0],
-			{startIdx: 1, endIdx: 1, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.55, maxExportRate: 0.55, minSOC: 30.0, durationHours: 1.0},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.55, maxExportRate: 0.55, minBatteryExportRate: 0.55, maxBatteryExportRate: 0.55, minSOC: 30.0, durationHours: 1.0},
 		}
 		assert.True(t, isBlockActionAllowed(0, exportSpikeBlocks[0], blockActionChoice{actionType: blockActionStandby}, exportSpikeBlocks, state40, nil, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline[:2], nil),
 			"Standby must be allowed during peak when an upcoming wholesale export spike exceeds the peak import rate")
@@ -1181,11 +1210,59 @@ func TestIsBlockActionAllowed(t *testing.T) {
 
 		// 5. Allowed when a downstream block steps up minSOC above the current block's reserve floor.
 		reserveStepUpBlocks := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.29482, maxExportRate: 0.29482, minSOC: 25.0, durationHours: 5.0},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.20754, avgImportRate: 0.20754, maxImportRate: 0.20754, minExportRate: 0.20254, maxExportRate: 0.20254, minSOC: 50.0, durationHours: 16.0, isLowestPrice: true},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.29482, maxExportRate: 0.29482, minBatteryExportRate: 0.29482, maxBatteryExportRate: 0.29482, minSOC: 25.0, durationHours: 5.0},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.20754, avgImportRate: 0.20754, maxImportRate: 0.20754, minExportRate: 0.20254, maxExportRate: 0.20254, minBatteryExportRate: 0.20254, maxBatteryExportRate: 0.20254, minSOC: 50.0, durationHours: 16.0, isLowestPrice: true},
 		}
 		assert.True(t, isBlockActionAllowed(0, reserveStepUpBlocks[0], blockActionChoice{actionType: blockActionStandby}, reserveStepUpBlocks, state40, nil, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline[:2], nil),
 			"Standby must be allowed during peak when an upcoming block has a higher minSOC reserve floor")
+	})
+
+	t.Run("Standby_BuyAllSellAll_GatedOnSolarAndNonPeak", func(t *testing.T) {
+		t.Parallel()
+		vosSettings := types.Settings{
+			MinBatterySOC:   20.0,
+			GridExportSolar: true,
+		}
+		vosPrice := types.Price{
+			DollarsPerKWH:                        0.1168,
+			GenerationCreditDollarsPerKWH:        0.1289,
+			SeparateGenerationCredit:             true,
+			BatteryGenerationCreditDollarsPerKWH: 0.00,
+			SeparateBatteryGenerationCredit:      true,
+			BuyAllSellAll:                        true,
+		}
+		sunnyTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, price: vosPrice, importRate: 0.1168, exportRate: 0.1289, batteryExportRate: 0.0, loadKWH: 1.0, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, price: vosPrice, importRate: 0.1168, exportRate: 0.1289, batteryExportRate: 0.0, loadKWH: 1.0, solarKWH: 3.5, minSOC: 20.0},
+		}
+		flatBlocks := []timelineBlock{
+			{startIdx: 0, endIdx: 0, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.1168, avgImportRate: 0.1168, maxImportRate: 0.1168, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, isLowestPrice: true, netSolarKWH: -1.0},
+			{startIdx: 1, endIdx: 1, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.1168, avgImportRate: 0.1168, maxImportRate: 0.1168, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, isLowestPrice: true, netSolarKWH: 2.5},
+		}
+		state60 := planState{soc: 60.0, capacityKWH: 13.5, energyKWH: 8.1}
+		state100 := planState{soc: 100.0, capacityKWH: 13.5, energyKWH: 13.5}
+
+		// 1. Flat rate with solar: Standby allowed at both 60% and 100% SOC
+		assert.True(t, isBlockActionAllowed(0, flatBlocks[0], blockActionChoice{actionType: blockActionStandby}, flatBlocks, state60, nil, 0.1168, vosSettings, types.SystemStatus{}, sunnyTimeline, nil))
+		assert.True(t, isBlockActionAllowed(0, flatBlocks[0], blockActionChoice{actionType: blockActionStandby}, flatBlocks, state100, nil, 0.1168, vosSettings, types.SystemStatus{}, sunnyTimeline, nil))
+
+		// 2. Battery-only site (zero solar across timeline): Standby disallowed on flat rate
+		darkTimeline := []planInterval{sunnyTimeline[0], sunnyTimeline[0]}
+		darkTimeline[1].startTime = now.Add(time.Hour)
+		darkTimeline[1].endTime = now.Add(2 * time.Hour)
+		darkBlocks := []timelineBlock{flatBlocks[0], flatBlocks[0]}
+		darkBlocks[1].startIdx = 1
+		darkBlocks[1].endIdx = 1
+		assert.False(t, isBlockActionAllowed(0, darkBlocks[0], blockActionChoice{actionType: blockActionStandby}, darkBlocks, state60, nil, 0.1168, vosSettings, types.SystemStatus{}, darkTimeline, nil),
+			"Battery-only BuyAllSellAll site with zero solar should prune Standby on a flat rate")
+
+		// 3. TOU On-Peak (isHighestPrice == true, $0.15788) followed by Mid-Peak ($0.1168): Standby disallowed during On-Peak
+		touPeakBlocks := []timelineBlock{
+			{startIdx: 0, endIdx: 0, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.15788, avgImportRate: 0.15788, maxImportRate: 0.15788, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, isHighestPrice: true, netSolarKWH: -1.0},
+			{startIdx: 1, endIdx: 1, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.1168, avgImportRate: 0.1168, maxImportRate: 0.1168, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, netSolarKWH: 2.5},
+		}
+		assert.False(t, isBlockActionAllowed(0, touPeakBlocks[0], blockActionChoice{actionType: blockActionStandby}, touPeakBlocks, state60, nil, 0.10311, vosSettings, types.SystemStatus{}, sunnyTimeline, nil),
+			"BuyAllSellAll TOU On-Peak block must not allow Standby when no higher rate/VPP/minSOC lies ahead")
 	})
 }
 
@@ -1207,8 +1284,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// Interval 0: expensive import rate ($0.40), action Standby with home load importing from grid
 		// Interval 1: cheaper export rate ($0.20), action Export
 		timeline := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.40, exportRate: 0.35, loadKWH: 1.0, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.20, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.40, exportRate: 0.35, batteryExportRate: 0.35, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.20, batteryExportRate: 0.20, loadKWH: 0.2, minSOC: 20.0},
 		}
 		actions := []actionCandidate{
 			{batteryMode: types.BatteryModeStandby},
@@ -1225,8 +1302,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// Interval 0: export at $0.20
 		// Interval 1: standby hold at high import rate ($0.45)
 		timeline := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.20, loadKWH: 0.2, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.45, exportRate: 0.40, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.20, batteryExportRate: 0.20, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.45, exportRate: 0.40, batteryExportRate: 0.40, loadKWH: 1.0, minSOC: 20.0},
 		}
 		actions := []actionCandidate{
 			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
@@ -1242,8 +1319,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		t.Parallel()
 		// Grid charge at $0.20, export at $0.21. With wear.exportGatePerKWH = 0.05, raw spread ($0.01) is below gate!
 		timeline := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20, exportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.21, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20, exportRate: 0.15, batteryExportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.21, batteryExportRate: 0.21, loadKWH: 0.1, minSOC: 20.0},
 		}
 		actions := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 100.0},
@@ -1257,8 +1334,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// Grid charge at $0.40, export at $0.46 with exportGatePerKWH = $0.05:
 		// Raw spread is $0.06 >= $0.05 (even though $0.46 - $0.40/0.90 = $0.0156 < $0.05 if RTE were applied to the gate).
 		timelineRawSpread := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.40, exportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.50, exportRate: 0.46, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.40, exportRate: 0.15, batteryExportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.50, exportRate: 0.46, batteryExportRate: 0.46, loadKWH: 0.1, minSOC: 20.0},
 		}
 		validRaw, reasonRaw := validateCandidateTrajectory(actions, timelineRawSpread, settings, wear, 0.90, state, 0)
 		assert.True(t, validRaw, "Export gate must compare raw rate spread ($0.46 - $0.40 = $0.06 >= $0.05) without dividing charge rate by RTE: "+reasonRaw)
@@ -1267,9 +1344,9 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// then drain in Load to an elevated 50% minSOC window, then drop minSOC to 20% and export (50% -> 20%) at $0.21.
 		// Because 50% > min(preChargeSOC=20%, minSOC=50%) + 1.0, hasPriorCharge must NOT reset at interval 1.
 		timelineElevatedMinSOC := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.15, loadKWH: 3.0, minSOC: 50.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.21, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.15, batteryExportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.15, batteryExportRate: 0.15, loadKWH: 3.0, minSOC: 50.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.21, batteryExportRate: 0.21, loadKWH: 0.1, minSOC: 20.0},
 		}
 		actionsElevatedMinSOC := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 65.0},
@@ -1287,9 +1364,9 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// Because 40% > min(preChargeSOC=40%, minSOC=30%) + 1.0, hasPriorCharge must NOT reset and the export must be rejected.
 		wear10Cents := wearRates{exportGatePerKWH: 0.10, arbitrageGatePerKWH: 0.03}
 		timelineDrainToPreCharge := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 4.2, minSOC: 30.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, batteryExportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 4.2, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
 		}
 		actionsDrainToPreCharge := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 55.0},
@@ -1304,10 +1381,10 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// Case C: When Load drains the battery all the way down to min(preChargeSOC, minSOC) (30%),
 		// a subsequent free solar refill (30% -> 60%) and export (60% -> 30%) is decoupled and accepted.
 		timelineFullDrainSolarRefill := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 8.0, minSOC: 30.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.2, solarKWH: 10.0, minSOC: 30.0},
-			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, batteryExportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 8.0, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 0.2, solarKWH: 10.0, minSOC: 30.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
 		}
 		actionsFullDrainSolarRefill := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 55.0},
@@ -1326,8 +1403,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 1. Export at $0.0940 followed by grid charge at $0.05503 (raw spread $0.03897 < $0.04 gate) -> rejected.
 		timelineBelowGate := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, batteryExportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, batteryExportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
 		}
 		actionsExportThenCharge := []actionCandidate{
 			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
@@ -1339,18 +1416,18 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 2. Export at $0.1000 followed by grid charge at $0.05503 (raw spread $0.04497 >= $0.04 gate) -> accepted.
 		timelineAboveGate := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.1000, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.1000, batteryExportRate: 0.1000, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, batteryExportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
 		}
 		validAbove, reasonAbove := validateCandidateTrajectory(actionsExportThenCharge, timelineAboveGate, settings, wear4Cents, 0.90, state80, 0)
 		assert.True(t, validAbove, "Spread of $0.045/kWh must clear $0.04/kWh exportGatePerKWH: "+reasonAbove)
 
 		// 3. Intervening full solar refill (to >= 98% SOC in BatteryModeLoad) decouples the earlier export from a later grid charge.
 		timelineSolarRefill := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.10481, exportRate: 0.02375, loadKWH: 0.5, solarKWH: 15.0, minSOC: 20.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 8.0, minSOC: 20.0},
-			{startTime: now.Add(6 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, batteryExportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.10481, exportRate: 0.02375, batteryExportRate: 0.02375, loadKWH: 0.5, solarKWH: 15.0, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.31443, exportRate: 0.0940, batteryExportRate: 0.0940, loadKWH: 8.0, minSOC: 20.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, batteryExportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
 		}
 		actionsWithSolarRefill := []actionCandidate{
 			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
@@ -1366,8 +1443,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		t.Parallel()
 		// Grid charge at $0.05, export at $0.40. Margin is huge.
 		timeline := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.05, exportRate: 0.04, loadKWH: 0.1, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.45, exportRate: 0.40, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.05, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.45, exportRate: 0.40, batteryExportRate: 0.40, loadKWH: 0.1, minSOC: 20.0},
 		}
 		actions := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 100.0},
@@ -1391,8 +1468,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 1. Spread $0.0438/kWh ($0.5038 export - $0.4600 import) is below $0.07/kWh exportGatePerKWH -> rejected.
 		timelineBelowGate := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.4600, exportRate: 0.4600, loadKWH: 1.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.5038, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.4600, exportRate: 0.4600, batteryExportRate: 0.4600, loadKWH: 1.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.5038, batteryExportRate: 0.5038, loadKWH: 1.0, minSOC: 20.0},
 		}
 		actionsHoldExport := []actionCandidate{
 			{batteryMode: types.BatteryModeStandby},
@@ -1404,8 +1481,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 2. Spread $0.0800/kWh ($0.6700 export - $0.5900 import) clears $0.07/kWh exportGatePerKWH -> accepted.
 		timelineAboveGate := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.5000, loadKWH: 1.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.6700, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.5000, batteryExportRate: 0.5000, loadKWH: 1.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.5900, exportRate: 0.6700, batteryExportRate: 0.6700, loadKWH: 1.0, minSOC: 20.0},
 		}
 		validAbove, reasonAbove := validateCandidateTrajectory(actionsHoldExport, timelineAboveGate, exportGateSettings, wearGate, 0.90, state80, 0)
 		assert.True(t, validAbove, "Spread of $0.08/kWh must clear $0.07/kWh export gate without adding degradation on top: "+reasonAbove)
@@ -1418,8 +1495,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		eversourceWear := getWearRates(eversourceGateSettings, eversourceGateSettings.GetOptimizationParams())
 		stateNearReserve := planState{soc: 22.5, energyKWH: 30.0 * 0.225, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
 		timelineDrainToReserve := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.27, solarKWH: 0.19, minSOC: 20.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 0.16, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20754, exportRate: 0.20254, batteryExportRate: 0.20254, loadKWH: 0.27, solarKWH: 0.19, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.29982, exportRate: 0.29482, batteryExportRate: 0.29482, loadKWH: 0.16, solarKWH: 0.0, minSOC: 20.0},
 		}
 		validDrain, reasonDrain := validateCandidateTrajectory(actionsHoldExport, timelineDrainToReserve, eversourceGateSettings, eversourceWear, 0.90, stateNearReserve, 0)
 		assert.False(t, validDrain, "Export step that finishes at minSOC must not bypass HoldThenCheaperExport")
@@ -1432,10 +1509,10 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// below minSOCSinceStandby (down to 25%) dips into the Standby cushion and is rejected.
 		state35 := planState{soc: 35.0, energyKWH: 30.0 * 0.35, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
 		timelineSolarSurplusAfterStandby := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.50, solarKWH: 0.0, minSOC: 25.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.50, solarKWH: 7.0, minSOC: 25.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 2.50, solarKWH: 0.0, minSOC: 25.0},
-			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 0.30, solarKWH: 0.0, minSOC: 25.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, batteryExportRate: 0.20254, loadKWH: 0.50, solarKWH: 0.0, minSOC: 25.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, batteryExportRate: 0.20254, loadKWH: 0.50, solarKWH: 7.0, minSOC: 25.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, batteryExportRate: 0.29482, loadKWH: 2.50, solarKWH: 0.0, minSOC: 25.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, batteryExportRate: 0.29482, loadKWH: 0.30, solarKWH: 0.0, minSOC: 25.0},
 		}
 		actionsExportOnlySolarSurplus := []actionCandidate{
 			{batteryMode: types.BatteryModeStandby},
@@ -1463,8 +1540,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 1. Stopping ChargeAny at ~53% SOC inside an 80% minSOC window must be rejected as UnrecoveredReserveDeficit.
 		timeline80 := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 80.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 80.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 80.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 80.0},
 		}
 		actionsStopEarly := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 50.0},
@@ -1476,8 +1553,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 
 		// 2. Failing to charge during a future minSOC step-up (20% -> 50% in hour 1) must be rejected as UnrecoveredReserveDeficit.
 		timelineFutureStepUp := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 50.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 50.0},
 		}
 		actionsIgnoreFuture := []actionCandidate{
 			{batteryMode: types.BatteryModeLoad},
@@ -1490,8 +1567,8 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		// 3. Impossible-to-reach minSOC (minSOC = 100% in a single 1-hour window starting at 20% SOC, where 5 kW
 		// charging on a 13.5 kWh battery only reaches ~55% SOC): continuous ChargeAny must be allowed!
 		timelineUnreachable := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 100.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 100.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
 		}
 		actionsContinuousCharge := []actionCandidate{
 			{batteryMode: types.BatteryModeChargeAny, targetSOC: 100.0},
@@ -1499,6 +1576,68 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		}
 		validUnreach, reasonUnreach := validateCandidateTrajectory(actionsContinuousCharge, timelineUnreachable, settings, wear, 0.90, state20, 0)
 		assert.True(t, validUnreach, "Continuous ChargeAny during an unreachable minSOC window must be allowed: "+reasonUnreach)
+	})
+
+	t.Run("SeparateBatteryExport_MarginalAndDirectSolarExportDominance", func(t *testing.T) {
+		t.Parallel()
+		state60 := planState{soc: 60.0, energyKWH: 8.1, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0}
+
+		// 1. Standby at $0.20 followed by BatteryModeExport dumping battery (batExportKWH > 0) where solar export is $0.35
+		//    but battery export is $0.05 -> must be rejected as HoldThenCheaperExport!
+		tlBatDump := []planInterval{
+			{
+				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
+				importRate: 0.20, exportRate: 0.10, batteryExportRate: 0.05, loadKWH: 2.0, minSOC: 20.0,
+				price: types.Price{SeparateBatteryGenerationCredit: true},
+			},
+			{
+				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
+				importRate: 0.25, exportRate: 0.35, batteryExportRate: 0.05, loadKWH: 1.0, solarKWH: 2.0, minSOC: 20.0,
+				price: types.Price{SeparateBatteryGenerationCredit: true},
+			},
+		}
+		actsBatDump := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny, targetSOC: 20.0},
+		}
+		validDump, reasonDump := validateCandidateTrajectory(actsBatDump, tlBatDump, settings, wear, 0.90, state60, 0)
+		assert.False(t, validDump)
+		assert.Equal(t, "HoldThenCheaperExport", reasonDump)
+
+		// 2. Standby at $0.20 followed by DirectSolarExport (BatteryModeLoad + SolarModeExport) where solar exportRate
+		//    is only $0.15 (< $0.20) -> must also be rejected as HoldThenCheaperExport!
+		tlCheaperSolarExp := []planInterval{
+			{
+				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
+				importRate: 0.20, exportRate: 0.10, batteryExportRate: 0.00, loadKWH: 2.0, minSOC: 20.0,
+				price: types.Price{SeparateBatteryGenerationCredit: true},
+			},
+			{
+				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
+				importRate: 0.20, exportRate: 0.15, batteryExportRate: 0.00, loadKWH: 2.0, solarKWH: 3.0, minSOC: 20.0,
+				price: types.Price{SeparateBatteryGenerationCredit: true},
+			},
+		}
+		actsCheaperSolarExp := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeExport},
+		}
+		validSolExp, reasonSolExp := validateCandidateTrajectory(actsCheaperSolarExp, tlCheaperSolarExp, settings, wear, 0.90, state60, 0)
+		assert.False(t, validSolExp)
+		assert.Equal(t, "HoldThenCheaperExport", reasonSolExp)
+
+		// 3. Standby at $0.20 followed by DirectSolarExport where solar exportRate is $0.35 (clears solarExportPerKWH hurdle)
+		//    even though batteryExportRate is $0.00 -> must be ALLOWED!
+		tlProfitableSolarExp := []planInterval{
+			tlCheaperSolarExp[0],
+			{
+				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
+				importRate: 0.25, exportRate: 0.35, batteryExportRate: 0.00, loadKWH: 2.0, solarKWH: 3.0, minSOC: 20.0,
+				price: types.Price{SeparateBatteryGenerationCredit: true},
+			},
+		}
+		validProfSol, reasonProfSol := validateCandidateTrajectory(actsCheaperSolarExp, tlProfitableSolarExp, settings, wear, 0.90, state60, 0)
+		assert.True(t, validProfSol, "Profitable DirectSolarExport should be allowed when batteryExportRate is $0: "+reasonProfSol)
 	})
 }
 
@@ -1516,9 +1655,9 @@ func TestScoreCandidateTrajectory(t *testing.T) {
 		// Usable battery (1.0 kWh DC at 100% RTE) can cover either Block 0 OR Block 2, leaving the other block
 		// to import 1.0 kWh from the grid at $0.30/kWh.
 		timeline := []planInterval{
-			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
-			{durationHours: 19.0, importRate: 0.20, exportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
-			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, batteryExportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
+			{durationHours: 19.0, importRate: 0.20, exportRate: 0.10, batteryExportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, batteryExportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
 		}
 		initial := planState{
 			soc:            40.0,
@@ -1569,9 +1708,9 @@ func TestScoreCandidateTrajectory(t *testing.T) {
 			MinBatteryExportDifferenceDollarsPerKWH: 0.0,
 		}
 		timeline := []planInterval{
-			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
-			{durationHours: 21.0, importRate: 0.20, exportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
-			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, batteryExportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 21.0, importRate: 0.20, exportRate: 0.10, batteryExportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, batteryExportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
 		}
 		initial := planState{
 			soc:            40.0,
@@ -1761,19 +1900,20 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			exp = 0.45
 		}
 		timeline[i] = planInterval{
-			startTime:     ti,
-			endTime:       ti.Add(30 * time.Minute),
-			durationHours: 0.5,
-			importRate:    rate,
-			exportRate:    exp,
-			solarKWH:      0.0,
-			loadKWH:       0.5,
-			minSOC:        20.0,
+			startTime:         ti,
+			endTime:           ti.Add(30 * time.Minute),
+			durationHours:     0.5,
+			importRate:        rate,
+			exportRate:        exp,
+			batteryExportRate: exp,
+			solarKWH:          0.0,
+			loadKWH:           0.5,
+			minSOC:            20.0,
 		}
 	}
 	blocks := []timelineBlock{
-		{startIdx: 0, endIdx: 1, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.04, maxExportRate: 0.04, minSOC: 20.0, durationHours: 1.0, isLowestPrice: true},
-		{startIdx: 2, endIdx: 3, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
+		{startIdx: 0, endIdx: 1, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.04, maxExportRate: 0.04, minBatteryExportRate: 0.04, maxBatteryExportRate: 0.04, minSOC: 20.0, durationHours: 1.0, isLowestPrice: true},
+		{startIdx: 2, endIdx: 3, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minBatteryExportRate: 0.45, maxBatteryExportRate: 0.45, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
 	}
 	state := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, time: now}
 
@@ -1793,14 +1933,14 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		// - Block 1 (Intervening Off-Peak): $0.07/kWh import, 2h, 3.0 kWh load (must be held in Standby so charged energy is not drained before Peak).
 		// - Block 2 (On-Peak): $0.50/kWh import, $0.45/kWh export, 2h, 1.0 kWh load (must export/cover peak using the energy charged in Block 0).
 		timeline3 := []planInterval{
-			{startTime: now, endTime: now.Add(3 * time.Hour), durationHours: 3.0, importRate: 0.05, exportRate: 0.02, loadKWH: 0.4, minSOC: 20.0},
-			{startTime: now.Add(3 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 2.0, importRate: 0.07, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
-			{startTime: now.Add(5 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 2.0, importRate: 0.50, exportRate: 0.45, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(3 * time.Hour), durationHours: 3.0, importRate: 0.05, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 0.4, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 2.0, importRate: 0.07, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now.Add(5 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 2.0, importRate: 0.50, exportRate: 0.45, batteryExportRate: 0.45, loadKWH: 1.0, minSOC: 20.0},
 		}
 		blocks3 := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 20.0, durationHours: 3.0, isLowestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.07, avgImportRate: 0.07, maxImportRate: 0.07, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 20.0, durationHours: 2.0},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minSOC: 20.0, durationHours: 2.0, isHighestPrice: true},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 20.0, durationHours: 3.0, isLowestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.07, avgImportRate: 0.07, maxImportRate: 0.07, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 20.0, durationHours: 2.0},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minBatteryExportRate: 0.45, maxBatteryExportRate: 0.45, minSOC: 20.0, durationHours: 2.0, isHighestPrice: true},
 		}
 		state20 := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 
@@ -1818,9 +1958,9 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		// 1. Multi-block 80% reserve deficit on a 27 kWh battery (5 kW maxChargeKW = ~17.5% SOC/hr, requiring >3 hours
 		// across 3 distinct dynamic-rate blocks to recover from 20% to 80% SOC).
 		timeline80 := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.03, loadKWH: 0.5, minSOC: 80.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.14, exportRate: 0.03, loadKWH: 0.5, minSOC: 80.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.09, exportRate: 0.03, loadKWH: 1.0, minSOC: 80.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.03, batteryExportRate: 0.03, loadKWH: 0.5, minSOC: 80.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.14, exportRate: 0.03, batteryExportRate: 0.03, loadKWH: 0.5, minSOC: 80.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.09, exportRate: 0.03, batteryExportRate: 0.03, loadKWH: 1.0, minSOC: 80.0},
 		}
 		state27kWh := planState{soc: 20.0, energyKWH: 27.0 * 0.20, capacityKWH: 27.0, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		path80 := c.searchOptimalPlanBlocks(ctx, timeline80, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, types.SystemStatus{}, nil, nil)
@@ -1832,8 +1972,8 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		// 2. Impossible-to-reach 100% minSOC in a 1-hour window starting at 20% SOC:
 		// Solver must stay in continuous ChargeAny during the 1-hour window and not reject the plan.
 		timelineImpossible := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 0.5, minSOC: 100.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 100.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
 		}
 		pathImp := c.searchOptimalPlanBlocks(ctx, timelineImpossible, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, settings, types.SystemStatus{}, nil, nil)
 		require.NotNil(t, pathImp)
@@ -1851,14 +1991,14 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		noChargeSettings := settings
 		noChargeSettings.GridChargeBatteries = false
 		timelineOvernight := []planInterval{
-			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.045, exportRate: 0.02, loadKWH: 3.5, minSOC: 20.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.052, exportRate: 0.09, loadKWH: 3.5, minSOC: 20.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.120, exportRate: 0.04, loadKWH: 3.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.045, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.052, exportRate: 0.09, batteryExportRate: 0.09, loadKWH: 3.5, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.120, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 3.5, minSOC: 20.0},
 		}
 		blocksOvernight := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.045, avgImportRate: 0.045, maxImportRate: 0.045, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 20.0, durationHours: 2.0, isLowestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.052, avgImportRate: 0.052, maxImportRate: 0.052, minExportRate: 0.09, maxExportRate: 0.09, minSOC: 20.0, durationHours: 2.0},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.120, avgImportRate: 0.120, maxImportRate: 0.120, minExportRate: 0.04, maxExportRate: 0.04, minSOC: 20.0, durationHours: 2.0, isHighestPrice: true},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.045, avgImportRate: 0.045, maxImportRate: 0.045, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 20.0, durationHours: 2.0, isLowestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.052, avgImportRate: 0.052, maxImportRate: 0.052, minExportRate: 0.09, maxExportRate: 0.09, minBatteryExportRate: 0.09, maxBatteryExportRate: 0.09, minSOC: 20.0, durationHours: 2.0},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.120, avgImportRate: 0.120, maxImportRate: 0.120, minExportRate: 0.04, maxExportRate: 0.04, minBatteryExportRate: 0.04, maxBatteryExportRate: 0.04, minSOC: 20.0, durationHours: 2.0, isHighestPrice: true},
 		}
 		state45 := planState{soc: 45.0, energyKWH: 13.5 * 0.45, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		winOvernight, _ := critiqueBlockPlan(ctx, blocksOvernight, timelineOvernight, state45, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noChargeSettings, types.SystemStatus{}, nil, 0, nil)
@@ -1881,10 +2021,10 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		noExportSettings := settings
 		noExportSettings.GridExportBatteries = false
 		timeline4 := []planInterval{
-			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.058, exportRate: 0.02, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 2.0, importRate: 0.042, exportRate: 0.02, loadKWH: 1.0, minSOC: 20.0},
-			{startTime: now.Add(3 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 2.0, importRate: 0.068, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
-			{startTime: now.Add(5 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 2.0, importRate: 0.350, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.058, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 2.0, importRate: 0.042, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 2.0, importRate: 0.068, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now.Add(5 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 2.0, importRate: 0.350, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
 		}
 		state25 := planState{soc: 25.0, energyKWH: 13.5 * 0.25, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		path4 := c.searchOptimalPlanBlocks(ctx, timeline4, state25, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noExportSettings, types.SystemStatus{}, nil, nil)
@@ -1907,9 +2047,9 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		noChargeSettings := noExportSettings
 		noChargeSettings.GridChargeBatteries = false
 		timelineSwap := []planInterval{
-			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.09, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.05, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.25, exportRate: 0.02, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.09, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.05, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.25, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 0.5, minSOC: 20.0},
 		}
 		blocksSwap := buildTimelineBlocks(ctx, timelineSwap, nil, noChargeSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksSwap, 3)
@@ -1936,16 +2076,16 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		standbyExpSettings.MinBatterySOC = 30.0
 		standbyExpSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.10
 		timelineStandbyExp := []planInterval{
-			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, loadKWH: 0.5, solarKWH: 2.2, minSOC: 30.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.30, exportRate: 0.29, loadKWH: 0.1, minSOC: 30.0},
-			{startTime: now.Add(6 * time.Hour), endTime: now.Add(8 * time.Hour), durationHours: 2.0, importRate: 0.45, exportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, solarKWH: 2.2, minSOC: 30.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.30, exportRate: 0.29, batteryExportRate: 0.29, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(8 * time.Hour), durationHours: 2.0, importRate: 0.45, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
 		}
 		blocksStandbyExp := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: -2.0},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: 1.7},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.30, avgImportRate: 0.30, maxImportRate: 0.30, minExportRate: 0.29, maxExportRate: 0.29, minSOC: 30.0, durationHours: 2.0, netSolarKWH: -0.1},
-			{startIdx: 3, endIdx: 3, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isHighestPrice: true, netSolarKWH: -2.0},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: -2.0},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: 1.7},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.30, avgImportRate: 0.30, maxImportRate: 0.30, minExportRate: 0.29, maxExportRate: 0.29, minBatteryExportRate: 0.29, maxBatteryExportRate: 0.29, minSOC: 30.0, durationHours: 2.0, netSolarKWH: -0.1},
+			{startIdx: 3, endIdx: 3, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isHighestPrice: true, netSolarKWH: -2.0},
 		}
 		initStandbyExp := planState{soc: 43.2, energyKWH: 13.5 * 0.432, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		winStandbyExp, _ := critiqueBlockPlan(ctx, blocksStandbyExp, timelineStandbyExp, initStandbyExp, nil, postHorizonValuation{knownPostHorizonRate: 0.21}, standbyExpSettings, types.SystemStatus{}, nil, 0, nil)
@@ -1965,9 +2105,9 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		noExportSettings := settings
 		noExportSettings.GridExportBatteries = false
 		timelinePeakThenCharge := []planInterval{
-			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, loadKWH: 2.0, minSOC: 20.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.08, exportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, loadKWH: 3.0, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 2.0, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.08, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 3.0, minSOC: 20.0},
 		}
 		blocksPeakThenCharge := buildTimelineBlocks(ctx, timelinePeakThenCharge, nil, noExportSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksPeakThenCharge, 3)
@@ -1995,12 +2135,12 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		poll1Start := time.Date(2026, 11, 10, 13, 0, 0, 0, time.UTC)
 		buildHorizon := func(fromIdx int) []planInterval {
 			full := []planInterval{
-				{startTime: poll1Start, endTime: poll1Start.Add(time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 1.20, loadKWH: 0.40, minSOC: 30.0},
-				{startTime: poll1Start.Add(time.Hour), endTime: poll1Start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.30, loadKWH: 0.40, minSOC: 30.0},
-				{startTime: poll1Start.Add(2 * time.Hour), endTime: poll1Start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.20, loadKWH: 0.40, minSOC: 30.0},
-				{startTime: poll1Start.Add(3 * time.Hour), endTime: poll1Start.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
-				{startTime: poll1Start.Add(4 * time.Hour), endTime: poll1Start.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
-				{startTime: poll1Start.Add(5 * time.Hour), endTime: poll1Start.Add(15 * time.Hour), durationHours: 10.0, importRate: 0.2075, exportRate: 0.2025, solarKWH: 0.0, loadKWH: 3.00, minSOC: 30.0},
+				{startTime: poll1Start, endTime: poll1Start.Add(time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, batteryExportRate: 0.295, solarKWH: 1.20, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(time.Hour), endTime: poll1Start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, batteryExportRate: 0.295, solarKWH: 0.30, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(2 * time.Hour), endTime: poll1Start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, batteryExportRate: 0.295, solarKWH: 0.20, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(3 * time.Hour), endTime: poll1Start.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, batteryExportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
+				{startTime: poll1Start.Add(4 * time.Hour), endTime: poll1Start.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, batteryExportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
+				{startTime: poll1Start.Add(5 * time.Hour), endTime: poll1Start.Add(15 * time.Hour), durationHours: 10.0, importRate: 0.2075, exportRate: 0.2025, batteryExportRate: 0.2025, solarKWH: 0.0, loadKWH: 3.00, minSOC: 30.0},
 			}
 			return full[fromIdx:]
 		}
@@ -2065,19 +2205,20 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			exp = 0.45
 		}
 		timeline[i] = planInterval{
-			startTime:     ti,
-			endTime:       ti.Add(30 * time.Minute),
-			durationHours: 0.5,
-			importRate:    rate,
-			exportRate:    exp,
-			solarKWH:      0.0,
-			loadKWH:       0.5,
-			minSOC:        20.0,
+			startTime:         ti,
+			endTime:           ti.Add(30 * time.Minute),
+			durationHours:     0.5,
+			importRate:        rate,
+			exportRate:        exp,
+			batteryExportRate: exp,
+			solarKWH:          0.0,
+			loadKWH:           0.5,
+			minSOC:            20.0,
 		}
 	}
 	blocks := []timelineBlock{
 		{startIdx: 0, endIdx: 1, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minSOC: 20.0, durationHours: 1.0, isLowestPrice: true},
-		{startIdx: 2, endIdx: 3, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
+		{startIdx: 2, endIdx: 3, minImportRate: 0.50, avgImportRate: 0.50, maxImportRate: 0.50, minExportRate: 0.45, maxExportRate: 0.45, minBatteryExportRate: 0.45, maxBatteryExportRate: 0.45, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
 	}
 	state := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, time: now}
 	choices := []blockActionChoice{
@@ -2116,14 +2257,15 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				load = 0.5
 			}
 			timelineLoad[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(30 * time.Minute),
-				durationHours: 0.5,
-				importRate:    rate,
-				exportRate:    0.02,
-				solarKWH:      0.0,
-				loadKWH:       load,
-				minSOC:        20.0,
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        rate,
+				exportRate:        0.02,
+				batteryExportRate: 0.02,
+				solarKWH:          0.0,
+				loadKWH:           load,
+				minSOC:            20.0,
 			}
 		}
 		blocksLoad := []timelineBlock{
@@ -2165,40 +2307,43 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		}
 		timelineCloud := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(1 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.35,
-				exportRate:    0.30,
-				solarKWH:      0.0,
-				loadKWH:       0.5,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(1 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.35,
+				exportRate:        0.30,
+				batteryExportRate: 0.30,
+				solarKWH:          0.0,
+				loadKWH:           0.5,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(1 * time.Hour),
-				endTime:       now.Add(2 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.05,
-				solarKWH:      1.5,
-				loadKWH:       0.5,
-				minSOC:        20.0,
+				startTime:         now.Add(1 * time.Hour),
+				endTime:           now.Add(2 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          1.5,
+				loadKWH:           0.5,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(2 * time.Hour),
-				endTime:       now.Add(3 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.15,
-				exportRate:    0.05,
-				solarKWH:      0.0,
-				loadKWH:       1.0,
-				minSOC:        50.0,
+				startTime:         now.Add(2 * time.Hour),
+				endTime:           now.Add(3 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          0.0,
+				loadKWH:           1.0,
+				minSOC:            50.0,
 			},
 		}
 		blocksCloud := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, minExportRate: 0.30, maxExportRate: 0.30, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.15, avgImportRate: 0.15, maxImportRate: 0.15, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 20.0, durationHours: 1.0},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.15, avgImportRate: 0.15, maxImportRate: 0.15, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 50.0, durationHours: 1.0},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, minExportRate: 0.30, maxExportRate: 0.30, minBatteryExportRate: 0.30, maxBatteryExportRate: 0.30, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.15, avgImportRate: 0.15, maxImportRate: 0.15, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 20.0, durationHours: 1.0},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.15, avgImportRate: 0.15, maxImportRate: 0.15, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 50.0, durationHours: 1.0},
 		}
 		startStateCloud := planState{soc: 80.0, energyKWH: 13.5 * 0.80, capacityKWH: 13.5, time: now}
 		choicesCloud := []blockActionChoice{
@@ -2231,47 +2376,51 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		}
 		timelineMulti := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(2 * time.Hour),
-				durationHours: 2.0,
-				importRate:    0.05,
-				exportRate:    0.02,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(2 * time.Hour),
+				durationHours:     2.0,
+				importRate:        0.05,
+				exportRate:        0.02,
+				batteryExportRate: 0.02,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(2 * time.Hour),
-				endTime:       now.Add(3 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.35,
-				exportRate:    0.30,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         now.Add(2 * time.Hour),
+				endTime:           now.Add(3 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.35,
+				exportRate:        0.30,
+				batteryExportRate: 0.30,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(3 * time.Hour),
-				endTime:       now.Add(4 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.45,
-				exportRate:    0.40,
-				loadKWH:       0.2,
-				minSOC:        20.0,
+				startTime:         now.Add(3 * time.Hour),
+				endTime:           now.Add(4 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.45,
+				exportRate:        0.40,
+				batteryExportRate: 0.40,
+				loadKWH:           0.2,
+				minSOC:            20.0,
 			},
 			{
-				startTime:     now.Add(4 * time.Hour),
-				endTime:       now.Add(5 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.20,
-				exportRate:    0.05,
-				loadKWH:       0.5,
-				minSOC:        50.0,
+				startTime:         now.Add(4 * time.Hour),
+				endTime:           now.Add(5 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.20,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				loadKWH:           0.5,
+				minSOC:            50.0,
 			},
 		}
 		blocksMulti := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 20.0, durationHours: 2.0, isLowestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, minExportRate: 0.30, maxExportRate: 0.30, minSOC: 20.0, durationHours: 1.0},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.40, maxExportRate: 0.40, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
-			{startIdx: 3, endIdx: 3, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 50.0, durationHours: 1.0},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.05, avgImportRate: 0.05, maxImportRate: 0.05, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 20.0, durationHours: 2.0, isLowestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.35, avgImportRate: 0.35, maxImportRate: 0.35, minExportRate: 0.30, maxExportRate: 0.30, minBatteryExportRate: 0.30, maxBatteryExportRate: 0.30, minSOC: 20.0, durationHours: 1.0},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.40, maxExportRate: 0.40, minBatteryExportRate: 0.40, maxBatteryExportRate: 0.40, minSOC: 20.0, durationHours: 1.0, isHighestPrice: true},
+			{startIdx: 3, endIdx: 3, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20, minExportRate: 0.05, maxExportRate: 0.05, minBatteryExportRate: 0.05, maxBatteryExportRate: 0.05, minSOC: 50.0, durationHours: 1.0},
 		}
 		startStateMulti := planState{soc: 50.0, energyKWH: 13.5 * 0.50, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		choicesMulti := []blockActionChoice{
@@ -2303,18 +2452,19 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		}
 		timelineNoExport := []planInterval{
 			{
-				startTime:     now,
-				endTime:       now.Add(1 * time.Hour),
-				durationHours: 1.0,
-				importRate:    0.20,
-				exportRate:    0.30,
-				solarKWH:      5.0,
-				loadKWH:       0.5,
-				minSOC:        20.0,
+				startTime:         now,
+				endTime:           now.Add(1 * time.Hour),
+				durationHours:     1.0,
+				importRate:        0.20,
+				exportRate:        0.30,
+				batteryExportRate: 0.30,
+				solarKWH:          5.0,
+				loadKWH:           0.5,
+				minSOC:            20.0,
 			},
 		}
 		blocksNoExport := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20, minExportRate: 0.30, maxExportRate: 0.30, minSOC: 20.0, durationHours: 1.0},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20, minExportRate: 0.30, maxExportRate: 0.30, minBatteryExportRate: 0.30, maxBatteryExportRate: 0.30, minSOC: 20.0, durationHours: 1.0},
 		}
 		fullState := planState{soc: 100.0, energyKWH: 13.5, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		choicesNoExport := []blockActionChoice{
@@ -2349,16 +2499,16 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			MinBatterySOC:       15.0,
 		}
 		timelineFine := []planInterval{
-			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.24, exportRate: 0.02, loadKWH: 0.2, solarKWH: 0.0, minSOC: 15.0},
-			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.24, exportRate: 0.02, loadKWH: 0.2, solarKWH: 0.55, minSOC: 15.0},
-			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.59, exportRate: 0.50, loadKWH: 0.2, solarKWH: 0.0, minSOC: 15.0},
-			{startTime: now.Add(4 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.59, exportRate: 0.08, loadKWH: 0.32, solarKWH: 0.0, minSOC: 15.0},
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.24, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 0.2, solarKWH: 0.0, minSOC: 15.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.24, exportRate: 0.02, batteryExportRate: 0.02, loadKWH: 0.2, solarKWH: 0.55, minSOC: 15.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.59, exportRate: 0.50, batteryExportRate: 0.50, loadKWH: 0.2, solarKWH: 0.0, minSOC: 15.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.59, exportRate: 0.08, batteryExportRate: 0.08, loadKWH: 0.32, solarKWH: 0.0, minSOC: 15.0},
 		}
 		blocksFine := []timelineBlock{
-			{startIdx: 0, endIdx: 0, minImportRate: 0.24, avgImportRate: 0.24, maxImportRate: 0.24, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 15.0, durationHours: 2.0, isLowestPrice: true},
-			{startIdx: 1, endIdx: 1, minImportRate: 0.24, avgImportRate: 0.24, maxImportRate: 0.24, minExportRate: 0.02, maxExportRate: 0.02, minSOC: 15.0, durationHours: 1.0, netSolarKWH: 0.35, isLowestPrice: true},
-			{startIdx: 2, endIdx: 2, minImportRate: 0.59, avgImportRate: 0.59, maxImportRate: 0.59, minExportRate: 0.50, maxExportRate: 0.50, minSOC: 15.0, durationHours: 1.0, isHighestPrice: true},
-			{startIdx: 3, endIdx: 3, minImportRate: 0.59, avgImportRate: 0.59, maxImportRate: 0.59, minExportRate: 0.08, maxExportRate: 0.08, minSOC: 15.0, durationHours: 1.0, isHighestPrice: true},
+			{startIdx: 0, endIdx: 0, minImportRate: 0.24, avgImportRate: 0.24, maxImportRate: 0.24, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 15.0, durationHours: 2.0, isLowestPrice: true},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.24, avgImportRate: 0.24, maxImportRate: 0.24, minExportRate: 0.02, maxExportRate: 0.02, minBatteryExportRate: 0.02, maxBatteryExportRate: 0.02, minSOC: 15.0, durationHours: 1.0, netSolarKWH: 0.35, isLowestPrice: true},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.59, avgImportRate: 0.59, maxImportRate: 0.59, minExportRate: 0.50, maxExportRate: 0.50, minBatteryExportRate: 0.50, maxBatteryExportRate: 0.50, minSOC: 15.0, durationHours: 1.0, isHighestPrice: true},
+			{startIdx: 3, endIdx: 3, minImportRate: 0.59, avgImportRate: 0.59, maxImportRate: 0.59, minExportRate: 0.08, maxExportRate: 0.08, minBatteryExportRate: 0.08, maxBatteryExportRate: 0.08, minSOC: 15.0, durationHours: 1.0, isHighestPrice: true},
 		}
 		state18kWh := planState{soc: 50.0, energyKWH: 9.0, capacityKWH: 18.0, maxChargeKW: 15.0, maxDischargeKW: 18.0, time: now}
 		choicesFine := []blockActionChoice{
@@ -2444,14 +2594,15 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				}
 			}
 			timelineSplit[i] = planInterval{
-				startTime:     ts,
-				endTime:       ts.Add(20 * time.Minute),
-				durationHours: 20.0 / 60.0,
-				importRate:    imp,
-				exportRate:    exp,
-				solarKWH:      sol,
-				loadKWH:       load,
-				minSOC:        30.0,
+				startTime:         ts,
+				endTime:           ts.Add(20 * time.Minute),
+				durationHours:     20.0 / 60.0,
+				importRate:        imp,
+				exportRate:        exp,
+				batteryExportRate: exp,
+				solarKWH:          sol,
+				loadKWH:           load,
+				minSOC:            30.0,
 			}
 		}
 
@@ -2567,14 +2718,15 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				solar = 0.0
 			}
 			timelineStandby[i] = planInterval{
-				startTime:     ti,
-				endTime:       ti.Add(20 * time.Minute),
-				durationHours: 1.0 / 3.0,
-				importRate:    imp,
-				exportRate:    exp,
-				loadKWH:       load,
-				solarKWH:      solar,
-				minSOC:        30.0,
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        imp,
+				exportRate:        exp,
+				batteryExportRate: exp,
+				loadKWH:           load,
+				solarKWH:          solar,
+				minSOC:            30.0,
 				price: types.Price{
 					TSStart:                       ti,
 					TSEnd:                         ti.Add(20 * time.Minute),
@@ -2652,6 +2804,40 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		assert.InDelta(t, 30.0, path2120.states[68].soc, 1.0,
 			"Battery must finish On-Peak at ~30.0%% reserve floor from the 21:20 rolling poll")
 	})
+
+	t.Run("BuyAllSellAll_DoesNotShedStandbySOCToMakeRoomForSolar", func(t *testing.T) {
+		t.Parallel()
+		vosPrice := types.Price{
+			DollarsPerKWH:                        0.1168,
+			GenerationCreditDollarsPerKWH:        0.1289,
+			SeparateGenerationCredit:             true,
+			BatteryGenerationCreditDollarsPerKWH: 0.00,
+			SeparateBatteryGenerationCredit:      true,
+			BuyAllSellAll:                        true,
+		}
+		tl := []planInterval{
+			// Dark block 0 (3h, 1 kWh/h load) followed by sunny block 1 (3h, 4 kWh/h solar, 1 kWh/h load)
+			{startTime: now, endTime: now.Add(3 * time.Hour), durationHours: 3.0, price: vosPrice, importRate: 0.1168, exportRate: 0.1289, batteryExportRate: 0.0, loadKWH: 3.0, solarKWH: 0.0, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 3.0, price: vosPrice, importRate: 0.1168, exportRate: 0.1289, batteryExportRate: 0.0, loadKWH: 3.0, solarKWH: 12.0, minSOC: 20.0},
+		}
+		blks := []timelineBlock{
+			{startIdx: 0, endIdx: 0, durationHours: 3.0, minSOC: 20.0, minImportRate: 0.1168, avgImportRate: 0.1168, maxImportRate: 0.1168, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, isLowestPrice: true, netSolarKWH: -3.0},
+			{startIdx: 1, endIdx: 1, durationHours: 3.0, minSOC: 20.0, minImportRate: 0.1168, avgImportRate: 0.1168, maxImportRate: 0.1168, minExportRate: 0.1289, maxExportRate: 0.1289, buyAllSellAll: true, isLowestPrice: true, netSolarKWH: 9.0},
+		}
+		init60 := planState{time: now, soc: 60.0, energyKWH: 8.1, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0}
+		vosCfg := types.Settings{MinBatterySOC: 20.0, GridExportSolar: true}
+		postH := postHorizonValuation{knownPostHorizonRate: 0.1168}
+
+		choices := []blockActionChoice{
+			{actionType: blockActionStandby, targetSOC: 0},
+			{actionType: blockActionStandby, targetSOC: 0},
+		}
+		path := optimizeBlockTargets(ctx, choices, blks, tl, init60, nil, postH, vosCfg, types.SystemStatus{}, nil, 0, nil)
+		require.NotNil(t, path)
+		assert.Equal(t, types.BatteryModeStandby, path.actions[0].batteryMode,
+			"Pass 2 optimizeBlockTargets must not shed Standby SOC into Load to make room for solar on BuyAllSellAll")
+		assert.InDelta(t, 60.0, path.states[1].soc, 0.01)
+	})
 }
 
 // TestPlanConstraintMechanisms evaluates the elimination of arbitrary penalties in favor of
@@ -2725,9 +2911,9 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		}
 
 		timeline := []planInterval{
-			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.2, minSOC: 25.0},
-			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.2, minSOC: 25.0},
-			{startTime: now.Add(40 * time.Minute), endTime: now.Add(time.Hour), durationHours: 20.0 / 60.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.2, minSOC: 25.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.2998, exportRate: 0.2948, batteryExportRate: 0.2948, loadKWH: 0.2, minSOC: 25.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.2075, exportRate: 0.2025, batteryExportRate: 0.2025, loadKWH: 0.2, minSOC: 25.0},
+			{startTime: now.Add(40 * time.Minute), endTime: now.Add(time.Hour), durationHours: 20.0 / 60.0, importRate: 0.2075, exportRate: 0.2025, batteryExportRate: 0.2025, loadKWH: 0.2, minSOC: 25.0},
 		}
 
 		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, sett, status, nil, nil)
@@ -3548,8 +3734,8 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		// blockActionStandby is allowed and expands to BatteryModeStandby so the battery can hold its 72% SOC rather than
 		// discharging to 60% at $0.12/kWh and immediately recharging from the grid at $0.12/kWh in Step 1.
 		timeline := []planInterval{
-			{durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 1.5, minSOC: 60.0},
-			{durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 1.5, minSOC: 75.0},
+			{durationHours: 1.0, importRate: 0.12, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 1.5, minSOC: 60.0},
+			{durationHours: 1.0, importRate: 0.12, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 1.5, minSOC: 75.0},
 		}
 		st := planState{
 			soc:            72.0,
@@ -3579,8 +3765,8 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			MinArbitrageDifferenceDollarsPerKWH: 0.03,
 		}
 		timeline := []planInterval{
-			{durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
-			{durationHours: 1.0, importRate: 0.125, exportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
+			{durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
+			{durationHours: 1.0, importRate: 0.125, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
 		}
 		blocks := buildTimelineBlocks(ctx, timeline, nil, arbSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocks, 2)
@@ -3621,8 +3807,8 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		// - Disallowed when MinArbitrageDifference is unset (0 -> $0.02 default).
 		// - Allowed when user explicitly lowers MinArbitrageDifference to $0.01/kWh.
 		narrowTimeline := []planInterval{
-			{durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
-			{durationHours: 1.0, importRate: 0.115, exportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
+			{durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
+			{durationHours: 1.0, importRate: 0.115, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
 		}
 		defaultArbSettings := arbSettings
 		defaultArbSettings.MinArbitrageDifferenceDollarsPerKWH = 0
@@ -3659,10 +3845,10 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			},
 		}
 		timeline := []planInterval{
-			{startTime: t0100, endTime: t0100.Add(20 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.160, exportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.160}},
-			{startTime: t0100.Add(20 * time.Minute), endTime: t0100.Add(40 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.120, exportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.120}},
-			{startTime: t0100.Add(40 * time.Minute), endTime: t0100.Add(60 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.080, exportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.080}},
-			{startTime: t0100.Add(60 * time.Minute), endTime: t0100.Add(80 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.040, exportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100.Add(time.Hour), TSEnd: t0100.Add(2 * time.Hour), DollarsPerKWH: 0.040}},
+			{startTime: t0100, endTime: t0100.Add(20 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.160, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.160}},
+			{startTime: t0100.Add(20 * time.Minute), endTime: t0100.Add(40 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.120, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.120}},
+			{startTime: t0100.Add(40 * time.Minute), endTime: t0100.Add(60 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.080, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.080}},
+			{startTime: t0100.Add(60 * time.Minute), endTime: t0100.Add(80 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.040, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.3, minSOC: 50.0, price: types.Price{TSStart: t0100.Add(time.Hour), TSEnd: t0100.Add(2 * time.Hour), DollarsPerKWH: 0.040}},
 		}
 		initial := planState{
 			time:           t0100,
@@ -3691,8 +3877,8 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		// already deferred charging during a deficit and forces immediate charging at step 0.
 		t0145 := time.Date(2026, 10, 20, 1, 45, 0, 0, chiLoc)
 		timeline0145 := []planInterval{
-			{startTime: t0145, endTime: t0145.Add(15 * time.Minute), durationHours: 15.0 / 60.0, importRate: 0.060, exportRate: 0.020, loadKWH: 0.25, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.060}},
-			{startTime: t0145.Add(15 * time.Minute), endTime: t0145.Add(35 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.040, exportRate: 0.020, loadKWH: 0.30, minSOC: 50.0, price: types.Price{TSStart: t0100.Add(time.Hour), TSEnd: t0100.Add(2 * time.Hour), DollarsPerKWH: 0.040}},
+			{startTime: t0145, endTime: t0145.Add(15 * time.Minute), durationHours: 15.0 / 60.0, importRate: 0.060, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.25, minSOC: 50.0, price: types.Price{TSStart: t0100, TSEnd: t0100.Add(time.Hour), DollarsPerKWH: 0.060}},
+			{startTime: t0145.Add(15 * time.Minute), endTime: t0145.Add(35 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.040, exportRate: 0.020, batteryExportRate: 0.020, loadKWH: 0.30, minSOC: 50.0, price: types.Price{TSStart: t0100.Add(time.Hour), TSEnd: t0100.Add(2 * time.Hour), DollarsPerKWH: 0.040}},
 		}
 		initial0145 := initial
 		initial0145.time = t0145
@@ -3931,14 +4117,15 @@ func BenchmarkSearchOptimalPlanBlocks(b *testing.B) {
 			rate = 0.45 // peak
 		}
 		timeline[i] = planInterval{
-			startTime:     tStep,
-			endTime:       tStep.Add(time.Hour),
-			durationHours: 1.0,
-			importRate:    rate,
-			exportRate:    0.05,
-			loadKWH:       1.5,
-			solarKWH:      0.0,
-			minSOC:        20.0,
+			startTime:         tStep,
+			endTime:           tStep.Add(time.Hour),
+			durationHours:     1.0,
+			importRate:        rate,
+			exportRate:        0.05,
+			batteryExportRate: 0.05,
+			loadKWH:           1.5,
+			solarKWH:          0.0,
+			minSOC:            20.0,
 		}
 	}
 

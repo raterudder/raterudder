@@ -75,6 +75,20 @@ type Price struct {
 	// where the generation credit is either zero or separate from the base price.
 	SeparateGenerationCredit bool `json:"separateGenerationCredit,omitempty"`
 
+	// BatteryGenerationCreditDollarsPerKWH is the credit given for electricity discharged
+	// from the battery to the grid when SeparateBatteryGenerationCredit is true.
+	BatteryGenerationCreditDollarsPerKWH float64 `json:"batteryGenerationCreditDollarsPerKWH,omitempty"`
+
+	// SeparateBatteryGenerationCredit is true if battery exports to the grid have a separate
+	// credit rate from solar generation credits (e.g. $0.00/kWh when battery exports are uncredited).
+	// If false, battery exports fall back to the normal export rate.
+	SeparateBatteryGenerationCredit bool `json:"separateBatteryGenerationCredit,omitempty"`
+
+	// BuyAllSellAll is true for dual-metered / Value-of-Solar tariffs (such as Austin Energy)
+	// where 100% of uncurtailed solar PV production earns GenerationCreditDollarsPerKWH and
+	// all on-site consumption (including solar consumed by the home or battery) is billed at ImportRateDollars().
+	BuyAllSellAll bool `json:"buyAllSellAll,omitempty"`
+
 	// GenerationAdjustmentDollarsPerKWH is an adjustment applied to generated energy.
 	// For Connecticut Eversource, exports are via the Renewable Energy Solutions Rider,
 	// which applies an adjustment fee/credit based on the customer's solar tariff application year.
@@ -121,7 +135,7 @@ func (p Price) ImportRateDollars() float64 {
 // ExportRateDollars returns the credit per kWh in dollars for exporting electricity to the grid,
 // taking into account flat 1:1 net metering valuation across allPrices when configured in settings.
 func (p Price) ExportRateDollars(settings Settings, allPrices []Price) float64 {
-	if settings.UtilityRateOptions.IsFlatNetMetering() {
+	if !p.BuyAllSellAll && settings.UtilityRateOptions.IsFlatNetMetering() {
 		switch settings.SolarNetMeteringCreditsValue {
 		case "highest":
 			maxCost := p.DollarsPerKWH + p.GridUseDollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
@@ -150,6 +164,15 @@ func (p Price) ExportRateDollars(settings Settings, allPrices []Price) float64 {
 		return p.GenerationCreditDollarsPerKWH
 	}
 	return p.DollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
+}
+
+// BatteryExportRateDollars returns the credit per kWh in dollars for discharging battery
+// energy to the grid, falling back to ExportRateDollars when SeparateBatteryGenerationCredit is false.
+func (p Price) BatteryExportRateDollars(settings Settings, allPrices []Price) float64 {
+	if p.SeparateBatteryGenerationCredit {
+		return p.BatteryGenerationCreditDollarsPerKWH
+	}
+	return p.ExportRateDollars(settings, allPrices)
 }
 
 // UtilityRateOptions represents the options for the utility rate.
@@ -338,6 +361,13 @@ type UtilityFeesPeriod struct {
 	// price for some periods and not for others in which case this would be used.
 	SeparateGenerationCredit bool `json:"separateGenerationCredit,omitempty"`
 
+	// SeparateBatteryGenerationCredit is true if this period defines a separate generation credit
+	// specifically for battery exports to the grid.
+	SeparateBatteryGenerationCredit bool `json:"separateBatteryGenerationCredit,omitempty"`
+
+	// BuyAllSellAll marks prices in this period as dual-metered Buy-All / Sell-All.
+	BuyAllSellAll bool `json:"buyAllSellAll,omitempty"`
+
 	// DollarsPerKWHPreMultiple is multiplied against the base price before other fees
 	// and then added to the total. In general, this should be less than 1.
 	DollarsPerKWHPreMultiple float64 `json:"dollarsPerKWHPreMultiple,omitempty"`
@@ -369,8 +399,22 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 	if up.GenerationAdjustmentDollarsPerKWH != 0 {
 		p.GenerationAdjustmentDollarsPerKWH += up.GenerationAdjustmentDollarsPerKWH
 	}
+	if up.BuyAllSellAll {
+		p.BuyAllSellAll = true
+	}
 
 	switch {
+	case up.SeparateBatteryGenerationCredit:
+		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
+			if originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 {
+				p.BatteryGenerationCreditDollarsPerKWH = originalPrice.BatteryGenerationCreditDollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
+			} else {
+				p.BatteryGenerationCreditDollarsPerKWH = originalPrice.DollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
+			}
+		} else {
+			p.BatteryGenerationCreditDollarsPerKWH += up.DollarsPerKWH
+		}
+		p.SeparateBatteryGenerationCredit = true
 	case up.SeparateGenerationCredit:
 		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.GenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
 			if originalPrice.GenerationCreditDollarsPerKWH != 0 {
@@ -395,7 +439,7 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 	}
 
 	// ignore names for export periods and fees periods
-	if !up.SeparateGenerationCredit && !up.GridAdditional && up.Name != "" {
+	if !up.SeparateGenerationCredit && !up.SeparateBatteryGenerationCredit && !up.GridAdditional && up.Name != "" {
 		p.PeriodName = up.Name
 	}
 

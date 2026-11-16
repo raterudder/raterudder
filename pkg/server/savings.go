@@ -783,21 +783,25 @@ func (s *Server) getSiteSavingsWithSettings(
 					HadSolarNoExport:   stat.HadSolarNoExport,
 				}
 				intervals = append(intervals, savingsSubInterval{
-					stat:            scaledStat,
-					price:           hp,
-					duration:        dur,
-					gridImportPrice: hp.ImportRateDollars(),
-					gridExportPrice: hp.ExportRateDollars(settings.Settings, prices),
+					stat:                   scaledStat,
+					price:                  hp,
+					duration:               dur,
+					gridImportPrice:        hp.ImportRateDollars(),
+					gridExportPrice:        hp.ExportRateDollars(settings.Settings, prices),
+					gridBatteryExportPrice: hp.BatteryExportRateDollars(settings.Settings, prices),
+					buyAllSellAll:          hp.BuyAllSellAll,
 				})
 			}
 		} else if len(hourPrices) > 0 {
 			currentPrice := hourPrices[0]
 			intervals = append(intervals, savingsSubInterval{
-				stat:            stat,
-				price:           currentPrice,
-				duration:        1.0,
-				gridImportPrice: currentPrice.ImportRateDollars(),
-				gridExportPrice: currentPrice.ExportRateDollars(settings.Settings, prices),
+				stat:                   stat,
+				price:                  currentPrice,
+				duration:               1.0,
+				gridImportPrice:        currentPrice.ImportRateDollars(),
+				gridExportPrice:        currentPrice.ExportRateDollars(settings.Settings, prices),
+				gridBatteryExportPrice: currentPrice.BatteryExportRateDollars(settings.Settings, prices),
+				buyAllSellAll:          currentPrice.BuyAllSellAll,
 			})
 		} else {
 			continue
@@ -889,8 +893,23 @@ func (s *Server) getSiteSavingsWithSettings(
 				simShadowSOC = actualSOC
 			}
 
+			// Legacy EnergyStats records (or ESS integrations that only report total meter export
+			// GridExportKWH without split SolarToGridKWH / BatteryToGridKWH telemetry) leave both
+			// split fields at 0. When that happens, infer the split by attributing up to net solar
+			// surplus (SolarKWH - SolarToHomeKWH - SolarToBatteryKWH) to solar export and any
+			// remaining GridExportKWH to battery export.
+			solarExportKWH := subStat.SolarToGridKWH
+			batExportKWH := subStat.BatteryToGridKWH
+			if solarExportKWH == 0 && batExportKWH == 0 && subStat.GridExportKWH > 0 {
+				maxSolarSurplus := max(0, subStat.SolarKWH-subStat.SolarToHomeKWH-subStat.SolarToBatteryKWH)
+				solarExportKWH = min(subStat.GridExportKWH, maxSolarSurplus)
+				batExportKWH = max(0, subStat.GridExportKWH-solarExportKWH)
+			}
+
 			shadowImportKWH := activeFraction*simImportKWH + ignoredFraction*subStat.GridImportKWH
-			shadowExportKWH := activeFraction*simExportKWH + ignoredFraction*subStat.GridExportKWH
+			shadowSolarExportKWH := activeFraction*simExportKWH + ignoredFraction*solarExportKWH
+			shadowBatExportKWH := ignoredFraction * batExportKWH
+			shadowExportKWH := shadowSolarExportKWH + shadowBatExportKWH
 			rawShadowSOC := prevShadowSOC + activeFraction*(simShadowSOC-prevShadowSOC) + ignoredFraction*(actualSOC-prevActualSOC)
 			effectiveFloorSOC := min(minSOC, actualSOC)
 			// TODO: When an ignored interval (such as a VPP export event) drains the actual battery
@@ -925,13 +944,33 @@ func (s *Server) getSiteSavingsWithSettings(
 					dt.stats.GridExported += subStat.GridExportKWH
 					dt.stats.BatteryUsed += subStat.BatteryUsedKWH
 
-					dt.stats.Cost += subStat.GridImportKWH * interval.gridImportPrice
-					dt.stats.Credit += subStat.GridExportKWH * interval.gridExportPrice
-					dt.stats.GridOnlyCostDollars += effectiveHomeKWH * interval.gridImportPrice
-					dt.stats.SelfConsumptionCostDollars += shadowImportKWH * interval.gridImportPrice
-					dt.stats.SelfConsumptionCreditDollars += shadowExportKWH * interval.gridExportPrice
-					dt.stats.SolarSavings += subStat.SolarToHomeKWH * interval.gridImportPrice
-					dt.stats.AvoidedCost += subStat.BatteryToHomeKWH * interval.gridImportPrice
+					if interval.buyAllSellAll {
+						solarConsumedOnSiteKWH := max(0, subStat.SolarKWH-solarExportKWH)
+						shadowSolarConsumedOnSiteKWH := max(0, subStat.SolarKWH-shadowSolarExportKWH)
+						dt.stats.Cost += (solarConsumedOnSiteKWH + subStat.GridImportKWH) * interval.gridImportPrice
+						dt.stats.Credit += subStat.SolarKWH*interval.gridExportPrice + batExportKWH*interval.gridBatteryExportPrice
+						dt.stats.GridOnlyCostDollars += effectiveHomeKWH * interval.gridImportPrice
+						dt.stats.SelfConsumptionCostDollars += (shadowSolarConsumedOnSiteKWH + shadowImportKWH) * interval.gridImportPrice
+						dt.stats.SelfConsumptionCreditDollars += subStat.SolarKWH*interval.gridExportPrice + shadowBatExportKWH*interval.gridBatteryExportPrice
+						dt.stats.SolarSavings += subStat.SolarKWH * interval.gridExportPrice
+						dt.stats.AvoidedCost += subStat.BatteryToHomeKWH * interval.gridImportPrice
+					} else {
+						dt.stats.Cost += subStat.GridImportKWH * interval.gridImportPrice
+						if interval.price.SeparateBatteryGenerationCredit {
+							dt.stats.Credit += solarExportKWH*interval.gridExportPrice + batExportKWH*interval.gridBatteryExportPrice
+						} else {
+							dt.stats.Credit += subStat.GridExportKWH * interval.gridExportPrice
+						}
+						dt.stats.GridOnlyCostDollars += effectiveHomeKWH * interval.gridImportPrice
+						dt.stats.SelfConsumptionCostDollars += shadowImportKWH * interval.gridImportPrice
+						if interval.price.SeparateBatteryGenerationCredit {
+							dt.stats.SelfConsumptionCreditDollars += shadowSolarExportKWH*interval.gridExportPrice + shadowBatExportKWH*interval.gridBatteryExportPrice
+						} else {
+							dt.stats.SelfConsumptionCreditDollars += shadowExportKWH * interval.gridExportPrice
+						}
+						dt.stats.SolarSavings += subStat.SolarToHomeKWH * interval.gridImportPrice
+						dt.stats.AvoidedCost += subStat.BatteryToHomeKWH * interval.gridImportPrice
+					}
 					break
 				}
 			}
@@ -990,11 +1029,13 @@ type dailySavingsTracker struct {
 }
 
 type savingsSubInterval struct {
-	stat            types.EnergyStats
-	price           types.Price
-	duration        float64
-	gridImportPrice float64
-	gridExportPrice float64
+	stat                   types.EnergyStats
+	price                  types.Price
+	duration               float64
+	gridImportPrice        float64
+	gridExportPrice        float64
+	gridBatteryExportPrice float64
+	buyAllSellAll          bool
 }
 
 func calculateNextDayValuationPrice(
@@ -1032,10 +1073,11 @@ func calculateNextDayValuationPrice(
 	lowSOC := max(reserveSOC, min(dt.endBatterySOC, dt.endShadowSOC))
 	highSOC := max(lowSOC, max(dt.endBatterySOC, dt.endShadowSOC))
 	type valuationInterval struct {
-		loadKWH     float64
-		solarKWH    float64
-		importPrice float64
-		exportPrice float64
+		loadKWH       float64
+		solarKWH      float64
+		importPrice   float64
+		exportPrice   float64
+		buyAllSellAll bool
 	}
 
 	// storedEnergyDeltaKWH is measured in DC battery SOC kWh, which yields oneWayEff kWh
@@ -1086,7 +1128,11 @@ func calculateNextDayValuationPrice(
 				dHigh += chargeHighDC
 				convergedSolarDC := max(0, chargeLowDC-chargeHighDC)
 				if gridExportSolar {
-					valueDiffDollars += convergedSolarDC * iv.exportPrice * oneWayEff
+					if iv.buyAllSellAll {
+						valueDiffDollars += (convergedSolarDC / oneWayEff) * iv.importPrice
+					} else {
+						valueDiffDollars += convergedSolarDC * iv.exportPrice * oneWayEff
+					}
 				}
 			}
 			netLoad := max(0, iv.loadKWH-iv.solarKWH)
@@ -1126,10 +1172,11 @@ func calculateNextDayValuationPrice(
 		if !ts.Before(p.End) && ts.Before(nextDayEnd) {
 			homeKWH := max(iv.stat.HomeKWH, iv.stat.SolarToHomeKWH+iv.stat.BatteryToHomeKWH)
 			actualValIntervals = append(actualValIntervals, valuationInterval{
-				loadKWH:     homeKWH,
-				solarKWH:    iv.stat.SolarKWH,
-				importPrice: iv.gridImportPrice,
-				exportPrice: iv.gridExportPrice,
+				loadKWH:       homeKWH,
+				solarKWH:      iv.stat.SolarKWH,
+				importPrice:   iv.gridImportPrice,
+				exportPrice:   iv.gridExportPrice,
+				buyAllSellAll: iv.buyAllSellAll,
 			})
 		}
 	}
@@ -1139,6 +1186,7 @@ func calculateNextDayValuationPrice(
 
 	// 2. Check latestActionWithPlan future periods (only when p.End is near/within the plan horizon)
 	if latestActionWithPlan.Plan != nil && len(latestActionWithPlan.Plan.Periods) > 0 {
+		planBuyAllSellAll := len(prices) > 0 && prices[len(prices)-1].BuyAllSellAll
 		evalPlanWindow := func(filter func(types.PlanPeriod) bool) (float64, bool) {
 			var planValIntervals []valuationInterval
 			for _, pp := range latestActionWithPlan.Plan.Periods {
@@ -1146,10 +1194,11 @@ func calculateNextDayValuationPrice(
 					continue
 				}
 				planValIntervals = append(planValIntervals, valuationInterval{
-					loadKWH:     pp.LoadKWH,
-					solarKWH:    pp.SolarKWH,
-					importPrice: pp.ImportDollars,
-					exportPrice: pp.ExportDollars,
+					loadKWH:       pp.LoadKWH,
+					solarKWH:      pp.SolarKWH,
+					importPrice:   pp.ImportDollars,
+					exportPrice:   pp.ExportDollars,
+					buyAllSellAll: planBuyAllSellAll,
 				})
 			}
 			return simulateValuationWindow(planValIntervals)

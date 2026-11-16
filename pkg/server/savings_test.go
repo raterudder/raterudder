@@ -1016,6 +1016,182 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 24.0, savings.HomeUsed, 0.001)
 		assert.InDelta(t, 2.40, savings.Cost, 0.001)
 	})
+
+	t.Run("SeparateBatteryGenerationCredit splits solar and battery export credits", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.GridExportSolar = true
+			m.settings.GridExportBatteries = true
+			m.prices = []types.Price{
+				{
+					TSStart:                              start,
+					TSEnd:                                start.Add(time.Hour),
+					DollarsPerKWH:                        0.20,
+					GenerationCreditDollarsPerKWH:        0.25,
+					SeparateGenerationCredit:             true,
+					BatteryGenerationCreditDollarsPerKWH: 0.00,
+					SeparateBatteryGenerationCredit:      true,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:      start,
+					MinBatterySOC:    50,
+					MaxBatterySOC:    80,
+					HomeKWH:          1.0,
+					SolarKWH:         4.0,
+					SolarToHomeKWH:   1.0,
+					SolarToGridKWH:   3.0,
+					BatteryUsedKWH:   2.0,
+					BatteryToGridKWH: 2.0,
+					GridExportKWH:    5.0,
+				},
+			}
+		})
+		// Only the 3 kWh of solar export earns $0.25 ($0.75); the 2 kWh of battery export earns $0.00.
+		assert.InDelta(t, 0.75, savings.Credit, 1e-6)
+		assert.InDelta(t, 0.0, savings.Cost, 1e-6)
+	})
+
+	t.Run("BuyAllSellAll Value of Solar credits all PV and captures Standby RTE savings", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.GridExportSolar = true
+			m.actions = []types.Action{
+				{
+					Timestamp:    start.Add(-24 * time.Hour),
+					SystemStatus: types.SystemStatus{BatteryCapacityKWH: 15.0, BatterySOC: 100.0},
+				},
+			}
+			// Start both actual and shadow batteries at 20% SOC: actual holds in Standby (exporting all 10 kWh solar
+			// and importing 9 kWh at night), while shadow charges 10 kWh solar into the battery (90% RTE) and supplies 9 kWh at night.
+			m.prices = []types.Price{
+				{
+					TSStart:                              start,
+					TSEnd:                                start.Add(time.Hour),
+					DollarsPerKWH:                        0.1168,
+					GenerationCreditDollarsPerKWH:        0.1289,
+					SeparateGenerationCredit:             true,
+					BatteryGenerationCreditDollarsPerKWH: 0.00,
+					SeparateBatteryGenerationCredit:      true,
+					BuyAllSellAll:                        true,
+				},
+				{
+					TSStart:                              start.Add(time.Hour),
+					TSEnd:                                start.Add(2 * time.Hour),
+					DollarsPerKWH:                        0.1168,
+					GenerationCreditDollarsPerKWH:        0.1289,
+					SeparateGenerationCredit:             true,
+					BatteryGenerationCreditDollarsPerKWH: 0.00,
+					SeparateBatteryGenerationCredit:      true,
+					BuyAllSellAll:                        true,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					// Hour 0 (noon): 10 kWh solar, 0 home load; actual battery parked at 20% in Standby -> exports all 10 kWh solar
+					TSHourStart:    start,
+					MinBatterySOC:  20,
+					MaxBatterySOC:  20,
+					HomeKWH:        0.0,
+					SolarKWH:       10.0,
+					SolarToGridKWH: 10.0,
+					GridExportKWH:  10.0,
+				},
+				{
+					// Hour 1 (night): 9 kWh home load, 0 solar; actual battery stays at 20% -> imports 9 kWh from grid
+					TSHourStart:   start.Add(time.Hour),
+					MinBatterySOC: 20,
+					MaxBatterySOC: 20,
+					HomeKWH:       9.0,
+					GridImportKWH: 9.0,
+				},
+			}
+		})
+		// Actual bill: 10 kWh PV * $0.1289 = $1.289 credit; (0 on-site solar + 9 grid import) * $0.1168 = $1.0512 cost
+		assert.InDelta(t, 1.289, savings.Credit, 1e-6)
+		assert.InDelta(t, 1.0512, savings.Cost, 1e-6)
+		assert.InDelta(t, 1.289, savings.SolarSavings, 1e-6)
+		// Shadow self-consumption absorbed all 10 kWh solar (paying 10 * $0.1168 = $1.1680) and supplied 9 kWh at night (0 grid import),
+		// ending both actual and shadow at 20% SOC -> RateRudder saved the exact $0.1168 round-trip loss!
+		assert.InDelta(t, 1.1680, savings.SelfConsumptionCostDollars, 1e-6)
+		assert.InDelta(t, 0.1168, savings.RateRudderSavingsDollars, 1e-4)
+		assert.InDelta(t, 1.289, savings.TotalSavingsDollars, 1e-4)
+	})
+
+	t.Run("BuyAllSellAll ignored VPP battery export does not distort shadow solar consumption", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.GridExportSolar = true
+			m.prices = []types.Price{
+				{
+					TSStart:                              start,
+					TSEnd:                                start.Add(time.Hour),
+					DollarsPerKWH:                        0.15788,
+					GenerationCreditDollarsPerKWH:        0.1289,
+					SeparateGenerationCredit:             true,
+					BatteryGenerationCreditDollarsPerKWH: 0.00,
+					SeparateBatteryGenerationCredit:      true,
+					BuyAllSellAll:                        true,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					// VPP hour (ignoredFraction = 1.0): 2 kWh solar consumed by home, 5 kWh battery VPP export to grid
+					TSHourStart:      start,
+					MinBatterySOC:    30,
+					MaxBatterySOC:    80,
+					HomeKWH:          2.0,
+					SolarKWH:         2.0,
+					SolarToHomeKWH:   2.0,
+					BatteryUsedKWH:   5.0,
+					BatteryToGridKWH: 5.0,
+					VPPExportKWH:     5.0,
+					GridExportKWH:    5.0,
+				},
+			}
+		})
+		// Both actual and shadow must see 2 kWh of on-site solar consumption (2 * $0.15788) and 2 * $0.1289 VoS credit,
+		// without subtracting the 5 kWh battery export from solar consumption or crediting battery export at $0.1289.
+		assert.InDelta(t, 2.0*0.15788, savings.Cost, 1e-6)
+		assert.InDelta(t, 2.0*0.15788, savings.SelfConsumptionCostDollars, 1e-6)
+		assert.InDelta(t, 2.0*0.1289, savings.Credit, 1e-6)
+		assert.InDelta(t, 2.0*0.1289, savings.SelfConsumptionCreditDollars, 1e-6)
+	})
+
+	t.Run("SeparateBatteryGenerationCredit legacy GridExportKWH inference and ignored export isolation", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.GridExportSolar = true
+			m.settings.GridExportBatteries = true
+			m.prices = []types.Price{
+				{
+					TSStart:                              start,
+					TSEnd:                                start.Add(time.Hour),
+					DollarsPerKWH:                        0.20,
+					GenerationCreditDollarsPerKWH:        0.30,
+					SeparateGenerationCredit:             true,
+					BatteryGenerationCreditDollarsPerKWH: 0.05,
+					SeparateBatteryGenerationCredit:      true,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					// Legacy telemetry (SolarToGridKWH == 0 && BatteryToGridKWH == 0) during an ignored VPP hour:
+					// SolarKWH=4, SolarToHomeKWH=1, SolarToBatteryKWH=0 -> maxSolarSurplus=3 kWh solar export @ $0.30,
+					// and remaining GridExportKWH (5 - 3 = 2 kWh) inferred as battery export @ $0.05.
+					TSHourStart:    start,
+					MinBatterySOC:  50,
+					MaxBatterySOC:  70,
+					HomeKWH:        1.0,
+					SolarKWH:       4.0,
+					SolarToHomeKWH: 1.0,
+					BatteryUsedKWH: 2.0,
+					VPPExportKWH:   2.0,
+					GridExportKWH:  5.0,
+				},
+			}
+		})
+		// 3 kWh solar * $0.30 + 2 kWh battery * $0.05 = $0.90 + $0.10 = $1.00 on both actual and ignored-blended shadow!
+		assert.InDelta(t, 1.00, savings.Credit, 1e-6)
+		assert.InDelta(t, 1.00, savings.SelfConsumptionCreditDollars, 1e-6)
+	})
 }
 
 func TestHandleHistorySavingsAll(t *testing.T) {

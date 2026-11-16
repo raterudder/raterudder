@@ -735,5 +735,44 @@ func TestApplyUtilityFeesPeriods(t *testing.T) {
 		assert.Equal(t, 0.065, result.GridUseDollarsPerKWH)
 		assert.InDelta(t, 1.80, result.GenerationCreditDollarsPerKWH, 0.0001)
 		assert.True(t, result.SeparateGenerationCredit)
+		assert.InDelta(t, 1.80, result.BatteryExportRateDollars(Settings{}, nil), 0.0001)
+	})
+
+	t.Run("Separate battery generation credit and BuyAllSellAll", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{
+				TimePeriod:    TimePeriod{Name: "On-Peak"},
+				DollarsPerKWH: 0.15788,
+				BuyAllSellAll: true,
+				Description:   "Retail On-Peak",
+			},
+			{
+				TimePeriod:               TimePeriod{Name: "VoS"},
+				DollarsPerKWH:            0.1289,
+				SeparateGenerationCredit: true,
+				Description:              "Value of Solar",
+			},
+			{
+				TimePeriod:                      TimePeriod{Name: "Battery"},
+				DollarsPerKWH:                   0.0,
+				SeparateBatteryGenerationCredit: true,
+				Description:                     "Battery Export Credit",
+			},
+		}
+		orig := Price{TSStart: testTime}
+		result, err := ApplyUtilityFeesPeriods(orig, periods)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.15788, result.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "On-Peak", result.PeriodName)
+		assert.True(t, result.BuyAllSellAll)
+		assert.True(t, result.SeparateGenerationCredit)
+		assert.InDelta(t, 0.1289, result.ExportRateDollars(Settings{}, nil), 1e-6)
+		// Stale NetMeteringCredits setting must not override BuyAllSellAll VoS rate
+		assert.InDelta(t, 0.1289, result.ExportRateDollars(Settings{UtilityRateOptions: UtilityRateOptions{NetMeteringCredits: true}}, nil), 1e-6)
+		assert.True(t, result.SeparateBatteryGenerationCredit)
+		assert.InDelta(t, 0.0, result.BatteryExportRateDollars(Settings{}, nil), 1e-6)
+		// BuyAllSellAll without SeparateBatteryGenerationCredit does not assume $0 battery export; it falls back to ExportRateDollars
+		vosWithoutSeparateBat := Price{DollarsPerKWH: 0.15, GenerationCreditDollarsPerKWH: 0.1289, SeparateGenerationCredit: true, BuyAllSellAll: true}
+		assert.InDelta(t, 0.1289, vosWithoutSeparateBat.BatteryExportRateDollars(Settings{}, nil), 1e-6)
 	})
 }

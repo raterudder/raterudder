@@ -71,7 +71,7 @@ func (t *genericTOU) GetPeriods(ctx context.Context) ([]types.TimePeriod, error)
 
 	var res []types.TimePeriod
 	for _, p := range t.periods {
-		if !p.SeparateGenerationCredit && !p.GridAdditional {
+		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional {
 			res = append(res, p.TimePeriod)
 		}
 	}
@@ -225,11 +225,12 @@ type touSimplifiedHoursAndDays struct {
 	Weekday       bool
 	Weekend       bool
 
-	DollarsPerKWH                     float64
-	GenerationCreditDollarsPerKWH     float64
-	GenerationAdjustmentDollarsPerKWH float64
-	Description                       string
-	Name                              string
+	DollarsPerKWH                        float64
+	GenerationCreditDollarsPerKWH        float64
+	BatteryGenerationCreditDollarsPerKWH float64
+	GenerationAdjustmentDollarsPerKWH    float64
+	Description                          string
+	Name                                 string
 }
 
 type touSimplifiedPeriod struct {
@@ -246,11 +247,12 @@ type touSimplifiedPeriod struct {
 
 	// OtherDollarsPerKWH is the dollars per kwh for hours and days that are not
 	// in HoursAndDays
-	OtherDollarsPerKWH                     float64
-	OtherGenerationCreditDollarsPerKWH     float64
-	OtherGenerationAdjustmentDollarsPerKWH float64
-	OtherDescription                       string
-	OtherName                              string
+	OtherDollarsPerKWH                        float64
+	OtherGenerationCreditDollarsPerKWH        float64
+	OtherBatteryGenerationCreditDollarsPerKWH float64
+	OtherGenerationAdjustmentDollarsPerKWH    float64
+	OtherDescription                          string
+	OtherName                                 string
 
 	// SeparateGenerationCredit is true if this period also contains solar
 	// generation credit pricing. GenerationCreditDollarsPerKWH will be used
@@ -261,6 +263,17 @@ type touSimplifiedPeriod struct {
 	// generation credits only. GenerationCreditDollarsPerKWH will be used
 	// as the generation credit amount.
 	OnlySeparateGenerationCredit bool
+
+	// SeparateBatteryGenerationCredit is true if this period also contains separate
+	// battery export credit pricing. BatteryGenerationCreditDollarsPerKWH will be used.
+	SeparateBatteryGenerationCredit bool
+
+	// OnlySeparateBatteryGenerationCredit is true if this period is for battery
+	// export credits only. BatteryGenerationCreditDollarsPerKWH will be used.
+	OnlySeparateBatteryGenerationCredit bool
+
+	// BuyAllSellAll marks prices in this period as dual-metered Buy-All / Sell-All.
+	BuyAllSellAll bool
 
 	// SpecificDates is a list of specific dates (formatted as YYYY-MM-DD) that this period applies to.
 	SpecificDates []string
@@ -343,10 +356,15 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 				dollarsPerKWH := hd.DollarsPerKWH
 				if s.OnlySeparateGenerationCredit {
 					dollarsPerKWH = hd.GenerationCreditDollarsPerKWH
+				} else if s.OnlySeparateBatteryGenerationCredit {
+					dollarsPerKWH = hd.BatteryGenerationCreditDollarsPerKWH
 				}
 
 				if hd.GenerationCreditDollarsPerKWH > 0 && !s.SeparateGenerationCredit && !s.OnlySeparateGenerationCredit {
 					panic("GenerationCreditDollarsPerKWH is set but SeparateGenerationCredit is false")
+				}
+				if hd.BatteryGenerationCreditDollarsPerKWH > 0 && !s.SeparateBatteryGenerationCredit && !s.OnlySeparateBatteryGenerationCredit {
+					panic("BatteryGenerationCreditDollarsPerKWH is set but SeparateBatteryGenerationCredit is false")
 				}
 
 				periods = append(periods, types.UtilityFeesPeriod{
@@ -354,6 +372,8 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 					DollarsPerKWH:                     dollarsPerKWH,
 					Description:                       hd.Description,
 					SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
+					SeparateBatteryGenerationCredit:   s.OnlySeparateBatteryGenerationCredit,
+					BuyAllSellAll:                     s.BuyAllSellAll && !s.OnlySeparateGenerationCredit && !s.OnlySeparateBatteryGenerationCredit,
 					GenerationAdjustmentDollarsPerKWH: hd.GenerationAdjustmentDollarsPerKWH,
 				})
 				if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
@@ -365,12 +385,23 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 						GenerationAdjustmentDollarsPerKWH: hd.GenerationAdjustmentDollarsPerKWH,
 					})
 				}
+				if !s.OnlySeparateBatteryGenerationCredit && s.SeparateBatteryGenerationCredit {
+					periods = append(periods, types.UtilityFeesPeriod{
+						TimePeriod:                      p,
+						DollarsPerKWH:                   hd.BatteryGenerationCreditDollarsPerKWH,
+						Description:                     hd.Description,
+						SeparateBatteryGenerationCredit: true,
+					})
+				}
 			}
 		}
 
 		if s.OtherDollarsPerKWH > 0 || s.OtherDescription != "" {
 			if s.OtherGenerationCreditDollarsPerKWH > 0 && !s.SeparateGenerationCredit && !s.OnlySeparateGenerationCredit {
 				panic("OtherGenerationCreditDollarsPerKWH is set but SeparateGenerationCredit is false")
+			}
+			if s.OtherBatteryGenerationCreditDollarsPerKWH > 0 && !s.SeparateBatteryGenerationCredit && !s.OnlySeparateBatteryGenerationCredit {
+				panic("OtherBatteryGenerationCreditDollarsPerKWH is set but SeparateBatteryGenerationCredit is false")
 			}
 			for i := range ps {
 				// to group days with identical gaps, we'll map bitmasks to days containing
@@ -460,6 +491,8 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 						dollarsPerKWH := s.OtherDollarsPerKWH
 						if s.OnlySeparateGenerationCredit {
 							dollarsPerKWH = s.OtherGenerationCreditDollarsPerKWH
+						} else if s.OnlySeparateBatteryGenerationCredit {
+							dollarsPerKWH = s.OtherBatteryGenerationCreditDollarsPerKWH
 						}
 
 						periods = append(periods, types.UtilityFeesPeriod{
@@ -467,6 +500,8 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 							DollarsPerKWH:                     dollarsPerKWH,
 							Description:                       s.OtherDescription,
 							SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
+							SeparateBatteryGenerationCredit:   s.OnlySeparateBatteryGenerationCredit,
+							BuyAllSellAll:                     s.BuyAllSellAll && !s.OnlySeparateGenerationCredit && !s.OnlySeparateBatteryGenerationCredit,
 							GenerationAdjustmentDollarsPerKWH: s.OtherGenerationAdjustmentDollarsPerKWH,
 						})
 						if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
@@ -476,6 +511,14 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 								Description:                       s.OtherDescription,
 								SeparateGenerationCredit:          true,
 								GenerationAdjustmentDollarsPerKWH: s.OtherGenerationAdjustmentDollarsPerKWH,
+							})
+						}
+						if !s.OnlySeparateBatteryGenerationCredit && s.SeparateBatteryGenerationCredit {
+							periods = append(periods, types.UtilityFeesPeriod{
+								TimePeriod:                      period,
+								DollarsPerKWH:                   s.OtherBatteryGenerationCreditDollarsPerKWH,
+								Description:                     s.OtherDescription,
+								SeparateBatteryGenerationCredit: true,
 							})
 						}
 					}
@@ -1129,6 +1172,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		teslaElectricUtilityInfo(),
 		greenMountainUtilityInfo(),
 		directEnergyUtilityInfo(),
+		austinEnergyUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)
