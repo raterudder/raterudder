@@ -2863,6 +2863,7 @@ func optimizeBlockTargets(
 		states:    states,
 		metrics:   metrics,
 		timeline:  timeline,
+		vppEvents: vppEvents,
 		totalCost: totalPhys,
 		bestScore: score,
 	}
