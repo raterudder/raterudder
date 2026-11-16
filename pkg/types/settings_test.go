@@ -238,31 +238,14 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, "aggressive", sSet.OptimizationProfile)
 	})
 
-	t.Run("v19 to v20: migrate legacy EVChargingPeriods to EVChargingStandby", func(t *testing.T) {
-		// Case 1: Non-empty EVChargingPeriods migrates to EVChargingStandby = true and clears EVChargingPeriods
-		oldWithPeriods := Settings{
-			EVChargingPeriods: []TimePeriod{
-				{
-					Name:  "Nighttime EV Charging",
-					Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
-				},
-			},
-		}
-		s1, changed1, err1 := MigrateSettings(oldWithPeriods, 19, "production")
-		require.NoError(t, err1)
-		assert.True(t, changed1)
-		assert.True(t, s1.EVChargingStandby)
-		assert.Nil(t, s1.EVChargingPeriods)
-
-		// Case 2: Empty EVChargingPeriods makes no changes
-		oldWithoutPeriods := Settings{
+	t.Run("v19 to v20: no-op migration preserves EVChargingStandby", func(t *testing.T) {
+		old := Settings{
 			EVChargingStandby: false,
 		}
-		s2, changed2, err2 := MigrateSettings(oldWithoutPeriods, 19, "production")
-		require.NoError(t, err2)
-		assert.False(t, changed2)
-		assert.False(t, s2.EVChargingStandby)
-		assert.Nil(t, s2.EVChargingPeriods)
+		s, changed, err := MigrateSettings(old, 19, "production")
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.False(t, s.EVChargingStandby)
 	})
 
 	t.Run("v20 to v21: reset legacy default arbitrage and battery export differences", func(t *testing.T) {

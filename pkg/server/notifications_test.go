@@ -6448,6 +6448,208 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		assert.Contains(t, recordedLog.Body, "Large unusual home load detected (4.6 kW)")
 	})
 
+	t.Run("EVChargingStandby_FastChargerSiteDoesNotSuppressMidTierApplianceLoad", func(t *testing.T) {
+		nowNight := time.Date(2026, 9, 19, 22, 15, 0, 0, loc) // 10:15 PM (within 20:00-06:59 nighttime window)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		// Build 5-day history (120 hours >= 72) with two nights of 11.4 kWh charging at 01:00-02:00,
+		// raising adaptive EV thresholds to 6.8 / 5.4 kW, plus an in-progress 22:00 bucket.
+		fastChargerHistory := make([]types.DailyEnergyStats, len(baseHistory))
+		for i, day := range baseHistory {
+			copiedHourly := make([]types.EnergyStats, len(day.Hourly))
+			copy(copiedHourly, day.Hourly)
+			if i == 1 || i == 3 {
+				copiedHourly[1].HomeKWH = 11.4
+				copiedHourly[2].HomeKWH = 11.4
+			}
+			fastChargerHistory[i] = types.DailyEnergyStats{
+				TSDayStart: day.TSDayStart,
+				Hourly:     copiedHourly,
+			}
+		}
+		dayStart := time.Date(2026, 9, 19, 0, 0, 0, 0, loc)
+		var todayHourly []types.EnergyStats
+		for h := 0; h <= 21; h++ {
+			load := 0.5
+			if h >= 18 && h <= 21 {
+				load = 8.0
+			}
+			todayHourly = append(todayHourly, types.EnergyStats{
+				TSHourStart:   dayStart.Add(time.Duration(h) * time.Hour),
+				HomeKWH:       load,
+				MaxBatterySOC: 80.0,
+				MinBatterySOC: 70.0,
+			})
+		}
+		todayHourly = append(todayHourly, types.EnergyStats{
+			TSHourStart:   dayStart.Add(22 * time.Hour), // In-progress current hour bucket
+			HomeKWH:       4.9,
+			MaxBatterySOC: 80.0,
+			MinBatterySOC: 70.0,
+		})
+		fastChargerHistory = append(fastChargerHistory, types.DailyEnergyStats{
+			TSDayStart: dayStart,
+			Hourly:     todayHourly,
+		})
+
+		t.Run("ApplianceSpikeBelow68KWNotSuppressed", func(t *testing.T) {
+			mockS := &storagemock.MockDatabase{}
+			srv := createTestNotificationServer(t, mockS, nowNight)
+			notifications := map[string]types.UserNotificationSettings{
+				"user1@test.com": {
+					HighHomeLoadAlert: "medium",
+				},
+			}
+			mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+			var recordedLog types.NotificationLog
+			mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+				if l.Type == types.NotificationTypeHighHomeLoad {
+					recordedLog = l
+					return true
+				}
+				return false
+			})).Return(nil).Once()
+
+			data := &dataForNotifications{
+				status: types.SystemStatus{
+					Timestamp:          nowNight,
+					HomeKW:             5.6, // Above 4.5 kW medium threshold, below 6.8 kW adaptive EV threshold
+					BatterySOC:         35.0,
+					BatteryKW:          5.6,
+					BatteryCapacityKWH: 13.6,
+				},
+				settings: types.Settings{
+					MinBatterySOC:     20.0,
+					EVChargingStandby: true,
+				},
+				energyHistory: fastChargerHistory,
+			}
+
+			getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+			srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, mockUserGetter(user))
+			mockS.AssertExpectations(t)
+			assert.Contains(t, recordedLog.Body, "Large unusual home load detected (5.6 kW)")
+		})
+
+		t.Run("ActualEVChargeWithPartialCurrentHourStillSuppressed", func(t *testing.T) {
+			mockS := &storagemock.MockDatabase{}
+			srv := createTestNotificationServer(t, mockS, nowNight)
+			notifications := map[string]types.UserNotificationSettings{
+				"user1@test.com": {
+					HighHomeLoadAlert: "high",
+				},
+			}
+			data := &dataForNotifications{
+				status: types.SystemStatus{
+					Timestamp:          nowNight,
+					HomeKW:             9.6, // Fast EV charge (>= 6.8 kW, +9.1 kW step >= 5.4 kW once 22:00 partial bucket excluded)
+					BatterySOC:         39.0,
+					BatteryKW:          9.6,
+					BatteryCapacityKWH: 13.6,
+				},
+				settings: types.Settings{
+					MinBatterySOC:     20.0,
+					EVChargingStandby: true,
+				},
+				energyHistory: fastChargerHistory,
+			}
+
+			getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+			srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, nil)
+			mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+			mockS.AssertExpectations(t)
+		})
+
+		t.Run("EveryNightEVChargingWithStandbyStillAdaptsThreshold", func(t *testing.T) {
+			// When a 48A charger charges all 7/7 nights at 01:00-02:00 with EVChargingStandby=true,
+			// notifications still adapt to 6.8/5.4 kW via DetectEVCharging so 5.6 kW alerts.
+			everyNightHistory := make([]types.DailyEnergyStats, len(baseHistory))
+			for i, day := range baseHistory {
+				copiedHourly := make([]types.EnergyStats, len(day.Hourly))
+				copy(copiedHourly, day.Hourly)
+				copiedHourly[1].HomeKWH = 11.4
+				copiedHourly[2].HomeKWH = 11.4
+				everyNightHistory[i] = types.DailyEnergyStats{
+					TSDayStart: day.TSDayStart,
+					Hourly:     copiedHourly,
+				}
+			}
+
+			mockS := &storagemock.MockDatabase{}
+			srv := createTestNotificationServer(t, mockS, nowNight)
+			notifications := map[string]types.UserNotificationSettings{
+				"user1@test.com": {
+					HighHomeLoadAlert: "medium",
+				},
+			}
+			mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+			var recordedLog types.NotificationLog
+			mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+				if l.Type == types.NotificationTypeHighHomeLoad {
+					recordedLog = l
+					return true
+				}
+				return false
+			})).Return(nil).Once()
+
+			data := &dataForNotifications{
+				status: types.SystemStatus{
+					Timestamp:          nowNight,
+					HomeKW:             5.6,
+					BatterySOC:         35.0,
+					BatteryKW:          5.6,
+					BatteryCapacityKWH: 13.6,
+				},
+				settings: types.Settings{
+					MinBatterySOC:     20.0,
+					EVChargingStandby: true,
+				},
+				energyHistory: everyNightHistory,
+			}
+
+			getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+			srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, mockUserGetter(user))
+			mockS.AssertExpectations(t)
+			assert.Contains(t, recordedLog.Body, "Large unusual home load detected (5.6 kW)")
+		})
+	})
+
+	t.Run("EVChargingStandby_PrefersESSTimezoneOverConflictingSettingsLocation", func(t *testing.T) {
+		// ESS timestamp is 22:15 CDT (within 20:00-06:59 nighttime window), while settings.Location
+		// points to America/Los_Angeles (20:15? use Pacific/Honolulu where 22:15 CDT = 17:15 HST, daytime).
+		// Must trust the ESS Timestamp.Location() even when TimeLocation is empty rather than
+		// overriding it with the zip-code-derived settings timezone.
+		nowNight := time.Date(2026, 9, 19, 22, 15, 0, 0, loc) // 22:15 CDT = 17:15 HST
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowNight)
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "high",
+			},
+		}
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowNight,
+				HomeKW:             9.6,
+				BatterySOC:         39.0,
+				BatteryKW:          9.6,
+				BatteryCapacityKWH: 13.6,
+			},
+			settings: types.Settings{
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
+				Location:          &types.SiteLocation{TimeZone: "Pacific/Honolulu"},
+			},
+			energyHistory: baseHistory,
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
 	t.Run("EVChargingStandby_DaytimeHighLoadNotSuppressed", func(t *testing.T) {
 		nowDaytime := time.Date(2026, 9, 19, 14, 15, 0, 0, loc) // 2:15 PM (outside 20:00-06:59 nighttime window)
 		mockS := &storagemock.MockDatabase{}

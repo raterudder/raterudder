@@ -121,7 +121,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	model, _ := s.controller.BuildHourlyEnergyModel(ctx, targetDateLocal, priorEnergy, weatherHistory, settings.Settings)
+	model, _, _, _ := s.controller.BuildHourlyEnergyModel(ctx, targetDateLocal, priorEnergy, weatherHistory, settings.Settings)
 
 	// Filter results for the target day
 	dayStats := make([]types.EnergyStats, 0, 24)

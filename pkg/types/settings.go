@@ -58,10 +58,6 @@ type Settings struct {
 	// using solar to charge the EV is assumed to be desired.
 	EVChargingStandby bool `json:"evChargingStandby,omitempty"`
 
-	// Deprecated: EVChargingPeriods is deprecated in favor of EVChargingStandby and automatic
-	// nighttime EV charging detection.
-	EVChargingPeriods []TimePeriod `json:"evChargingPeriods,omitempty"`
-
 	// Grid Settings
 	// CustomGridSettings indicates if the grid settings were manually configured.
 	// When false, grid settings are automatically synchronized from the ESS.
@@ -316,12 +312,8 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				migrated = true
 			}
 		case 20:
-			// version 20: migrate legacy EVChargingPeriods to EVChargingStandby and clear EVChargingPeriods
-			if len(s.EVChargingPeriods) > 0 {
-				s.EVChargingStandby = true
-				s.EVChargingPeriods = nil
-				migrated = true
-			}
+			// version 20: migrate legacy EVChargingPeriods to EVChargingStandby
+			// no longer used
 		case 21:
 			// version 21: reset legacy default MinArbitrageDifferenceDollarsPerKWH (0.03) and
 			// MinBatteryExportDifferenceDollarsPerKWH (0.07) to 0 so OptimizationProfile defaults take effect.

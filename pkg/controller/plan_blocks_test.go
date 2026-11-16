@@ -41,7 +41,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 			}
 		}
 
-		blocks := buildTimelineBlocks(ctx, timeline, nil, baseSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(ctx, timeline, nil, baseSettings, types.SystemStatus{}, nil)
 		assert.GreaterOrEqual(t, len(blocks), 4, "Should build at least 4 blocks")
 		assert.LessOrEqual(t, len(blocks), 16, "Should coalesce to <= 16 blocks (target ~10)")
 
@@ -78,7 +78,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 			{eventStart: now.Add(4 * time.Hour), eventEnd: now.Add(6 * time.Hour), deadline: vppDeadline, mandatory: true},
 		}
 
-		blocks := buildTimelineBlocks(ctx, timeline, vppEvents, baseSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(ctx, timeline, vppEvents, baseSettings, types.SystemStatus{}, nil)
 
 		hasVPPBoundary := false
 		hasReserveBoundary := false
@@ -114,7 +114,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 			}
 		}
 		statusEV := types.SystemStatus{HomeKW: 9.5} // Large EV draw
-		blocksEV := buildTimelineBlocks(ctx, timelineEV, nil, evSettings, statusEV)
+		blocksEV := buildTimelineBlocks(ctx, timelineEV, nil, evSettings, statusEV, nil)
 		if assert.Len(t, blocksEV, 2) {
 			// Inclusive [0..0] is 1 period long (timelineEV[0]), and [1..5] covers the remaining 5 periods
 			assert.Equal(t, 0, blocksEV[0].startIdx)
@@ -140,7 +140,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				minSOC:        20.0,
 			}
 		}
-		blocks := buildTimelineBlocks(ctx, timeline, nil, baseSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(ctx, timeline, nil, baseSettings, types.SystemStatus{}, nil)
 		require.NotEmpty(t, blocks)
 		hasNegativeBlock := false
 		for _, b := range blocks {
@@ -179,7 +179,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 
 		var logBuf bytes.Buffer
 		debugCtx := log.With(ctx, slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		blocks := buildTimelineBlocks(debugCtx, timeline, nil, baseSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(debugCtx, timeline, nil, baseSettings, types.SystemStatus{}, nil)
 		assert.Len(t, blocks, 12)
 		assert.Contains(t, logBuf.String(), "timeline blocks exceeded target count")
 		assert.Contains(t, logBuf.String(), "initBlocksCount=12")
@@ -212,7 +212,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 		}
 		var solarLogBuf bytes.Buffer
 		solarDebugCtx := log.With(ctx, slog.New(slog.NewTextHandler(&solarLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		blocksSolar := buildTimelineBlocks(solarDebugCtx, timelineSolar, nil, baseSettings, types.SystemStatus{})
+		blocksSolar := buildTimelineBlocks(solarDebugCtx, timelineSolar, nil, baseSettings, types.SystemStatus{}, nil)
 		if assert.Len(t, blocksSolar, 3) {
 			assert.Equal(t, 0, blocksSolar[0].startIdx)
 			assert.Equal(t, 8, blocksSolar[0].endIdx, "Pre-solar block must end immediately before solar starts (idx 8 = 08:00-09:00)")
@@ -244,7 +244,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				minSOC:        20.0,
 			}
 		}
-		blocksNoSolar := buildTimelineBlocks(ctx, timelineNoSolar, nil, baseSettings, types.SystemStatus{})
+		blocksNoSolar := buildTimelineBlocks(ctx, timelineNoSolar, nil, baseSettings, types.SystemStatus{}, nil)
 		if assert.Len(t, blocksNoSolar, 3) {
 			assert.InDelta(t, 2.0, blocksNoSolar[0].durationHours, 0.5)
 			assert.Equal(t, 23, blocksNoSolar[2].endIdx)
@@ -279,7 +279,7 @@ func TestBuildTimelineBlocks(t *testing.T) {
 				minSOC:        20.0,
 			}
 		}
-		blocksTOU := buildTimelineBlocks(ctx, timelineTOU, nil, baseSettings, types.SystemStatus{})
+		blocksTOU := buildTimelineBlocks(ctx, timelineTOU, nil, baseSettings, types.SystemStatus{}, nil)
 		if assert.Len(t, blocksTOU, 5) {
 			assert.Equal(t, 0, blocksTOU[0].startIdx)
 			assert.Equal(t, 1, blocksTOU[0].endIdx, "Pre-solar block must end immediately before significant solar starts (idx 0..1 = 06:00-08:00)")
@@ -324,7 +324,7 @@ func TestExpandBlockAction(t *testing.T) {
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 2.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.15, maxImportRate: 0.20}
 
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 6)
 
 		hasChargeInCheapest := false
@@ -355,7 +355,7 @@ func TestExpandBlockAction(t *testing.T) {
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 2.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.10, maxImportRate: 0.10}
 
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 6)
 
 		assert.NotEqual(t, types.BatteryModeChargeAny, acts[5].batteryMode, "End-of-block buffering must leave interval at the end free")
@@ -380,14 +380,14 @@ func TestExpandBlockAction(t *testing.T) {
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.10}
 		lastAct := &types.Action{BatteryMode: types.BatteryModeChargeAny}
 
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, lastAct)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, lastAct, nil)
 		require.Len(t, acts, 4)
 		assert.Equal(t, types.BatteryModeChargeAny, acts[0].batteryMode, "Step 0 must continue charging without interruption when rates are tied")
 
 		// If step 0 rate turns higher than a later interval in the block, window search must pick the cheaper window
 		timeline[0].importRate = 0.15
 		timeline[1].importRate = 0.05
-		actsCheaperLater := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, lastAct)
+		actsCheaperLater := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 30.0}, state20, timeline, nil, settings, types.SystemStatus{}, lastAct, nil)
 		require.Len(t, actsCheaperLater, 4)
 		assert.Equal(t, types.BatteryModeStandby, actsCheaperLater[0].batteryMode, "Must not lock onto step 0 when a later interval in the block is cheaper")
 		assert.Equal(t, types.BatteryModeChargeAny, actsCheaperLater[1].batteryMode, "Must place charge in the cheaper interval")
@@ -411,7 +411,7 @@ func TestExpandBlockAction(t *testing.T) {
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, avgImportRate: 0.35, maxExportRate: 0.30}
 
-		actsLoadPre := expandBlockAction(block, blockActionChoice{actionType: blockActionExport, targetSOC: 40.0, useSolarExportPrefix: false}, state80, timeline, nil, settings, types.SystemStatus{}, nil)
+		actsLoadPre := expandBlockAction(block, blockActionChoice{actionType: blockActionExport, targetSOC: 40.0, useSolarExportPrefix: false}, state80, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, actsLoadPre, 4)
 		assert.Equal(t, types.BatteryModeLoad, actsLoadPre[0].batteryMode)
 		assert.Equal(t, types.BatteryModeExport, actsLoadPre[3].batteryMode)
@@ -421,7 +421,7 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			timelineSolar[i].solarKWH = 2.0
 		}
-		actsDSEPre := expandBlockAction(block, blockActionChoice{actionType: blockActionExport, targetSOC: 60.0, useSolarExportPrefix: true}, state80, timelineSolar, nil, settings, types.SystemStatus{}, nil)
+		actsDSEPre := expandBlockAction(block, blockActionChoice{actionType: blockActionExport, targetSOC: 60.0, useSolarExportPrefix: true}, state80, timelineSolar, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, actsDSEPre, 4)
 		assert.Equal(t, types.BatteryModeLoad, actsDSEPre[0].batteryMode)
 		assert.Equal(t, types.SolarModeExport, actsDSEPre[0].solarMode, "Prefix must run DirectSolarExport when enabled")
@@ -465,7 +465,7 @@ func TestExpandBlockAction(t *testing.T) {
 			maxExportRate: 0.30,
 		}
 		stateLow := planState{soc: 22.0, energyKWH: 13.5 * 0.22, capacityKWH: 13.5, time: now}
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateLow, timeline, nil, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateLow, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 6)
 		assert.Equal(t, types.BatteryModeLoad, acts[0].batteryMode)
 		assert.Equal(t, types.SolarModeAny, acts[0].solarMode, "Early interval must bank solar in SolarModeAny when battery cannot yet survive the peak block")
@@ -496,7 +496,7 @@ func TestExpandBlockAction(t *testing.T) {
 			{eventStart: now.Add(4 * time.Hour), eventEnd: now.Add(6 * time.Hour), deadline: now.Add(4 * time.Hour)},
 		}
 		block := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 3.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.10}
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, state20, timeline, vppEvents, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, state20, timeline, vppEvents, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 6)
 		for _, act := range acts {
 			if act.batteryMode == types.BatteryModeChargeAny {
@@ -525,14 +525,61 @@ func TestExpandBlockAction(t *testing.T) {
 		evSettings := types.Settings{EVChargingStandby: true}
 		evStatus := types.SystemStatus{HomeKW: 10.0}
 
-		loadActs := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state80, timeline, nil, evSettings, evStatus, nil)
+		loadActs := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state80, timeline, nil, evSettings, evStatus, nil, nil)
 		require.Len(t, loadActs, 1)
 		assert.Equal(t, types.BatteryModeStandby, loadActs[0].batteryMode, "Load block must be overridden to Standby during active EV charging")
 		assert.Equal(t, types.ActionReasonEVChargingStandby, loadActs[0].reason)
 
-		chargeActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, state20, timeline, nil, evSettings, evStatus, nil)
+		chargeActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, state20, timeline, nil, evSettings, evStatus, nil, nil)
 		require.Len(t, chargeActs, 1)
 		assert.Equal(t, types.BatteryModeChargeAny, chargeActs[0].batteryMode, "Charge block must bypass EV charging standby when charging is required")
+	})
+
+	t.Run("ActiveEVCharging_UsesHistoryForAdaptiveThreshold", func(t *testing.T) {
+		t.Parallel()
+		evTime := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
+		timeline := []planInterval{
+			{
+				startTime:     evTime,
+				endTime:       evTime.Add(20 * time.Minute),
+				durationHours: 1.0 / 3.0,
+				importRate:    0.05,
+				exportRate:    0.04,
+				loadKWH:       1.87,
+				minSOC:        20.0,
+			},
+		}
+		block := timelineBlock{startIdx: 0, endIdx: 0, durationHours: 1.0 / 3.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.05}
+		evSettings := types.Settings{EVChargingStandby: true}
+
+		// 7-day history with 11.2 kW 48A charger overnight sessions raises adaptive threshold to 6.8 / 5.4 kW.
+		baseTime := evTime.AddDate(0, 0, -7).Truncate(24 * time.Hour)
+		var history []types.EnergyStats
+		for d := 0; d < 7; d++ {
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 1 || h == 2) {
+					load = 11.2
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: baseTime.AddDate(0, 0, d).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		// 5.6 kW mid-tier appliance is NOT EV charging once history raises the threshold.
+		midLoadStatus := types.SystemStatus{HomeKW: 5.6}
+		midActs := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state80, timeline, nil, evSettings, midLoadStatus, nil, history)
+		require.Len(t, midActs, 1)
+		assert.Equal(t, types.BatteryModeLoad, midActs[0].batteryMode, "5.6 kW load should stay in Load on a 48A charger site when history is passed")
+
+		// 9.6 kW active EV draw IS overridden to EV Standby.
+		highEVStatus := types.SystemStatus{HomeKW: 9.6}
+		evActs := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state80, timeline, nil, evSettings, highEVStatus, nil, history)
+		require.Len(t, evActs, 1)
+		assert.Equal(t, types.BatteryModeStandby, evActs[0].batteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, evActs[0].reason)
 	})
 
 	t.Run("VPPPrepBlock_TransitionsFromChargeToStandbyMidBlock", func(t *testing.T) {
@@ -571,7 +618,7 @@ func TestExpandBlockAction(t *testing.T) {
 		block := timelineBlock{startIdx: 0, endIdx: 1, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.15, avgImportRate: 0.15}
 		state90 := planState{soc: 90.0, energyKWH: 13.5 * 0.90, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state90, timeline, vppEvents, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionLoad}, state90, timeline, vppEvents, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 2)
 		assert.Equal(t, types.BatteryModeChargeAny, acts[0].batteryMode, "Interval 0 at 90% SOC must perform VPP Prep emergency top-up")
 		assert.Equal(t, types.ActionReasonVPPPrep, acts[0].reason)
@@ -598,7 +645,7 @@ func TestExpandBlockAction(t *testing.T) {
 		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.12, avgImportRate: 0.12, maxImportRate: 0.12}
 		stateDeficit := planState{soc: 15.0, energyKWH: 13.5 * 0.15, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 
-		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, stateDeficit, timeline, nil, settings, types.SystemStatus{}, nil)
+		acts := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, stateDeficit, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, acts, 4)
 		assert.Equal(t, types.BatteryModeChargeAny, acts[0].batteryMode, "Interval 0 must recharge reserve deficit to minSOC")
 		for i := 1; i < 4; i++ {
@@ -633,7 +680,7 @@ func TestExpandBlockAction(t *testing.T) {
 		assert.True(t, found)
 		assert.Equal(t, 0, startIdx)
 
-		touActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, timeline, nil, touSettings, types.SystemStatus{}, nil)
+		touActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, timeline, nil, touSettings, types.SystemStatus{}, nil, nil)
 		require.Len(t, touActs, 3)
 		for i := 0; i < 3; i++ {
 			assert.Equal(t, types.SolarModeExport, touActs[i].solarMode)
@@ -646,7 +693,7 @@ func TestExpandBlockAction(t *testing.T) {
 		assert.False(t, foundNoTOU)
 		assert.Equal(t, 0, startIdxNoTOU)
 
-		noTouActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, timeline, nil, noTouSettings, types.SystemStatus{}, nil)
+		noTouActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, timeline, nil, noTouSettings, types.SystemStatus{}, nil, nil)
 		require.Len(t, noTouActs, 3)
 		for i := 0; i < 3; i++ {
 			assert.Equal(t, types.SolarModeAny, noTouActs[i].solarMode, "When ManageTOUSchedules is false, solar mode must fall back to default SolarModeAny")
@@ -668,7 +715,7 @@ func TestExpandBlockAction(t *testing.T) {
 		assert.True(t, foundContTrickle, "Continuing SolarModeExport at block 0 must sustain export during overcast trickle solar (>= 0.05 kW)")
 		assert.Equal(t, 0, contIdx)
 
-		contActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, trickleTimeline, nil, touSettings, types.SystemStatus{}, lastSolarExport)
+		contActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, trickleTimeline, nil, touSettings, types.SystemStatus{}, lastSolarExport, nil)
 		if assert.Len(t, contActs, 3) {
 			for i := 0; i < 3; i++ {
 				assert.Equal(t, types.SolarModeExport, contActs[i].solarMode)
@@ -710,7 +757,7 @@ func TestExpandBlockAction(t *testing.T) {
 		start45 := planState{soc: 45.0, energyKWH: 20.0 * 0.45, capacityKWH: 20.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
 
 		// 1. Default targetSOC == 0 holds the entire block in BatteryModeStandby.
-		fullStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby}, start45, timeline, nil, settings, types.SystemStatus{}, nil)
+		fullStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby}, start45, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		require.Len(t, fullStandbyActs, 4)
 		for i := 0; i < 4; i++ {
 			assert.Equal(t, types.BatteryModeStandby, fullStandbyActs[i].batteryMode)
@@ -718,7 +765,7 @@ func TestExpandBlockAction(t *testing.T) {
 
 		// 2. targetSOC == 35.0% discharges in BatteryModeLoad for the first 2 intervals (45% -> 40% -> 35%)
 		// and holds in BatteryModeStandby for the remaining 2 intervals.
-		partialStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby, targetSOC: 35.0}, start45, timeline, nil, settings, types.SystemStatus{}, nil)
+		partialStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby, targetSOC: 35.0}, start45, timeline, nil, settings, types.SystemStatus{}, nil, nil)
 		if assert.Len(t, partialStandbyActs, 4) {
 			assert.Equal(t, types.BatteryModeLoad, partialStandbyActs[0].batteryMode)
 			assert.Equal(t, types.BatteryModeLoad, partialStandbyActs[1].batteryMode)
@@ -955,12 +1002,12 @@ func TestIsBlockActionAllowed(t *testing.T) {
 			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.05, loadKWH: 2.0, solarKWH: 0.0, minSOC: 20.0},
 			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.40, exportRate: 0.05, loadKWH: 10.5, solarKWH: 0.0, minSOC: 20.0},
 		}
-		blocksPrePeak := buildTimelineBlocks(ctx, timelinePrePeak, nil, settings, types.SystemStatus{})
+		blocksPrePeak := buildTimelineBlocks(ctx, timelinePrePeak, nil, settings, types.SystemStatus{}, nil)
 		require.Len(t, blocksPrePeak, 2)
 		allowedPrePeak := isBlockActionAllowed(0, blocksPrePeak[0], blockActionChoice{actionType: blockActionStandby}, blocksPrePeak, state98, nil, 0.10, settings, types.SystemStatus{}, timelinePrePeak, nil)
 		assert.True(t, allowedPrePeak, "Standby must be allowed at 98% SOC when an upcoming unrefilled peak block needs the battery")
 
-		pathPrePeak := c.searchOptimalPlanBlocks(ctx, timelinePrePeak, state98, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, types.SystemStatus{}, nil)
+		pathPrePeak := c.searchOptimalPlanBlocks(ctx, timelinePrePeak, state98, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, types.SystemStatus{}, nil, nil)
 		require.NotEmpty(t, pathPrePeak.actions)
 		assert.Equal(t, types.BatteryModeStandby, pathPrePeak.actions[0].batteryMode, "Planner must hold 98% battery in Standby during $0.10/kWh hour to cover the upcoming $0.40/kWh peak")
 
@@ -973,12 +1020,12 @@ func TestIsBlockActionAllowed(t *testing.T) {
 			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.08, loadKWH: 1.5, solarKWH: 0.0, minSOC: 20.0},
 			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.15, exportRate: 0.28, loadKWH: 1.5, solarKWH: 12.0, minSOC: 20.0},
 		}
-		blocksSolarOverflow := buildTimelineBlocks(ctx, timelineSolarOverflow, nil, noTOUSettings, types.SystemStatus{})
+		blocksSolarOverflow := buildTimelineBlocks(ctx, timelineSolarOverflow, nil, noTOUSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksSolarOverflow, 2)
 		allowedOverflow := isBlockActionAllowed(0, blocksSolarOverflow[0], blockActionChoice{actionType: blockActionStandby}, blocksSolarOverflow, state98, nil, 0.08, noTOUSettings, types.SystemStatus{}, timelineSolarOverflow, nil)
 		assert.True(t, allowedOverflow, "Standby must be allowed at 98% SOC when ManageTOUSchedules is false and upcoming solar overflow exports at a higher rate")
 
-		pathOverflow := c.searchOptimalPlanBlocks(ctx, timelineSolarOverflow, state98, nil, postHorizonValuation{knownPostHorizonRate: 0.08}, noTOUSettings, types.SystemStatus{}, nil)
+		pathOverflow := c.searchOptimalPlanBlocks(ctx, timelineSolarOverflow, state98, nil, postHorizonValuation{knownPostHorizonRate: 0.08}, noTOUSettings, types.SystemStatus{}, nil, nil)
 		require.NotEmpty(t, pathOverflow.actions)
 		assert.Equal(t, types.BatteryModeStandby, pathOverflow.actions[0].batteryMode, "Planner must hold 98% battery in Standby at $0.08/kWh so upcoming solar overflows at $0.28/kWh")
 	})
@@ -1045,7 +1092,7 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		}
 		// Build blocks through buildTimelineBlocks: on Eversource CT Rate 7 ($0.29982 - $0.20754 = $0.09228 < $0.10 minPeakRateSpreadDollars),
 		// isHighestPrice is false on all blocks, proving Standby pruning does not rely on isHighestPrice.
-		equalPeakBlocks := buildTimelineBlocks(ctx, peakTimeline, nil, peakSettings, types.SystemStatus{})
+		equalPeakBlocks := buildTimelineBlocks(ctx, peakTimeline, nil, peakSettings, types.SystemStatus{}, nil)
 		require.Len(t, equalPeakBlocks, 3)
 		assert.False(t, equalPeakBlocks[0].isHighestPrice, "Spread < $0.10 leaves isHighestPrice false")
 
@@ -1058,7 +1105,7 @@ func TestIsBlockActionAllowed(t *testing.T) {
 			{startTime: now, endTime: now.Add(6 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, minSOC: 30.0},
 			{startTime: now.Add(6 * time.Hour), endTime: now.Add(12 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, solarKWH: 4.0, minSOC: 30.0},
 		}
-		flatBlocks := buildTimelineBlocks(ctx, flatTimeline, nil, peakSettings, types.SystemStatus{})
+		flatBlocks := buildTimelineBlocks(ctx, flatTimeline, nil, peakSettings, types.SystemStatus{}, nil)
 		require.NotEmpty(t, flatBlocks)
 		assert.False(t, isBlockActionAllowed(0, flatBlocks[0], blockActionChoice{actionType: blockActionStandby}, flatBlocks, state40, nil, 0.22, peakSettings, types.SystemStatus{}, flatTimeline, nil),
 			"Standby must be disallowed on a flat tariff when no higher rate, export spike, minSOC step-up, or VPP event lies ahead")
@@ -1094,7 +1141,7 @@ func TestIsBlockActionAllowed(t *testing.T) {
 				minSOC:        30.0,
 			})
 		}
-		mergedDynBlocks := buildTimelineBlocks(ctx, mergedDynTimeline, nil, peakSettings, types.SystemStatus{})
+		mergedDynBlocks := buildTimelineBlocks(ctx, mergedDynTimeline, nil, peakSettings, types.SystemStatus{}, nil)
 		if assert.Len(t, mergedDynBlocks, 10) {
 			assert.Equal(t, 0, mergedDynBlocks[0].startIdx)
 			assert.Equal(t, 1, mergedDynBlocks[0].endIdx)
@@ -1731,7 +1778,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 	state := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, time: now}
 
 	ctx := context.Background()
-	winningChoices, score := critiqueBlockPlan(ctx, blocks, timeline, state, nil, postHorizonValuation{}, settings, types.SystemStatus{}, nil, 0)
+	winningChoices, score := critiqueBlockPlan(ctx, blocks, timeline, state, nil, postHorizonValuation{}, settings, types.SystemStatus{}, nil, 0, nil)
 	require.Len(t, winningChoices, 2)
 
 	assert.Equal(t, blockActionCharge, winningChoices[0].actionType, "Critique should switch block 0 to Charge")
@@ -1757,7 +1804,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		}
 		state20 := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 
-		win3, _ := critiqueBlockPlan(ctx, blocks3, timeline3, state20, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, settings, types.SystemStatus{}, nil, 0)
+		win3, _ := critiqueBlockPlan(ctx, blocks3, timeline3, state20, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, settings, types.SystemStatus{}, nil, 0, nil)
 		require.Len(t, win3, 3)
 		assert.Equal(t, blockActionCharge, win3[0].actionType, "Block 0 must charge during Super Off-Peak")
 		assert.Equal(t, blockActionStandby, win3[1].actionType, "Intervening Off-Peak Block 1 must be held in Standby to preserve charged energy for On-Peak")
@@ -1776,7 +1823,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.09, exportRate: 0.03, loadKWH: 1.0, minSOC: 80.0},
 		}
 		state27kWh := planState{soc: 20.0, energyKWH: 27.0 * 0.20, capacityKWH: 27.0, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		path80 := c.searchOptimalPlanBlocks(ctx, timeline80, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, types.SystemStatus{}, nil)
+		path80 := c.searchOptimalPlanBlocks(ctx, timeline80, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, types.SystemStatus{}, nil, nil)
 		require.NotNil(t, path80)
 		require.Len(t, path80.states, 4)
 		assert.GreaterOrEqual(t, path80.states[3].soc, 80.0-reserveDeficitChargeTolerancePct,
@@ -1788,7 +1835,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 0.5, minSOC: 100.0},
 			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
 		}
-		pathImp := c.searchOptimalPlanBlocks(ctx, timelineImpossible, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, settings, types.SystemStatus{}, nil)
+		pathImp := c.searchOptimalPlanBlocks(ctx, timelineImpossible, state27kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, settings, types.SystemStatus{}, nil, nil)
 		require.NotNil(t, pathImp)
 		require.Len(t, pathImp.actions, 2)
 		assert.Equal(t, types.BatteryModeChargeAny, pathImp.actions[0].batteryMode,
@@ -1814,7 +1861,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startIdx: 2, endIdx: 2, minImportRate: 0.120, avgImportRate: 0.120, maxImportRate: 0.120, minExportRate: 0.04, maxExportRate: 0.04, minSOC: 20.0, durationHours: 2.0, isHighestPrice: true},
 		}
 		state45 := planState{soc: 45.0, energyKWH: 13.5 * 0.45, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		winOvernight, _ := critiqueBlockPlan(ctx, blocksOvernight, timelineOvernight, state45, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noChargeSettings, types.SystemStatus{}, nil, 0)
+		winOvernight, _ := critiqueBlockPlan(ctx, blocksOvernight, timelineOvernight, state45, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noChargeSettings, types.SystemStatus{}, nil, 0, nil)
 		require.Len(t, winOvernight, 3)
 		assert.Equal(t, blockActionStandby, winOvernight[0].actionType, "Block 0 ($0.045) must hold in Standby")
 		assert.Equal(t, blockActionStandby, winOvernight[1].actionType, "Block 1 ($0.052) must also hold in Standby so battery energy reaches the $0.120 morning peak")
@@ -1840,7 +1887,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now.Add(5 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 2.0, importRate: 0.350, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
 		}
 		state25 := planState{soc: 25.0, energyKWH: 13.5 * 0.25, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		path4 := c.searchOptimalPlanBlocks(ctx, timeline4, state25, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noExportSettings, types.SystemStatus{}, nil)
+		path4 := c.searchOptimalPlanBlocks(ctx, timeline4, state25, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noExportSettings, types.SystemStatus{}, nil, nil)
 		require.NotNil(t, path4)
 		require.Len(t, path4.actions, 4)
 		assert.NotEqual(t, types.BatteryModeChargeAny, path4.actions[0].batteryMode,
@@ -1864,10 +1911,10 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.05, exportRate: 0.02, loadKWH: 3.0, minSOC: 20.0},
 			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.25, exportRate: 0.02, loadKWH: 0.5, minSOC: 20.0},
 		}
-		blocksSwap := buildTimelineBlocks(ctx, timelineSwap, nil, noChargeSettings, types.SystemStatus{})
+		blocksSwap := buildTimelineBlocks(ctx, timelineSwap, nil, noChargeSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksSwap, 3)
 		state45 := planState{soc: 45.0, energyKWH: 13.5 * 0.45, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		winSwap, _ := critiqueBlockPlan(ctx, blocksSwap, timelineSwap, state45, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noChargeSettings, types.SystemStatus{}, nil, 0)
+		winSwap, _ := critiqueBlockPlan(ctx, blocksSwap, timelineSwap, state45, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, noChargeSettings, types.SystemStatus{}, nil, 0, nil)
 		require.Len(t, winSwap, 3)
 		assert.Equal(t, blockActionLoad, winSwap[0].actionType, "Solver must discharge in costlier Block 0 ($0.09)")
 		assert.Equal(t, blockActionStandby, winSwap[1].actionType, "Solver must shift Standby hold to cheaper Block 1 ($0.05)")
@@ -1901,7 +1948,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startIdx: 3, endIdx: 3, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isHighestPrice: true, netSolarKWH: -2.0},
 		}
 		initStandbyExp := planState{soc: 43.2, energyKWH: 13.5 * 0.432, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		winStandbyExp, _ := critiqueBlockPlan(ctx, blocksStandbyExp, timelineStandbyExp, initStandbyExp, nil, postHorizonValuation{knownPostHorizonRate: 0.21}, standbyExpSettings, types.SystemStatus{}, nil, 0)
+		winStandbyExp, _ := critiqueBlockPlan(ctx, blocksStandbyExp, timelineStandbyExp, initStandbyExp, nil, postHorizonValuation{knownPostHorizonRate: 0.21}, standbyExpSettings, types.SystemStatus{}, nil, 0, nil)
 		require.Len(t, winStandbyExp, 4)
 		assert.Equal(t, blockActionStandby, winStandbyExp[0].actionType, "Block 0 must hold in Standby at 43.2% SOC")
 		assert.Equal(t, blockActionExport, winStandbyExp[2].actionType, "Block 2 must discover blockActionExport via standbyFloor (44.0%)")
@@ -1922,12 +1969,12 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.08, exportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
 			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, loadKWH: 3.0, minSOC: 20.0},
 		}
-		blocksPeakThenCharge := buildTimelineBlocks(ctx, timelinePeakThenCharge, nil, noExportSettings, types.SystemStatus{})
+		blocksPeakThenCharge := buildTimelineBlocks(ctx, timelinePeakThenCharge, nil, noExportSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocksPeakThenCharge, 3)
 		assert.False(t, isBlockActionAllowed(0, blocksPeakThenCharge[0], blockActionChoice{actionType: blockActionStandby}, blocksPeakThenCharge, planState{soc: 35.0, energyKWH: 13.5 * 0.35, capacityKWH: 13.5, time: now}, nil, 0.08, noExportSettings, types.SystemStatus{}, timelinePeakThenCharge, nil))
 
 		state35 := planState{soc: 35.0, energyKWH: 13.5 * 0.35, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
-		win, _ := critiqueBlockPlan(ctx, blocksPeakThenCharge, timelinePeakThenCharge, state35, nil, postHorizonValuation{knownPostHorizonRate: 0.08}, noExportSettings, types.SystemStatus{}, nil, 0)
+		win, _ := critiqueBlockPlan(ctx, blocksPeakThenCharge, timelinePeakThenCharge, state35, nil, postHorizonValuation{knownPostHorizonRate: 0.08}, noExportSettings, types.SystemStatus{}, nil, 0, nil)
 		require.Len(t, win, 3)
 		assert.Equal(t, blockActionLoad, win[0].actionType, "Day-1 Peak Block 0 must discharge in Load rather than being forced into Standby by tcHold")
 		assert.Equal(t, blockActionCharge, win[1].actionType, "Overnight Block 1 must grid-charge for Day-2 Peak")
@@ -1959,7 +2006,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		}
 
 		state45 := planState{soc: 45.0, energyKWH: 30.0 * 0.45, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: poll1Start}
-		path1 := c.searchOptimalPlanBlocks(ctx, buildHorizon(0), state45, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, nil)
+		path1 := c.searchOptimalPlanBlocks(ctx, buildHorizon(0), state45, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, nil, nil)
 		require.NotNil(t, path1)
 		if assert.NotEmpty(t, path1.actions) {
 			assert.Equal(t, types.BatteryModeLoad, path1.actions[0].batteryMode)
@@ -1973,7 +2020,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			BatteryMode: path1.actions[0].batteryMode,
 			SolarMode:   path1.actions[0].solarMode,
 		}
-		path2 := c.searchOptimalPlanBlocks(ctx, buildHorizon(1), state43, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct1)
+		path2 := c.searchOptimalPlanBlocks(ctx, buildHorizon(1), state43, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct1, nil)
 		require.NotNil(t, path2)
 		if assert.NotEmpty(t, path2.actions) {
 			assert.Equal(t, types.BatteryModeLoad, path2.actions[0].batteryMode)
@@ -1987,7 +2034,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			BatteryMode: path2.actions[0].batteryMode,
 			SolarMode:   path2.actions[0].solarMode,
 		}
-		path3 := c.searchOptimalPlanBlocks(ctx, buildHorizon(3), state40, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct2)
+		path3 := c.searchOptimalPlanBlocks(ctx, buildHorizon(3), state40, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct2, nil)
 		require.NotNil(t, path3)
 		if assert.Len(t, path3.actions, 3) {
 			assert.Equal(t, types.BatteryModeLoad, path3.actions[0].batteryMode)
@@ -2039,7 +2086,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	path := optimizeBlockTargets(ctx, choices, blocks, timeline, state, nil, postHorizonValuation{}, settings, types.SystemStatus{}, nil, 0)
+	path := optimizeBlockTargets(ctx, choices, blocks, timeline, state, nil, postHorizonValuation{}, settings, types.SystemStatus{}, nil, 0, nil)
 	require.NotNil(t, path)
 	require.Len(t, path.actions, 4)
 
@@ -2088,7 +2135,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			{actionType: blockActionLoad, targetSOC: 20.0},
 		}
 
-		pathLoad := optimizeBlockTargets(ctx, choicesLoad, blocksLoad, timelineLoad, state, nil, postHorizonValuation{}, noExportSettings, types.SystemStatus{}, nil, 0)
+		pathLoad := optimizeBlockTargets(ctx, choicesLoad, blocksLoad, timelineLoad, state, nil, postHorizonValuation{}, noExportSettings, types.SystemStatus{}, nil, 0, nil)
 		require.NotNil(t, pathLoad)
 		maxSOC := 0.0
 		for _, st := range pathLoad.states {
@@ -2160,7 +2207,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			{actionType: blockActionLoad, targetSOC: 50.0},
 		}
 
-		pathCloud := optimizeBlockTargets(ctx, choicesCloud, blocksCloud, timelineCloud, startStateCloud, nil, postHorizonValuation{}, cloudDipSettings, types.SystemStatus{}, nil, 0)
+		pathCloud := optimizeBlockTargets(ctx, choicesCloud, blocksCloud, timelineCloud, startStateCloud, nil, postHorizonValuation{}, cloudDipSettings, types.SystemStatus{}, nil, 0, nil)
 		require.NotNil(t, pathCloud)
 		require.Len(t, pathCloud.states, 4)
 
@@ -2234,7 +2281,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			{actionType: blockActionLoad, targetSOC: 50.0},
 		}
 
-		pathMulti := optimizeBlockTargets(ctx, choicesMulti, blocksMulti, timelineMulti, startStateMulti, nil, postHorizonValuation{}, multiExportSettings, types.SystemStatus{}, nil, 0)
+		pathMulti := optimizeBlockTargets(ctx, choicesMulti, blocksMulti, timelineMulti, startStateMulti, nil, postHorizonValuation{}, multiExportSettings, types.SystemStatus{}, nil, 0, nil)
 		require.NotNil(t, pathMulti)
 		require.Len(t, pathMulti.states, 5)
 		assert.GreaterOrEqual(t, pathMulti.states[3].soc, 50.0-socTargetTolerancePct,
@@ -2276,7 +2323,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 
 		var logBuf bytes.Buffer
 		debugCtx := log.With(ctx, slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		optimizeBlockTargets(debugCtx, choicesNoExport, blocksNoExport, timelineNoExport, fullState, nil, postHorizonValuation{}, noSolarExportSettings, types.SystemStatus{}, nil, 0)
+		optimizeBlockTargets(debugCtx, choicesNoExport, blocksNoExport, timelineNoExport, fullState, nil, postHorizonValuation{}, noSolarExportSettings, types.SystemStatus{}, nil, 0, nil)
 
 		assert.Contains(t, logBuf.String(), "Load:$0.001(+$0.000)",
 			"Step-0 Load comparison candidate must use SolarModeNoExport (curtailing solar, $0.001 holding cost) rather than zero-value SolarModeUnspec (exporting 4.5 kWh * $0.30 = -$1.349)")
@@ -2321,7 +2368,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			{actionType: blockActionLoad, targetSOC: 15.0},
 		}
 
-		pathFine := optimizeBlockTargets(ctx, choicesFine, blocksFine, timelineFine, state18kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.24}, fineSettings, types.SystemStatus{}, nil, 0)
+		pathFine := optimizeBlockTargets(ctx, choicesFine, blocksFine, timelineFine, state18kWh, nil, postHorizonValuation{knownPostHorizonRate: 0.24}, fineSettings, types.SystemStatus{}, nil, 0, nil)
 		require.NotNil(t, pathFine)
 		require.Len(t, pathFine.metrics, 4)
 		assert.InDelta(t, 98.0, pathFine.actions[0].targetSOC, 0.1,
@@ -2423,16 +2470,16 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			maxChargeKW:    16.0,
 			maxDischargeKW: 20.0,
 		}
-		blocksSplit := buildTimelineBlocks(ctx, timelineSplit, nil, splitSettings, status30kWh)
+		blocksSplit := buildTimelineBlocks(ctx, timelineSplit, nil, splitSettings, status30kWh, nil)
 		require.Len(t, blocksSplit, 3)
 
 		postHorizonSplit := postHorizonValuation{knownPostHorizonRate: 0.20754}
-		winningChoices, _ := critiqueBlockPlan(ctx, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0)
+		winningChoices, _ := critiqueBlockPlan(ctx, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0, nil)
 		require.Len(t, winningChoices, 3)
 		assert.Equal(t, blockActionCharge, winningChoices[0].actionType, "Pass 1 initially adopts a split pre-charge in Block 0")
 		assert.Equal(t, blockActionCharge, winningChoices[1].actionType, "Pass 1 schedules main pre-peak charge in Block 1")
 
-		pathSplit := optimizeBlockTargets(ctx, winningChoices, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0)
+		pathSplit := optimizeBlockTargets(ctx, winningChoices, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0, nil)
 		require.NotNil(t, pathSplit)
 		require.Len(t, pathSplit.actions, 72)
 
@@ -2564,8 +2611,8 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				DollarsPerKWH: 0.20754,
 			},
 		}
-		postHorizon := c.buildPostHorizonValuation(ctx, timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
-		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil)
+		postHorizon := c.buildPostHorizonValuation(ctx, timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil, nil)
+		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil, nil)
 		require.NotNil(t, pathStandby)
 		require.Len(t, pathStandby.actions, 72)
 
@@ -2593,7 +2640,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		init2120.time = t2120
 		init2120.soc = 38.6
 		init2120.energyKWH = 30.0 * 0.386
-		path2120 := c.searchOptimalPlanBlocks(ctx, timeline2120, init2120, nil, postHorizon, standbySettings, status2120, nil)
+		path2120 := c.searchOptimalPlanBlocks(ctx, timeline2120, init2120, nil, postHorizon, standbySettings, status2120, nil, nil)
 		require.NotNil(t, path2120)
 		require.Len(t, path2120.actions, 68)
 		assert.Equal(t, types.BatteryModeLoad, path2120.actions[0].batteryMode,
@@ -2640,7 +2687,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.12, loadKWH: 1.0, minSOC: 25.0},
 		}
 
-		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{}, sett, status, nil)
+		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{}, sett, status, nil, nil)
 		require.NotEmpty(t, path.actions)
 
 		// Must choose ChargeAny immediately at step 0 to restore backup reserve
@@ -2683,7 +2730,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			{startTime: now.Add(40 * time.Minute), endTime: now.Add(time.Hour), durationHours: 20.0 / 60.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.2, minSOC: 25.0},
 		}
 
-		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, sett, status, nil)
+		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, sett, status, nil, nil)
 		require.Len(t, path.actions, 3)
 
 		assert.NotEqual(t, types.BatteryModeChargeAny, path.actions[0].batteryMode,
@@ -2729,7 +2776,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.15, loadKWH: 0.8, minSOC: 20.0},
 		}
 
-		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, vppEvents, postHorizonValuation{}, sett, status, nil)
+		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, vppEvents, postHorizonValuation{}, sett, status, nil, nil)
 		require.NotEmpty(t, path.actions)
 
 		// Must pre-charge to reach full capacity by VPP preparation window
@@ -2764,7 +2811,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 4.50, loadKWH: 2.0, minSOC: 20.0},
 		}
 
-		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{}, sett, status, nil)
+		path := c.searchOptimalPlanBlocks(ctx, timeline, initSt, nil, postHorizonValuation{}, sett, status, nil, nil)
 		require.NotEmpty(t, path.actions)
 
 		// Step 0 charges cheaply ($0.05/kWh) to restore reserve and prepare for spike
@@ -3511,11 +3558,11 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			maxChargeKW:    5.0,
 			maxDischargeKW: 5.0,
 		}
-		blocks := buildTimelineBlocks(ctx, timeline, nil, stepUpSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(ctx, timeline, nil, stepUpSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocks, 2)
 		allowed := isBlockActionAllowed(0, blocks[0], blockActionChoice{actionType: blockActionStandby}, blocks, st, nil, 0.0, stepUpSettings, types.SystemStatus{}, timeline, nil)
 		assert.True(t, allowed, "Must allow blockActionStandby when upcoming minSOC is higher")
-		actions := expandBlockAction(blocks[0], blockActionChoice{actionType: blockActionStandby}, st, timeline, nil, stepUpSettings, types.SystemStatus{}, nil)
+		actions := expandBlockAction(blocks[0], blockActionChoice{actionType: blockActionStandby}, st, timeline, nil, stepUpSettings, types.SystemStatus{}, nil, nil)
 		require.NotEmpty(t, actions)
 		assert.Equal(t, types.BatteryModeStandby, actions[0].batteryMode)
 	})
@@ -3535,7 +3582,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			{durationHours: 1.0, importRate: 0.10, exportRate: 0.04, loadKWH: 0.5, minSOC: 20.0},
 			{durationHours: 1.0, importRate: 0.125, exportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
 		}
-		blocks := buildTimelineBlocks(ctx, timeline, nil, arbSettings, types.SystemStatus{})
+		blocks := buildTimelineBlocks(ctx, timeline, nil, arbSettings, types.SystemStatus{}, nil)
 		require.Len(t, blocks, 2)
 
 		// Above reserve with sufficient energy to survive peak (50% SOC -> ~30% > 20% minSOC):
@@ -3565,7 +3612,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		allowedBelow := isBlockActionAllowed(0, blocks[0], blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, blocks, belowReserveState, nil, 0.0, arbSettings, types.SystemStatus{}, timeline, nil)
 		assert.True(t, allowedBelow, "Must allow reserve charge when below minSOC regardless of MinArbitrageDifferenceDollarsPerKWH")
 
-		actions := expandBlockAction(blocks[0], blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, belowReserveState, timeline, nil, arbSettings, types.SystemStatus{}, nil)
+		actions := expandBlockAction(blocks[0], blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, belowReserveState, timeline, nil, arbSettings, types.SystemStatus{}, nil, nil)
 		require.NotEmpty(t, actions)
 		assert.Equal(t, types.BatteryModeChargeAny, actions[0].batteryMode)
 		assert.InDelta(t, 20.0, actions[0].targetSOC, 0.01)
@@ -3579,7 +3626,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		}
 		defaultArbSettings := arbSettings
 		defaultArbSettings.MinArbitrageDifferenceDollarsPerKWH = 0
-		narrowBlocks := buildTimelineBlocks(ctx, narrowTimeline, nil, defaultArbSettings, types.SystemStatus{})
+		narrowBlocks := buildTimelineBlocks(ctx, narrowTimeline, nil, defaultArbSettings, types.SystemStatus{}, nil)
 		require.Len(t, narrowBlocks, 2)
 		assert.False(t, isBlockActionAllowed(0, narrowBlocks[0], blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, narrowBlocks, aboveReserveState, nil, 0.0, defaultArbSettings, types.SystemStatus{}, narrowTimeline, nil),
 			"Must reject $0.015/kWh arbitrage spread under default $0.02/kWh balanced threshold")
@@ -3632,8 +3679,8 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			BatterySOC:         30.0,
 		}
 		vppEvents := extractVPPAnchors(t0100, status0100, settings)
-		postHorizon := c.buildPostHorizonValuation(ctx, timeline, nil, settings, status0100, nil)
-		pathAtStart := c.searchOptimalPlanBlocks(ctx, timeline, initial, vppEvents, postHorizon, settings, status0100, nil)
+		postHorizon := c.buildPostHorizonValuation(ctx, timeline, nil, settings, status0100, nil, nil)
+		pathAtStart := c.searchOptimalPlanBlocks(ctx, timeline, initial, vppEvents, postHorizon, settings, status0100, nil, nil)
 		if assert.Len(t, pathAtStart.actions, 4) {
 			assert.Equal(t, types.BatteryModeChargeAny, pathAtStart.actions[1].batteryMode,
 				"After waiting 20 minutes (step 0) for a cheaper rate, step 1 must begin recharging even if later steps are cheaper still")
@@ -3657,7 +3704,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			ReserveSOC:   50.0,
 			SystemStatus: types.SystemStatus{BatterySOC: 30.0},
 		}
-		pathAt0145 := c.searchOptimalPlanBlocks(ctx, timeline0145, initial0145, vppEvents, postHorizon, settings, status0145, lastActDeficit)
+		pathAt0145 := c.searchOptimalPlanBlocks(ctx, timeline0145, initial0145, vppEvents, postHorizon, settings, status0145, lastActDeficit, nil)
 		if assert.NotEmpty(t, pathAt0145.actions) {
 			assert.Equal(t, types.BatteryModeChargeAny, pathAt0145.actions[0].batteryMode,
 				"When lastAction was already in reserve deficit without charging, step 0 must charge immediately rather than delaying again")
@@ -3914,6 +3961,6 @@ func BenchmarkSearchOptimalPlanBlocks(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = c.searchOptimalPlanBlocks(ctx, timeline, initialState, nil, postHorizonValuation{}, settings, status, nil)
+		_ = c.searchOptimalPlanBlocks(ctx, timeline, initialState, nil, postHorizonValuation{}, settings, status, nil, nil)
 	}
 }

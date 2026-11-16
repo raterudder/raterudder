@@ -3041,6 +3041,18 @@ func (s *Server) handleHighHomeLoadNotifications(
 	}
 
 	siteLoc := data.status.Timestamp.Location()
+	if data.status.TimeLocation != "" {
+		if siteLoc == nil || siteLoc.String() != data.status.TimeLocation {
+			if loc, err := time.LoadLocation(data.status.TimeLocation); err == nil {
+				siteLoc = loc
+			}
+		}
+	} else if (siteLoc == nil || siteLoc == time.UTC || siteLoc.String() == "" || siteLoc.String() == "UTC") &&
+		data.settings.Location != nil && data.settings.Location.TimeZone != "" {
+		if loc, err := time.LoadLocation(data.settings.Location.TimeZone); err == nil {
+			siteLoc = loc
+		}
+	}
 	if siteLoc == nil {
 		siteLoc = time.UTC
 	}
@@ -3054,7 +3066,8 @@ func (s *Server) handleHighHomeLoadNotifications(
 	// nighttime hours 20:00-06:59) and active EV charging is detected,
 	// suppress the alert rather than blanket-ignoring all nighttime loads.
 	if controller.IsEVStandbyEligible(data.settings, nowLocal) {
-		if isEV, stepKW := controller.DetectEVCharging(ctx, data.status.HomeKW, flattenDailyEnergyStats(data.energyHistory)); isEV {
+		completedHistory := controller.FilterCompletedHourlyStats(flattenDailyEnergyStats(data.energyHistory), nowLocal)
+		if isEV, stepKW := controller.DetectEVCharging(ctx, data.status.HomeKW, completedHistory, data.settings); isEV {
 			log.Ctx(ctx).DebugContext(ctx, "skipping high home load check: EV charging detected during eligible EV standby window",
 				slog.Float64("homeKW", data.status.HomeKW),
 				slog.Float64("stepKW", stepKW),

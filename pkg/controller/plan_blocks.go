@@ -149,6 +149,7 @@ func getHardOverride(
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 	defaultSolarMode types.SolarMode,
+	history []types.EnergyStats,
 ) (actionCandidate, bool) {
 	it := timeline[stepIdx]
 	if currentStatus.GridUnavailable {
@@ -219,7 +220,13 @@ func getHardOverride(
 	// planner must start charging or exporting immediately at step 0 (e.g. when a full hour of
 	// charging is required before an upcoming rate increase).
 	if stepIdx == 0 && choice.actionType != blockActionCharge && choice.actionType != blockActionExport && IsEVStandbyEligible(settings, timeline[0].startTime) {
-		if isEV, _ := DetectEVCharging(context.Background(), currentStatus.HomeKW, nil); isEV {
+		isEV := false
+		if timeline[0].hasStepZeroEVEval {
+			isEV = timeline[0].stepZeroEVActive
+		} else {
+			isEV, _ = DetectEVCharging(context.Background(), currentStatus.HomeKW, history, settings)
+		}
+		if isEV {
 			return actionCandidate{
 				batteryMode: types.BatteryModeStandby,
 				solarMode:   defaultSolarMode,
@@ -250,9 +257,15 @@ func buildTimelineBlocks(
 	vppEvents []vppAnchor,
 	settings types.Settings,
 	currentStatus types.SystemStatus,
+	history []types.EnergyStats,
 ) []timelineBlock {
 	if len(timeline) == 0 {
 		return nil
+	}
+	if !timeline[0].hasStepZeroEVEval && IsEVStandbyEligible(settings, timeline[0].startTime) {
+		isEV, _ := DetectEVCharging(ctx, currentStatus.HomeKW, history, settings)
+		timeline[0].hasStepZeroEVEval = true
+		timeline[0].stepZeroEVActive = isEV
 	}
 
 	// 1. Identify hard override / boundary changes between adjacent intervals that must never be merged.
@@ -285,8 +298,8 @@ func buildTimelineBlocks(
 
 		probeChoice := blockActionChoice{actionType: blockActionLoad}
 		probeState := planState{soc: 100.0}
-		ovA, okA := getHardOverride(i, probeChoice, probeState, timeline, vppEvents, settings, currentStatus, types.SolarModeAny)
-		ovB, okB := getHardOverride(i+1, probeChoice, probeState, timeline, vppEvents, settings, currentStatus, types.SolarModeAny)
+		ovA, okA := getHardOverride(i, probeChoice, probeState, timeline, vppEvents, settings, currentStatus, types.SolarModeAny, history)
+		ovB, okB := getHardOverride(i+1, probeChoice, probeState, timeline, vppEvents, settings, currentStatus, types.SolarModeAny, history)
 		if okA != okB || ovA.batteryMode != ovB.batteryMode || ovA.reason != ovB.reason || ovA.overrideReserveSOC != ovB.overrideReserveSOC {
 			tagA := "none"
 			if okA {
@@ -741,6 +754,7 @@ func expandBlockAction(
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 	lastAction *types.Action,
+	history []types.EnergyStats,
 ) []actionCandidate {
 	L := block.endIdx - block.startIdx + 1
 	actions := make([]actionCandidate, L)
@@ -755,11 +769,11 @@ func expandBlockAction(
 	// so that SOC-dependent transitions within a multi-interval VPP window (e.g. VPPPrep switching from
 	// ChargeAny to Standby once simState.soc reaches 99%, or VPPActive switching from Export/Load to Standby
 	// once simState.soc reaches targetSOC) occur on the exact interval where the threshold is crossed.
-	if _, ok := getHardOverride(block.startIdx, choice, startState, timeline, vppEvents, settings, currentStatus, defaultSolarMode); ok {
+	if _, ok := getHardOverride(block.startIdx, choice, startState, timeline, vppEvents, settings, currentStatus, defaultSolarMode, history); ok {
 		effRT := resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, currentStatus)
 		simState := startState
 		for i := 0; i < L; i++ {
-			ov, _ := getHardOverride(block.startIdx+i, choice, simState, timeline, vppEvents, settings, currentStatus, defaultSolarMode)
+			ov, _ := getHardOverride(block.startIdx+i, choice, simState, timeline, vppEvents, settings, currentStatus, defaultSolarMode, history)
 			actions[i] = ov
 			simState, _ = stepPhysics(simState, ov, timeline[block.startIdx+i], settings, effRT)
 		}
@@ -1054,11 +1068,12 @@ func expandBlockPlan(
 	currentStatus types.SystemStatus,
 	lastAction *types.Action,
 	roundTripEff float64,
+	history []types.EnergyStats,
 ) []actionCandidate {
 	full := make([]actionCandidate, 0, len(timeline))
 	st := initial
 	for b := 0; b < len(blocks); b++ {
-		expanded := expandBlockAction(blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction)
+		expanded := expandBlockAction(blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction, history)
 		for _, act := range expanded {
 			full = append(full, act)
 			st, _ = stepPhysics(st, act, timeline[len(full)-1], settings, roundTripEff)
@@ -1703,6 +1718,7 @@ func critiqueBlockPlan(
 	currentStatus types.SystemStatus,
 	lastAction *types.Action,
 	initialDeficitWait time.Duration,
+	history []types.EnergyStats,
 ) ([]blockActionChoice, float64) {
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := resolveRoundTripEfficiency(optParams.RoundTripEfficiency, currentStatus)
@@ -1731,7 +1747,7 @@ func critiqueBlockPlan(
 		blockStartState := initialState
 		for k := 0; k < len(blocks); k++ {
 			startSOC := blockStartState.soc
-			expanded := expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction)
+			expanded := expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
 			endState := blockStartState
 			for idx, act := range expanded {
 				endState, _ = stepPhysics(endState, act, timeline[blocks[k].startIdx+idx], settings, roundTripEff)
@@ -1744,7 +1760,7 @@ func critiqueBlockPlan(
 				if isBlockActionAllowed(k, blocks[k], cand, blocks, blockStartState, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
 					tcRec[k] = cand
 					changed = true
-					expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction)
+					expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
 					endState = blockStartState
 					for idx, act := range expanded {
 						endState, _ = stepPhysics(endState, act, timeline[blocks[k].startIdx+idx], settings, roundTripEff)
@@ -1760,11 +1776,11 @@ func critiqueBlockPlan(
 	// reason it can fail validateCandidateTrajectory is an unrecovered reserve deficit (e.g. starting below
 	// minSOC or encountering a downstream minSOC step-up). If invalid, immediately try repairing the baseline
 	// with ensureReserveRecoveryBlocks so Pass 1 starts from a valid reserve-compliant schedule.
-	baseActs := expandBlockPlan(currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+	baseActs := expandBlockPlan(currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 	baseValid, baseValidReason := validateCandidateTrajectory(baseActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
 	if !baseValid {
 		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1); ok {
-			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 			if recValid, recReason := validateCandidateTrajectory(recActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait); recValid {
 				currentChoices = tcRec
 				baseActs = recActs
@@ -1967,7 +1983,7 @@ func critiqueBlockPlan(
 				}
 
 				for _, trialChoices := range trialVariants {
-					trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 					valid, _ := validateCandidateTrajectory(trialActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
 					if !valid {
 						continue
@@ -2311,7 +2327,7 @@ func critiqueBlockPlan(
 						}
 					}
 					for _, trialChoices := range trialVariants {
-						trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+						trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 						valid, _ := validateCandidateTrajectory(trialActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
 						if !valid {
 							continue
@@ -2381,6 +2397,7 @@ func optimizeBlockTargets(
 	currentStatus types.SystemStatus,
 	lastAction *types.Action,
 	initialDeficitWait time.Duration,
+	history []types.EnergyStats,
 ) *planPath {
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := resolveRoundTripEfficiency(optParams.RoundTripEfficiency, currentStatus)
@@ -2425,7 +2442,7 @@ func optimizeBlockTargets(
 				trialChoices[chargeBlockIdx].targetSOC = C
 				trialChoices[exportBlockIdx].targetSOC = E
 
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 				if !valid {
 					continue
@@ -2450,7 +2467,7 @@ func optimizeBlockTargets(
 				trialChoices[chargeBlockIdx].targetSOC = C
 				trialChoices[exportBlockIdx].targetSOC = E
 
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 				if !valid {
 					continue
@@ -2492,7 +2509,7 @@ func optimizeBlockTargets(
 				bestScore := math.MaxFloat64
 				initialC := choices[b].targetSOC
 				bestC := initialC
-				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
+				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); len(initActs) > 0 {
 					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
 						bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
 					}
@@ -2501,7 +2518,7 @@ func optimizeBlockTargets(
 				for _, C := range coarseSOCGrid(minC, maxC) {
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = C
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 					if !valid {
 						continue
@@ -2518,7 +2535,7 @@ func optimizeBlockTargets(
 					C := min(maxC, max(minC, coarseC+dT))
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = C
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 					if !valid {
 						continue
@@ -2544,7 +2561,7 @@ func optimizeBlockTargets(
 				minE := blocks[b].minSOC
 				maxE := 100.0
 				bestScore := math.MaxFloat64
-				initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+				initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 				var initStates []planState
 				if len(initActs) > 0 {
 					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
@@ -2658,7 +2675,7 @@ func optimizeBlockTargets(
 				for _, E := range coarseSOCGrid(minE, maxE) {
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = E
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 					if !valid {
 						continue
@@ -2676,7 +2693,7 @@ func optimizeBlockTargets(
 					E := min(maxE, max(minE, coarseE+dF))
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = E
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
 					if !valid {
 						continue
@@ -2710,7 +2727,7 @@ func optimizeBlockTargets(
 	}
 
 	// 3. Final trajectory execution and step-0 mode comparison debug log.
-	finalActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+	finalActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 	score, totalPhys, states, metrics := scoreCandidateTrajectory(finalActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
 
 	if len(blocks) > 0 && len(finalActs) > 0 {
@@ -2733,7 +2750,7 @@ func optimizeBlockTargets(
 		for _, m := range step0Modes {
 			copy(trialChoices, choices)
 			trialChoices[0] = m.choice
-			tActs := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+			tActs := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 			if len(tActs) > 0 {
 				tActs[0] = m.cand
 			}
@@ -2769,6 +2786,7 @@ func (c *Controller) searchOptimalPlanBlocks(
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 	lastAction *types.Action,
+	history []types.EnergyStats,
 ) *planPath {
 	if len(timeline) == 0 {
 		return &planPath{}
@@ -2785,7 +2803,7 @@ func (c *Controller) searchOptimalPlanBlocks(
 	initialDeficitWait := computeInitialDeficitWait(initial, timeline, lastAction)
 
 	// 1. Build timeline blocks
-	blocks := buildTimelineBlocks(ctx, timeline, vppEvents, settings, currentStatus)
+	blocks := buildTimelineBlocks(ctx, timeline, vppEvents, settings, currentStatus, history)
 	log.Ctx(ctx).DebugContext(ctx, "plan timeline blocks built",
 		slog.Int("timelineIntervals", len(timeline)),
 		slog.Int("timelineBlocks", len(blocks)),
@@ -2797,8 +2815,8 @@ func (c *Controller) searchOptimalPlanBlocks(
 	}
 
 	// 2. Pass 1: Critique loop
-	winningChoices, _ := critiqueBlockPlan(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait)
+	winningChoices, _ := critiqueBlockPlan(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history)
 
 	// 3. Pass 2: Target SOC line search
-	return optimizeBlockTargets(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait)
+	return optimizeBlockTargets(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history)
 }

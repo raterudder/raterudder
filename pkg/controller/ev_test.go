@@ -7,6 +7,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDetectEVCharging(t *testing.T) {
@@ -19,7 +20,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 0.9},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 1.1},
 		}
-		isEV, step := DetectEVCharging(ctx, 12.0, history)
+		isEV, step := DetectEVCharging(ctx, 12.0, history, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 11.0, step, 0.1)
 		}
@@ -31,7 +32,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 4.2},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 4.6},
 		}
-		isEV, step := DetectEVCharging(ctx, 16.0, history)
+		isEV, step := DetectEVCharging(ctx, 16.0, history, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 11.5, step, 0.1)
 		}
@@ -42,7 +43,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.0},
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 0.8},
 		}
-		isEV, step := DetectEVCharging(ctx, 8.2, history)
+		isEV, step := DetectEVCharging(ctx, 8.2, history, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 7.2, step, 0.1)
 		}
@@ -52,7 +53,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.0},
 		}
-		isEV, step := DetectEVCharging(ctx, 6.5, history)
+		isEV, step := DetectEVCharging(ctx, 6.5, history, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 5.5, step, 0.1)
 		}
@@ -62,7 +63,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.2},
 		}
-		isEV, step := DetectEVCharging(ctx, 5.0, history)
+		isEV, step := DetectEVCharging(ctx, 5.0, history, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 3.8, step, 0.1)
 		}
@@ -74,7 +75,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 8.2},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 8.1},
 		}
-		isEV, step := DetectEVCharging(ctx, 8.0, history)
+		isEV, step := DetectEVCharging(ctx, 8.0, history, types.Settings{})
 		assert.False(t, isEV)
 		assert.InDelta(t, 0.0, step, 0.1)
 	})
@@ -83,7 +84,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.5},
 		}
-		isEV, _ := DetectEVCharging(ctx, 4.2, history)
+		isEV, _ := DetectEVCharging(ctx, 4.2, history, types.Settings{})
 		assert.False(t, isEV)
 	})
 
@@ -91,12 +92,12 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 0.8},
 		}
-		isEV, _ := DetectEVCharging(ctx, 0.8, history)
+		isEV, _ := DetectEVCharging(ctx, 0.8, history, types.Settings{})
 		assert.False(t, isEV)
 	})
 
 	t.Run("EmptyHistory_UsesDefaultBaseline", func(t *testing.T) {
-		isEV, step := DetectEVCharging(ctx, 8.0, nil)
+		isEV, step := DetectEVCharging(ctx, 8.0, nil, types.Settings{})
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 7.0, step, 0.1)
 		}
@@ -113,7 +114,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: checkAt20h.Add(-5 * time.Hour), HomeKWH: 4.9},
 			{TSHourStart: checkAt20h.Add(-6 * time.Hour), HomeKWH: 2.0},
 		}
-		isEV, _ := DetectEVCharging(ctx, 5.7, history)
+		isEV, _ := DetectEVCharging(ctx, 5.7, history, types.Settings{})
 		assert.False(t, isEV, "Sustained 5.0-5.8 kW afternoon AC continuing at 20:00 (5.7 kW) must not be flagged as EV charging")
 	})
 
@@ -136,7 +137,7 @@ func TestDetectEVCharging(t *testing.T) {
 			types.EnergyStats{TSHourStart: checkAt22h.Add(-5 * time.Hour), HomeKWH: 12.1},
 			types.EnergyStats{TSHourStart: checkAt22h.Add(-6 * time.Hour), HomeKWH: 9.5},
 		)
-		isEV, step := DetectEVCharging(ctx, 8.0, history)
+		isEV, step := DetectEVCharging(ctx, 8.0, history, types.Settings{})
 		if assert.True(t, isEV, "Daytime EV charging > 7.5 kW must not classify as sustained HVAC and mask nighttime EV charging") {
 			assert.InDelta(t, 6.8, step, 0.1)
 		}
@@ -161,6 +162,168 @@ func TestDetectEVCharging(t *testing.T) {
 		for _, v := range filtered {
 			assert.InDelta(t, 5.5, v, 0.01, "Routine daily loads should not be filtered out")
 		}
+	})
+
+	t.Run("AdaptiveThresholdOn48AChargerSiteRejectsMidTierAppliance", func(t *testing.T) {
+		// Build 7 days (168 hours) with 0.8 kWh base load and 2 overnight 11.2 kW EV sessions (01:00-02:00).
+		// With >= 4 local core hours >= 8.2 kW and >= 6.5 kW step, adaptive thresholds rise to 6.8 / 5.4 kW.
+		baseTime := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		for d := 0; d < 7; d++ {
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 1 || h == 2) {
+					load = 11.2
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: baseTime.AddDate(0, 0, d).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		isEV, _ := DetectEVCharging(ctx, 5.4, history, types.Settings{})
+		assert.False(t, isEV, "5.4 kW appliance spike should be ignored on an adaptive 6.8 kW fast-charger site")
+
+		isEV, step := DetectEVCharging(ctx, 9.6, history, types.Settings{})
+		assert.True(t, isEV, "9.6 kW EV session should still trigger on an adaptive 6.8 kW fast-charger site")
+		assert.InDelta(t, 8.8, step, 0.05)
+	})
+
+	t.Run("SlowNightGuardPreservesThresholdOnMixedChargerSite", func(t *testing.T) {
+		// Household has BOTH a 48A charger (11.2 kW on 2 nights) AND a slower EV/Level 2 session (6.0 kW
+		// across 2 consecutive overnight hours on 2 other nights without adjacent >= 8.2 kW hours).
+		// GuardSlowNight2H keeps the default 4.8 / 3.5 kW thresholds so the slower EV is still detected.
+		baseTime := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		for d := 0; d < 7; d++ {
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 1 || h == 2) {
+					load = 11.2
+				}
+				if (d == 2 || d == 4) && (h == 3 || h == 4) {
+					load = 6.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: baseTime.AddDate(0, 0, d).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		isEV, step := DetectEVCharging(ctx, 5.8, history, types.Settings{})
+		assert.True(t, isEV, "slow-night guard should preserve 4.8/3.5 kW thresholds and detect 5.8 kW charging")
+		assert.InDelta(t, 5.0, step, 0.05)
+	})
+
+	t.Run("FilterCompletedHourlyStats_FallBackDSTAndBoundaries", func(t *testing.T) {
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		// Fall-Back DST in America/Chicago: 2026-11-01 01:00 CDT (-0500) repeats as 01:00 CST (-0600).
+		// At 01:20 CST (07:20 UTC), the first 01:00 CDT bucket (06:00 UTC) is completed and MUST be kept,
+		// while the in-progress second 01:00 CST bucket (07:00 UTC), exact-boundary, future, and zero buckets are dropped.
+		first01CDT := time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).In(chicagoLoc)  // 01:00 -0500 CDT
+		second01CST := time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).In(chicagoLoc) // 01:00 -0600 CST
+		nowCST := second01CST.Add(20 * time.Minute)                                // 01:20 -0600 CST
+
+		stats := []types.EnergyStats{
+			{}, // Zero TSHourStart
+			{TSHourStart: first01CDT.Add(-time.Hour), HomeKWH: 1.0},
+			{TSHourStart: first01CDT, HomeKWH: 2.0},
+			{TSHourStart: second01CST, HomeKWH: 3.0},
+			{TSHourStart: second01CST.Add(time.Hour), HomeKWH: 4.0},
+		}
+		filtered := FilterCompletedHourlyStats(stats, nowCST)
+		if assert.Len(t, filtered, 2) {
+			assert.InDelta(t, 1.0, filtered[0].HomeKWH, 0.001)
+			assert.InDelta(t, 2.0, filtered[1].HomeKWH, 0.001, "completed first 01:00 CDT hour must be retained during 01:xx CST")
+		}
+
+		// Zero now returns history unchanged
+		assert.Equal(t, stats, FilterCompletedHourlyStats(stats, time.Time{}))
+	})
+
+	t.Run("UTCTimestampsWithTimeLocationSustainedDaytimeHVAC", func(t *testing.T) {
+		// Afternoon HVAC 15:00-19:00 CDT stored as UTC (20:00-00:00 UTC) with TimeLocation set:
+		// must be localized so sustainedDaytimeHVAC holds and 5.7 kW at 20:00 CDT (01:00 UTC) is NOT flagged as EV.
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		endLocal := time.Date(2026, 7, 15, 20, 0, 0, 0, chicagoLoc)
+		var history []types.EnergyStats
+		for h := 5; h >= 1; h-- {
+			history = append(history, types.EnergyStats{
+				TSHourStart:  endLocal.Add(-time.Duration(h) * time.Hour).UTC(),
+				TimeLocation: "America/Chicago",
+				HomeKWH:      5.2,
+			})
+		}
+
+		isEV, _ := DetectEVCharging(ctx, 5.7, history, types.Settings{})
+		assert.False(t, isEV, "UTC-encoded afternoon CDT AC hours must still prevent false 20:00 EV detection")
+	})
+
+	t.Run("EveryNightConfiguredEVWithSettingsAdaptsThreshold", func(t *testing.T) {
+		// When EVChargingStandby is enabled and a 48A EV charges all 7/7 nights at 01:00-02:00,
+		// DetectEVCharging anchors 01:00-02:00 and raises thresholds to 6.8 / 5.4 kW.
+		baseTime := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		for d := 0; d < 7; d++ {
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if h == 1 || h == 2 {
+					load = 11.2
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: baseTime.AddDate(0, 0, d).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{EVChargingStandby: true}
+		isEV, _ := DetectEVCharging(ctx, 5.6, history, settings)
+		assert.False(t, isEV, "5.6 kW appliance spike should be rejected when 7/7 nightly EV adapts thresholds to 6.8/5.4 kW")
+
+		isEV, _ = DetectEVCharging(ctx, 9.6, history, settings)
+		assert.True(t, isEV, "9.6 kW EV charging should still trigger with 7/7 nightly EV adaptive thresholds")
+
+		// Short (< 72h) history keeps default 4.8 / 3.5 kW thresholds even when high-load hours exist.
+		shortHist := history[:48]
+		isEV, _ = DetectEVCharging(ctx, 5.6, shortHist, settings)
+		assert.True(t, isEV, "< 72h history must stay on default 4.8/3.5 kW thresholds")
+	})
+
+	t.Run("InferThresholdsPrefersESSTimezoneOverSettingsLocation", func(t *testing.T) {
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		baseNY := time.Date(2026, 7, 1, 0, 0, 0, 0, nyLoc)
+		var history []types.EnergyStats
+		for d := 0; d < 7; d++ {
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 10 || h == 11) {
+					load = 11.2 // High-power daytime session
+				}
+				if (d == 2 || d == 4) && (h == 20 || h == 21) {
+					load = 5.5 // Slow-night session in America/New_York (20:00-21:59 EDT = 17:00-18:59 PDT)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  baseNY.AddDate(0, 0, d).Add(time.Duration(h) * time.Hour),
+					TimeLocation: "America/New_York",
+					HomeKWH:      load,
+				})
+			}
+		}
+
+		// Even when settings.Location disagrees (America/Los_Angeles, making 20:00-21:00 EDT look like
+		// daytime 17:00-18:00 PDT), ESS TimeLocation must win so the slow-night guard keeps 4.8 / 3.5 kW.
+		settings := types.Settings{
+			Location: &types.SiteLocation{TimeZone: "America/Los_Angeles"},
+		}
+		isEV, _ := DetectEVCharging(ctx, 5.5, history, settings)
+		assert.True(t, isEV, "ESS history TimeLocation must trigger slow-night guard over conflicting settings.Location")
 	})
 }
 
@@ -219,7 +382,7 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 			}
 
 			dayMap := buildDayMap(history)
-			ignored, refLoads, hourBaseRef := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+			ignored, refLoads, hourBaseRef, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
 
 			// Monday 2026-07-20 had a 1-hour top-off at hour 14 only
 			assert.True(t, ignored[dayHourKey{date: "2026-07-20", hour: 14}], "1-hour Monday solar top-off should be detected")
@@ -269,7 +432,7 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 		}
 
 		dayMap := buildDayMap(history)
-		ignored, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+		ignored, _, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
 		assert.Empty(t, ignored, "Level 1 charging (2.4 kWh) and normal dryer loads (3.5 kWh) must not be flagged")
 	})
 
@@ -316,7 +479,7 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 		}
 
 		dayMap := buildDayMap(history)
-		ignored, refLoads, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, weatherByHour, types.Settings{}, 0.5)
+		ignored, refLoads, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, weatherByHour, types.Settings{}, 0.5)
 
 		// Day 4 (2026-07-05): sustained 5.2 kWh AC must NOT be flagged
 		for h := 11; h <= 19; h++ {
@@ -334,7 +497,7 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 
 	t.Run("UnconfiguredNighttimeLevel2EVChargingFiltered", func(t *testing.T) {
 		// Verify that nighttime Level 2 EV charging (7.7 kW at 01:00-02:00 3 nights/week)
-		// without configured EVChargingPeriods is automatically detected even on warm summer days
+		// with EVChargingStandby disabled is automatically detected even on warm summer days
 		// where afternoon AC runs at 3.5 kWh for 9 hours (dayP65 = 3.5 kWh), and is replaced
 		// with the 0.5 kWh overnight sleeping baseline rather than daytime AC levels.
 		var history []types.EnergyStats
@@ -360,7 +523,7 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 		}
 
 		dayMap := buildDayMap(history)
-		ignored, refLoads, hourBaseRef := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+		ignored, refLoads, hourBaseRef, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
 		assert.True(t, ignored[dayHourKey{date: "2026-07-01", hour: 1}], "overnight 7.7 kW EV charge must not be masked by daytime 3.5 kWh AC")
 		assert.True(t, ignored[dayHourKey{date: "2026-07-01", hour: 2}], "overnight 7.7 kW EV charge must not be masked by daytime 3.5 kWh AC")
 		assert.InDelta(t, 0.5, hourBaseRef[1], 0.05, "cross-day baseline reference for hour 1 should be 0.5 kWh")
@@ -403,12 +566,236 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 		}
 
 		dayMap := buildDayMap(history)
-		ignored, refLoads, hourBaseRef := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+		ignored, refLoads, hourBaseRef, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
 		assert.InDelta(t, 0.6, hourBaseRef[1], 0.05, "75%% frequency nighttime EV should still anchor hour 1 baseline to 0.6 kWh non-EV nights")
 		assert.True(t, ignored[dayHourKey{date: "2026-07-01", hour: 1}], "full EV hour 1 should be flagged")
 		assert.True(t, ignored[dayHourKey{date: "2026-07-01", hour: 2}], "full EV hour 2 should be flagged")
 		assert.True(t, ignored[dayHourKey{date: "2026-07-01", hour: 3}], "adjacent partial-charge shoulder hour 3 (3.8 kWh) should be flagged")
 		assert.InDelta(t, 0.6, refLoads[dayHourKey{date: "2026-07-01", hour: 3}], 0.05)
 		assert.False(t, ignored[dayHourKey{date: "2026-07-01", hour: 4}], "2-hop hour 4 must not chain from shoulder hour 3")
+	})
+
+	t.Run("AdaptiveThresholdRescuesAppliancesAndStripsDaytimeSolarShoulder", func(t *testing.T) {
+		// Site with 48A charger (11.4 kWh sessions -> adaptive 6.8 / 5.4 kW thresholds):
+		// - One-off 5.4 kWh daytime appliance (15:00) is NOT stripped (< 6.8 kW).
+		// - Daytime solar EV charge (11.2 kWh at 13:00 >= 8.0 kW) anchors adjacent partial shoulder
+		//   4.2 kWh at 12:00 (>= 3.2 kWh, 1-hop) without chaining to 2-hop 4.0 kWh at 11:00.
+		// - Isolated [6.8, 8.0) spike (7.2 kWh at 18:00) is stripped in Pass 1 (>= 6.8 kW), but does
+		//   NOT qualify as an actual EV anchor (< 8.0 kW) and does NOT pull adjacent 4.0 kWh at 19:00 into Pass 2.
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 1 || h == 2) {
+					load = 11.4
+				}
+				if d == 4 {
+					switch h {
+					case 15:
+						load = 5.4 // Dryer/oven spike below 6.8 kW adaptive threshold
+					case 18:
+						load = 7.2 // Mid-tier Pass 1 spike below 8.0 kW actual EV anchor floor
+					case 19:
+						load = 4.0 // Adjacent to 7.2 kWh, must NOT be flagged by Pass 2
+					}
+				}
+				if d == 6 {
+					switch h {
+					case 11:
+						load = 4.0 // 2 hops from 13:00 anchor (must NOT chain)
+					case 12:
+						load = 4.2 // Adjacent daytime ramp-in shoulder (must be flagged)
+					case 13:
+						load = 11.2 // Daytime solar EV anchor
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		dayMap := buildDayMap(history)
+		ignored, _, _, thrKW, stepKW := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+		assert.InDelta(t, 6.8, thrKW, 0.01)
+		assert.InDelta(t, 5.4, stepKW, 0.01)
+
+		assert.False(t, ignored[dayHourKey{date: "2026-07-05", hour: 15}], "5.4 kWh appliance spike should be preserved on adaptive 6.8 kW site")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-05", hour: 18}], "7.2 kWh >= 6.8 kW spike should be flagged in Pass 1")
+		assert.False(t, ignored[dayHourKey{date: "2026-07-05", hour: 19}], "4.0 kWh next to 7.2 kWh (< 8.0 kW) must not be flagged as EV shoulder")
+
+		assert.True(t, ignored[dayHourKey{date: "2026-07-07", hour: 13}], "daytime 11.2 kWh EV charge should be flagged")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-07", hour: 12}], "daytime 4.2 kWh shoulder adjacent to 11.2 kWh EV anchor should be flagged")
+		assert.False(t, ignored[dayHourKey{date: "2026-07-07", hour: 11}], "2-hop hour 11 must not chain from daytime shoulder hour 12")
+	})
+
+	t.Run("SlowNightGuardProtectsMixedTwoEVHousehold", func(t *testing.T) {
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if (d == 1 || d == 3) && (h == 1 || h == 2) {
+					load = 11.4 // Fast EV sessions (4 high-core hours)
+				}
+				if (d == 2 || d == 5) && (h == 1 || h == 2) {
+					load = 6.0 // Slow night EV sessions (2 nights x 2 consecutive hours < 7.8 kW)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		dayMap := buildDayMap(history)
+		ignored, _, _, thrKW, stepKW := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, types.Settings{}, 0.5)
+		assert.InDelta(t, EVMinThresholdKW, thrKW, 0.01)
+		assert.InDelta(t, EVMinStepKW, stepKW, 0.01)
+		assert.True(t, ignored[dayHourKey{date: "2026-07-02", hour: 1}], "fast EV session should be flagged")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-03", hour: 1}], "slow 6.0 kW overnight EV session must remain flagged when GuardSlowNight2H triggers")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-03", hour: 2}], "slow 6.0 kW overnight EV session hour 2 must remain flagged")
+	})
+
+	t.Run("EVChargingStandbyRequiresRealStepAboveBaseline", func(t *testing.T) {
+		// Even with EVChargingStandby enabled, hours without a >= 3.5 kWh step and > 2.5x refLoad
+		// must not be stripped:
+		// - Sustained 4.2 kWh daytime/evening HVAC on day 2 hitting 5.2 kWh at 20:00 (step 1.0 kWh) -> preserved.
+		// - Routine 2.4 kWh late-evening baseline at 23:00 hitting 5.0 kWh (step 2.6 kWh) -> preserved.
+		// - Overnight 0.8 kWh baseline at 01:00 hitting 8.4 kWh EV charge (step 7.6 kWh) -> stripped.
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 7; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if h >= 12 && h <= 21 {
+					load = 1.5
+				}
+				if h == 23 {
+					load = 2.4
+				}
+				if d == 2 {
+					if h >= 11 && h <= 21 {
+						load = 4.2 // Sustained HVAC raising dayP65 = 4.2 kWh
+					}
+					if h == 20 {
+						load = 5.2 // Only +1.0 kW step above 4.2 kWh HVAC
+					}
+					if h == 23 {
+						load = 5.0 // Only +2.6 kW step above 2.4 kWh baseline
+					}
+				}
+				if d == 4 && h == 1 {
+					load = 8.4 // Genuine overnight EV charge (+7.6 kW step above 0.8 kWh baseline)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		dayMap := buildDayMap(history)
+		settings := types.Settings{EVChargingStandby: true}
+		ignored, _, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, dayMap, nil, settings, 0.5)
+		assert.False(t, ignored[dayHourKey{date: "2026-07-03", hour: 20}], "5.2 kWh evening HVAC bump (+1.0 kW step) must not be stripped under EVChargingStandby")
+		assert.False(t, ignored[dayHourKey{date: "2026-07-03", hour: 23}], "5.0 kWh late-evening bump (+2.6 kW step) must not be stripped under EVChargingStandby")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-05", hour: 1}], "8.4 kWh genuine overnight EV charge (+7.6 kW step) should be stripped")
+	})
+
+	t.Run("AdaptiveThresholdBoundaryConditionsAndSlowNightEdgeCases", func(t *testing.T) {
+		buildBase := func(days int, baseKW float64) []types.EnergyStats {
+			startDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+			var hist []types.EnergyStats
+			for d := 0; d < days; d++ {
+				dayTime := startDate.AddDate(0, 0, d)
+				for h := 0; h < 24; h++ {
+					hist = append(hist, types.EnergyStats{
+						TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+						HomeKWH:     baseKW,
+					})
+				}
+			}
+			return hist
+		}
+		setLoad := func(hist []types.EnergyStats, day, hour int, kw float64) {
+			hist[day*24+hour].HomeKWH = kw
+		}
+
+		t.Run("UnsaturatedQuantileAndMidnightShoulderCrossing", func(t *testing.T) {
+			// 10 days x 24h at 1.2 kWh baseline; 4 core hours at 8.2 kWh (step 7.0 -> 7.0*0.72 = 5.04 step,
+			// 5.04 + 1.4 = 6.44 threshold), plus a midnight-crossing session on day 5 (23:00=11.2, next 00:00=4.2).
+			// On day 5, 23:00=11.2 is 1 core hour, and on days 1 & 3 hours 1..2=8.2 (or day 1 01:00, day 3 01:00,
+			// day 4 01:00, day 6 01:00 -> 4 hours at 8.2 kWh, q35 across [7.0,7.0,7.0,7.0,10.0] = 7.0*1.4...):
+			// Use 4 equal 8.2 kWh cores + verify unsaturated threshold between 4.8 and 6.8 kW.
+			hist := buildBase(10, 1.2)
+			for _, d := range []int{1, 3} {
+				setLoad(hist, d, 1, 8.2)
+				setLoad(hist, d, 2, 8.2)
+			}
+			// Midnight-crossing shoulder: day 5 hour 23 = 11.2 (step 10.0) -> day 6 hour 0 = 4.2 kWh shoulder.
+			// Core steps sorted: [7.0, 7.0, 7.0, 7.0, 10.0]; pos 0.35*4=1.4 -> q35 = 7.0 -> step=5.04, thr=6.44.
+			setLoad(hist, 5, 23, 11.2)
+			setLoad(hist, 6, 0, 4.2)
+
+			ignored, _, _, thrKW, stepKW := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(hist), nil, types.Settings{}, 0.5)
+			assert.InDelta(t, 6.44, thrKW, 0.01)
+			assert.InDelta(t, 5.04, stepKW, 0.01)
+			assert.True(t, ignored[dayHourKey{date: "2026-07-06", hour: 23}], "23:00 EV anchor should be flagged")
+			assert.True(t, ignored[dayHourKey{date: "2026-07-07", hour: 0}], "midnight-crossing 00:00 shoulder adjacent to 23:00 EV anchor should be flagged")
+		})
+
+		t.Run("NeighborDominanceMarginExcludesShoulderFromCores", func(t *testing.T) {
+			// Only 2 true local cores >= 8.2 kW (10.2 kWh on days 1 & 3 h=2), while adjacent h=1 is 8.5 kWh
+			// (10.2 >= 8.5 + 1.5), so those 2 ramp hours are excluded from core count (< 4 -> keeps 4.8/3.5).
+			hist := buildBase(10, 0.8)
+			for _, d := range []int{1, 3} {
+				setLoad(hist, d, 1, 8.5)
+				setLoad(hist, d, 2, 10.2)
+			}
+			_, _, _, thrKW, stepKW := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(hist), nil, types.Settings{}, 0.5)
+			assert.InDelta(t, EVMinThresholdKW, thrKW, 0.01)
+			assert.InDelta(t, EVMinStepKW, stepKW, 0.01)
+		})
+
+		t.Run("SingleOvernightMidnightCollapsingSlowSessionDoesNotTriggerGuard", func(t *testing.T) {
+			// 4 high-core hours PLUS a single slow overnight session spanning midnight (day 2 23:00 + day 3 00:00 at 6.0 kW)
+			// plus a [4.8, 7.8) hour adjacent to >= 8.2 kW (day 4 01:00=6.0 next to 02:00=11.4).
+			// Midnight collapses to 1 slowNightSession (< 2), and 01:00 next to 11.4 is excluded -> adaptive stays active.
+			hist := buildBase(10, 0.8)
+			for _, d := range []int{1, 5} {
+				setLoad(hist, d, 1, 11.4)
+				setLoad(hist, d, 2, 11.4)
+			}
+			setLoad(hist, 2, 23, 6.0)
+			setLoad(hist, 3, 0, 6.0)
+			setLoad(hist, 4, 1, 6.0)
+			setLoad(hist, 4, 2, 11.4)
+
+			_, _, _, thrKW, stepKW := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(hist), nil, types.Settings{}, 0.5)
+			assert.InDelta(t, 6.8, thrKW, 0.01)
+			assert.InDelta(t, 5.4, stepKW, 0.01)
+		})
+
+		t.Run("ShortHistoryConfiguredEVAnchors30To48TierOvernight", func(t *testing.T) {
+			// 4 days (< 7 days, >= 72h) with EVChargingStandby=true: hour 1 has [0.8, 3.6, 8.2, 8.2]
+			// so P30 at index 1 is 3.6 (< 4.8, >= 3.0) while hour 3 is 0.8 (minOvernightRef < 2.5).
+			// hasConfiguredEVAtHour anchors hour 1 to quiet reading 0.8 kWh so all 8.2 kWh EV hours pass step check.
+			hist := buildBase(4, 0.8)
+			setLoad(hist, 1, 1, 3.6)
+			setLoad(hist, 2, 1, 8.2)
+			setLoad(hist, 3, 1, 8.2)
+
+			settings := types.Settings{EVChargingStandby: true}
+			ignored, _, hourBaseRef, _, _ := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(hist), nil, settings, 0.5)
+			assert.InDelta(t, 0.8, hourBaseRef[1], 0.05)
+			assert.True(t, ignored[dayHourKey{date: "2026-07-03", hour: 1}], "8.2 kWh EV session must be detected once 3.6 kWh P30 is anchored down")
+			assert.True(t, ignored[dayHourKey{date: "2026-07-04", hour: 1}])
+		})
 	})
 }

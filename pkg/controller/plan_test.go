@@ -887,7 +887,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		expectedEnd1600 := time.Date(2026, 6, 16, 20, 0, 0, 0, chicagoLoc)
 		assert.Equal(t, expectedEnd1600, tl1600[len(tl1600)-1].endTime,
 			"When 24h lands mid-peak (16:00 Day 2), horizon must extend to 1 hour after Peak (20:00 Day 2 = 28h)")
-		ph1600 := c.buildPostHorizonValuation(ctx, tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600)
+		ph1600 := c.buildPostHorizonValuation(ctx, tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600, nil)
 		assert.InDelta(t, 0.10, ph1600.knownPostHorizonRate, 0.001,
 			"Post-horizon valuation after extending past Day 2 Peak must see purely Off-Peak ($0.10/kWh) rates")
 
@@ -1117,6 +1117,108 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			"Enabling peakP75Load must pre-charge Balanced Plan to a higher SOC than flag-disabled Balanced")
 		assert.Greater(t, decBal.Action.ChargeToSOC, decAgg.Action.ChargeToSOC,
 			"Balanced Plan must pre-charge to a higher SOC than Aggressive to cover Peak P75 home load")
+
+		// Sparse history (< minPeakP75HistoryHours, e.g. single 24h day where neighbor-hour blending would distort P75)
+		// must keep AvgHomeLoadKWH even when peakP75Load is enabled.
+		var singleDayHistory []types.EnergyStats
+		prevDay := runNow.AddDate(0, 0, -1)
+		for h := 0; h < 24; h++ {
+			load := 1.0
+			if h == 16 || h == 18 {
+				load = 3.2 // Neighbor-hour loads around 17:00 on a single-day history
+			}
+			singleDayHistory = append(singleDayHistory, types.EnergyStats{
+				TSHourStart: time.Date(prevDay.Year(), prevDay.Month(), prevDay.Day(), h, 0, 0, 0, chicagoLoc),
+				HomeKWH:     load,
+			})
+		}
+		tlSparse, _, modelSparse, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, singleDayHistory, nil, balSettings, status, nil)
+		require.NoError(t, err)
+		sparse17 := findIntervalAt(tlSparse, 17)
+		require.NotNil(t, sparse17)
+		assert.InDelta(t, findTimeProfile(modelSparse, sparse17.startTime).AvgHomeLoadKWH*sparse17.durationHours, sparse17.loadKWH, 1e-6,
+			"Single-day history (< 72h) must stay on AvgHomeLoadKWH rather than elevating via neighbor-hour blending")
+	})
+
+	t.Run("StepZeroEVStandbyEvaluationCachedAndAdaptiveFallback", func(t *testing.T) {
+		now := time.Date(2026, 6, 15, 22, 15, 0, 0, chicagoLoc)
+		hourStart := now.Truncate(time.Hour)
+		currentPrice := types.Price{TSStart: hourStart, TSEnd: hourStart.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.05}
+		var futurePrices []types.Price
+		for h := 1; h <= 24; h++ {
+			ts := hourStart.Add(time.Duration(h) * time.Hour)
+			futurePrices = append(futurePrices, types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.01})
+		}
+
+		// 7 days of completed history with two 11.4 kW sessions at 01:00-02:00 -> adaptive 6.8 / 5.4 kW.
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 6, 8, 0, 0, 0, 0, chicagoLoc)
+		for ts := startDate; ts.Before(hourStart); ts = ts.Add(time.Hour) {
+			load := 0.8
+			dayOffset := int(ts.Sub(startDate).Hours()) / 24
+			if (dayOffset == 1 || dayOffset == 3) && (ts.Hour() == 1 || ts.Hour() == 2) {
+				load = 11.4
+			}
+			history = append(history, types.EnergyStats{TSHourStart: ts, TimeLocation: "America/Chicago", HomeKWH: load})
+		}
+		settings := types.Settings{MinBatterySOC: 20, EVChargingStandby: true}
+		status := types.SystemStatus{Timestamp: now, BatteryCapacityKWH: 13.5, BatterySOC: 75, HomeKW: 5.6, TimeLocation: "America/Chicago"}
+
+		// Full 7-day history adapts to 6.8 kW -> 5.6 kW sets cached stepZeroEVActive = false.
+		tlAdaptive, _, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, history, nil, settings, status, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, tlAdaptive)
+		assert.True(t, tlAdaptive[0].hasStepZeroEVEval)
+		assert.False(t, tlAdaptive[0].stepZeroEVActive, "5.6 kW must cache stepZeroEVActive=false on 6.8 kW site")
+
+		// Same history truncated to < 72h keeps default 4.8 kW -> 5.6 kW sets cached stepZeroEVActive = true.
+		shortHist := history[len(history)-48:]
+		tlShort, _, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, shortHist, nil, settings, status, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, tlShort)
+		assert.True(t, tlShort[0].hasStepZeroEVEval)
+		assert.True(t, tlShort[0].stepZeroEVActive, "5.6 kW must cache stepZeroEVActive=true when history < 72h")
+
+		// Synthetic 24h forward-stamped history (e.g. TestPlanHistory) has empty completedHistory:
+		// BuildHourlyEnergyModel must fall back to history so load/solar forecasts do not collapse,
+		// while detectEVChargingWithThresholds must still evaluate against completedHistory only.
+		var forwardHistory []types.EnergyStats
+		for k := 0; k < 24; k++ {
+			ts := hourStart.Add(time.Duration(k) * time.Hour)
+			solar := 0.0
+			if ts.Hour() >= 10 && ts.Hour() <= 15 {
+				solar = 3.5
+			}
+			forwardHistory = append(forwardHistory, types.EnergyStats{
+				TSHourStart:  ts,
+				TimeLocation: "America/Chicago",
+				HomeKWH:      4.2,
+				SolarKWH:     solar,
+			})
+		}
+		forwardStatus := status
+		forwardStatus.Timestamp = hourStart
+		forwardStatus.HomeKW = 4.9
+		tlForward, _, forwardProfiles, err := c.buildPlanningTimeline(ctx, hourStart, currentPrice, futurePrices, forwardHistory, nil, settings, forwardStatus, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, tlForward)
+		assert.InDelta(t, 4.2, findTimeProfileByHour(forwardProfiles, 12).AvgHomeLoadKWH, 0.01,
+			"forward-only history fallback must preserve modeled load instead of 0.5 kWh empty default")
+		assert.Greater(t, findTimeProfileByHour(forwardProfiles, 12).AvgSolarKWH, 1.0,
+			"forward-only history fallback must preserve modeled solar instead of 0.0 kWh empty default")
+		var middayInterval *planInterval
+		for i := range tlForward {
+			if tlForward[i].startTime.Hour() == 12 {
+				middayInterval = &tlForward[i]
+				break
+			}
+		}
+		require.NotNil(t, middayInterval)
+		assert.InDelta(t, 4.2, middayInterval.loadKWH/middayInterval.durationHours, 0.01)
+		assert.Greater(t, middayInterval.solarKWH/middayInterval.durationHours, 1.0)
+		assert.True(t, tlForward[0].hasStepZeroEVEval)
+		assert.True(t, tlForward[0].stepZeroEVActive,
+			"live EV baseline must evaluate against empty completedHistory (1.0 kW default), not future 4.2 kWh hours")
 	})
 }
 
@@ -1242,7 +1344,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			},
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil, nil)
 		// First hour import rate: 0.22 + 0.03 = 0.25
 		// Second hour import rate: 0.28 + 0.07 = 0.35
 		// Average over post-horizon rollup window: (0.25 + 0.35) / 2 = 0.30
@@ -1259,7 +1361,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 		}
 
 		// No future prices after horizon
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil, nil)
 		assert.InDelta(t, 0.14, ph.knownPostHorizonRate, 0.001, "must fall back to latest timeline rate")
 	})
 
@@ -1276,7 +1378,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5}
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel, nil)
 		// 4 hours * 1.5 kWh/hour = 6.0 kWh
 		if assert.Len(t, ph.postHorizonSlices, 4) {
 			var totalLoad float64
@@ -1300,7 +1402,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{TSStart: tEnd.Add(time.Hour), TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.30},     // 07:00-08:00: $0.30, netLoad 1.0
 			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(8 * time.Hour), DollarsPerKWH: 0.30}, // 08:00-14:00: $0.30, netLoad <= 0 (sunny)
 		}
-		solarPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel)
+		solarPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel, nil)
 		if assert.Len(t, solarPH.postHorizonSlices, 2, "sunny post-horizon hours with net solar surplus must not create net load slices") {
 			assert.InDelta(t, 0.30, solarPH.postHorizonSlices[0].importRate, 1e-6, "highest-rate post-horizon net load hour must be ordered first")
 			assert.InDelta(t, 1.0, solarPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1310,8 +1412,8 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 
 		// Verify brand-new site with no energy history (BuildHourlyEnergyModel returns 24 profiles at the 0.09 kWh standby floor)
 		// falls back to defaultPostHorizonLoadKWH (6.0 kWh / 4h = 1.5 kWh/hr) paired with post-horizon rates
-		emptyModel, _ := c.BuildHourlyEnergyModel(ctx, tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
-		coldStartPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel)
+		emptyModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
+		coldStartPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel, nil)
 		if assert.Len(t, coldStartPH.postHorizonSlices, 4, "brand-new site with empty energy history must still populate 4 default load slices") {
 			assert.InDelta(t, 0.30, coldStartPH.postHorizonSlices[0].importRate, 1e-6)
 			assert.InDelta(t, 1.5, coldStartPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1330,7 +1432,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{startTime: t0.Add(6 * time.Hour), endTime: t0.Add(8 * time.Hour), durationHours: 2.0, importRate: -0.03, loadKWH: 2.0},
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil, nil)
 		assert.Equal(t, 0.0, ph.knownPostHorizonRate, "Negative post-horizon rate must be floored at 0.0")
 	})
 
@@ -1351,13 +1453,14 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(4 * time.Hour), DollarsPerKWH: 0.10}, // 18:00-20:00 Off-Peak
 		}
 
-		phBalOff := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel)
+		history := make([]types.EnergyStats, minPeakP75HistoryHours)
+		phBalOff := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history)
 		if assert.Len(t, phBalOff.postHorizonSlices, 4) {
 			assert.InDelta(t, 1.0, phBalOff.postHorizonSlices[0].loadKWH, 1e-6, "Flag-disabled Balanced post-horizon slices must keep AvgHomeLoadKWH")
 		}
 
 		peakCtx := ffPeakP75Load.With(ctx, true)
-		phBal := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel)
+		phBal := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history)
 		if assert.Len(t, phBal.postHorizonSlices, 4) {
 			assert.InDelta(t, 2.2, phBal.postHorizonSlices[0].loadKWH, 1e-6, "Balanced peak post-horizon slice must use P75HomeLoadKWH")
 			assert.InDelta(t, 2.2, phBal.postHorizonSlices[1].loadKWH, 1e-6)
@@ -1365,7 +1468,12 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			assert.InDelta(t, 1.0, phBal.postHorizonSlices[3].loadKWH, 1e-6)
 		}
 
-		phAgg := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "aggressive"}, types.SystemStatus{}, mockModel)
+		phSparse := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history[:minPeakP75HistoryHours-1])
+		if assert.Len(t, phSparse.postHorizonSlices, 4) {
+			assert.InDelta(t, 1.0, phSparse.postHorizonSlices[0].loadKWH, 1e-6, "Sparse history (< 72h) Balanced post-horizon slices must keep AvgHomeLoadKWH")
+		}
+
+		phAgg := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "aggressive"}, types.SystemStatus{}, mockModel, history)
 		if assert.Len(t, phAgg.postHorizonSlices, 4) {
 			assert.InDelta(t, 1.0, phAgg.postHorizonSlices[0].loadKWH, 1e-6, "Aggressive post-horizon slices must keep AvgHomeLoadKWH")
 		}
@@ -3390,6 +3498,182 @@ func TestPlanScenarios(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, plan)
 
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+	})
+
+	t.Run("EVChargingStandby_SustainedEveningHVACAndPartialHourHistory", func(t *testing.T) {
+		t.Parallel()
+
+		buildEveningStandbyPrices := func(now time.Time) (types.Price, []types.Price) {
+			hourStart := now.Truncate(time.Hour)
+			curPrice := types.Price{
+				TSStart:              hourStart,
+				TSEnd:                hourStart.Add(time.Hour),
+				DollarsPerKWH:        0.25,
+				GridUseDollarsPerKWH: 0.05,
+			}
+			var future []types.Price
+			for h := 1; h <= 24; h++ {
+				ts := hourStart.Add(time.Duration(h) * time.Hour)
+				future = append(future, types.Price{
+					TSStart:              ts,
+					TSEnd:                ts.Add(time.Hour),
+					DollarsPerKWH:        0.04,
+					GridUseDollarsPerKWH: 0.01,
+				})
+			}
+			return curPrice, future
+		}
+
+		t.Run("SustainedEveningHVACNotFalseTriggered", func(t *testing.T) {
+			now := time.Date(2026, 6, 15, 22, 20, 0, 0, chicagoLoc)
+			currentPrice, futurePrices := buildEveningStandbyPrices(now)
+
+			// 3 days where 17:00-22:00 sits around 4.5 kWh sustained AC (< 4.8 kW); at 22:20 HomeKW = 5.2 kW
+			// is only a +0.7 kW step (< 3.5 kW), so EVChargingStandby must NOT activate.
+			var history []types.EnergyStats
+			start := time.Date(2026, 6, 13, 0, 0, 0, 0, chicagoLoc)
+			for ts := start; ts.Before(time.Date(2026, 6, 15, 22, 0, 0, 0, chicagoLoc)); ts = ts.Add(time.Hour) {
+				load := 0.8
+				if ts.Hour() >= 17 && ts.Hour() <= 22 {
+					load = 4.5
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  ts,
+					TimeLocation: "America/Chicago",
+					HomeKWH:      load,
+				})
+			}
+
+			status := types.SystemStatus{
+				Timestamp:          now,
+				BatteryCapacityKWH: 13.5,
+				BatterySOC:         75,
+				HomeKW:             5.2,
+				TimeLocation:       "America/Chicago",
+			}
+			settings := types.Settings{
+				MinBatterySOC:     20,
+				EVChargingStandby: true,
+			}
+
+			decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+			require.NoError(t, err)
+			require.NotNil(t, plan)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+			assert.NotEqual(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+		})
+
+		t.Run("PartialCurrentHourBucketExcludedFromBaseline", func(t *testing.T) {
+			now := time.Date(2026, 6, 15, 22, 40, 0, 0, chicagoLoc)
+			currentPrice, futurePrices := buildEveningStandbyPrices(now)
+
+			// Prior completed hours: 16:00-17:00 at 0.9 kWh, 18:00-21:00 at 8.0 kWh (prior session),
+			// PLUS an in-progress partial bucket at 22:00 with 4.6 kWh. Without excluding 22:00,
+			// baselines would be [0.9, 4.6] (median 4.6 kW), shrinking 8.0 kW step to 3.4 < 3.5 kW.
+			var history []types.EnergyStats
+			start := time.Date(2026, 6, 14, 0, 0, 0, 0, chicagoLoc)
+			for ts := start; ts.Before(time.Date(2026, 6, 15, 22, 0, 0, 0, chicagoLoc)); ts = ts.Add(time.Hour) {
+				load := 0.9
+				if ts.Day() == 15 && ts.Hour() >= 18 && ts.Hour() <= 21 {
+					load = 8.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  ts,
+					TimeLocation: "America/Chicago",
+					HomeKWH:      load,
+				})
+			}
+			history = append(history, types.EnergyStats{
+				TSHourStart:  time.Date(2026, 6, 15, 22, 0, 0, 0, chicagoLoc),
+				TimeLocation: "America/Chicago",
+				HomeKWH:      4.6,
+			})
+
+			status := types.SystemStatus{
+				Timestamp:          now,
+				BatteryCapacityKWH: 13.5,
+				BatterySOC:         75,
+				HomeKW:             8.0,
+				TimeLocation:       "America/Chicago",
+			}
+			settings := types.Settings{
+				MinBatterySOC:     20,
+				EVChargingStandby: true,
+			}
+
+			decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+			require.NoError(t, err)
+			require.NotNil(t, plan)
+			assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+			assert.Equal(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+		})
+	})
+
+	t.Run("EVChargingStandby_FastChargerSite_IgnoresSub68KWApplianceSpike", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 6, 15, 22, 15, 0, 0, chicagoLoc)
+		hourStart := now.Truncate(time.Hour)
+		currentPrice := types.Price{
+			TSStart:              hourStart,
+			TSEnd:                hourStart.Add(time.Hour),
+			DollarsPerKWH:        0.25,
+			GridUseDollarsPerKWH: 0.05,
+		}
+		var futurePrices []types.Price
+		for h := 1; h <= 24; h++ {
+			ts := hourStart.Add(time.Duration(h) * time.Hour)
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:              ts,
+				TSEnd:                ts.Add(time.Hour),
+				DollarsPerKWH:        0.04,
+				GridUseDollarsPerKWH: 0.01,
+			})
+		}
+
+		// 7 days of completed history with 0.8 kWh base and two 11.4 kWh nights at 01:00-02:00 (>= 4 core hours -> 6.8 / 5.4 kW).
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 6, 8, 0, 0, 0, 0, chicagoLoc)
+		for ts := startDate; ts.Before(hourStart); ts = ts.Add(time.Hour) {
+			load := 0.8
+			dayOffset := int(ts.Sub(startDate).Hours()) / 24
+			if (dayOffset == 1 || dayOffset == 3) && (ts.Hour() == 1 || ts.Hour() == 2) {
+				load = 11.4
+			}
+			history = append(history, types.EnergyStats{
+				TSHourStart:  ts,
+				TimeLocation: "America/Chicago",
+				HomeKWH:      load,
+			})
+		}
+
+		settings := types.Settings{
+			MinBatterySOC:     20,
+			EVChargingStandby: true,
+		}
+
+		// 5.6 kW appliance spike must NOT enter EVChargingStandby on a 6.8 kW fast-charger site.
+		applianceStatus := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         75,
+			HomeKW:             5.6,
+			TimeLocation:       "America/Chicago",
+		}
+		decision, plan, err := c.Plan(ctx, applianceStatus, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.NotEqual(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+
+		// 11.2 kW actual EV charge MUST still enter EVChargingStandby.
+		evStatus := applianceStatus
+		evStatus.HomeKW = 11.2
+		decision, plan, err = c.Plan(ctx, evStatus, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
 	})

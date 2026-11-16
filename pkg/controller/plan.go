@@ -38,6 +38,12 @@ const (
 	// minSolarGenerationKW is the threshold below which solar generation is treated as negligible.
 	minSolarGenerationKW = 0.05
 
+	// minPeakP75HistoryHours (72 hours, or 3 days of hourly telemetry) is the minimum history length
+	// required before elevating peak-rate load forecasts from baseline P55/P70 to P75. With fewer than
+	// 3 days of observations per hour-of-day, empirical P75 interpolates into 0.2x neighbor-hour weights
+	// rather than cross-day load variance.
+	minPeakP75HistoryHours = 72
+
 	// vppStandbyLeadTime is the duration prior to a VPP event during which the battery
 	// must be held in standby at 100% capacity to prevent the hardware ESS from taking over.
 	vppStandbyLeadTime = 2 * time.Hour
@@ -200,15 +206,17 @@ func resolveRoundTripEfficiency(eff float64, currentStatus types.SystemStatus) f
 
 // planInterval represents a discrete period in the planning horizon.
 type planInterval struct {
-	startTime     time.Time
-	endTime       time.Time
-	durationHours float64
-	price         types.Price
-	importRate    float64 // Total delivered retail rate: supply + grid use/delivery fees ($/kWh)
-	exportRate    float64 // Total compensation for exported energy to grid ($/kWh)
-	loadKWH       float64 // Projected total home load energy for this interval (kWh)
-	solarKWH      float64 // Projected total rooftop solar generation energy for this interval (kWh)
-	minSOC        float64 // Active reserve limit for this interval (%)
+	startTime         time.Time
+	endTime           time.Time
+	durationHours     float64
+	price             types.Price
+	importRate        float64 // Total delivered retail rate: supply + grid use/delivery fees ($/kWh)
+	exportRate        float64 // Total compensation for exported energy to grid ($/kWh)
+	loadKWH           float64 // Projected total home load energy for this interval (kWh)
+	solarKWH          float64 // Projected total rooftop solar generation energy for this interval (kWh)
+	minSOC            float64 // Active reserve limit for this interval (%)
+	hasStepZeroEVEval bool    // True when step-0 EV standby detection was pre-evaluated for this timeline
+	stepZeroEVActive  bool    // Cached result of step-0 EV standby evaluation
 }
 
 // planState tracks the physical battery state at a point in time during forward simulation.
@@ -369,9 +377,12 @@ func isTruePeakRate(importRate, minImport, maxImport float64, settings types.Set
 
 // shouldUsePeakP75Load reports whether peak-rate intervals should use the 75th-percentile (P75)
 // home load forecast (instead of the baseline P55/P70 forecast) to buffer against peak load spikes.
-// Gated behind ffPeakP75Load; when enabled, applies to Balanced and Conservative optimization profiles.
-func shouldUsePeakP75Load(ctx context.Context, settings types.Settings) bool {
-	return ffPeakP75Load.Enabled(ctx) && !strings.EqualFold(settings.OptimizationProfile, "aggressive")
+// Gated behind ffPeakP75Load and requires at least minPeakP75HistoryHours of history; when enabled,
+// applies to Balanced and Conservative optimization profiles.
+func shouldUsePeakP75Load(ctx context.Context, settings types.Settings, historyLen int) bool {
+	return ffPeakP75Load.Enabled(ctx) &&
+		historyLen >= minPeakP75HistoryHours &&
+		!strings.EqualFold(settings.OptimizationProfile, "aggressive")
 }
 
 // findUpcomingPeak finds the highest price interval in timeline strictly after stepIdx.
@@ -432,16 +443,16 @@ func (c *Controller) Plan(
 	if now.IsZero() {
 		now = time.Now()
 	}
-	tz := currentStatus.TimeLocation
-	if tz == "" && settings.Location != nil {
-		tz = settings.Location.TimeZone
-	}
-	if tz != "" {
-		if now.Location() != nil && now.Location().String() == tz {
+	if currentStatus.TimeLocation != "" {
+		if now.Location() != nil && now.Location().String() == currentStatus.TimeLocation {
 			// Already in target timezone
-		} else if currentStatus.Timestamp.Location() != nil && currentStatus.Timestamp.Location().String() == tz {
+		} else if currentStatus.Timestamp.Location() != nil && currentStatus.Timestamp.Location().String() == currentStatus.TimeLocation {
 			now = now.In(currentStatus.Timestamp.Location())
-		} else if loc, err := time.LoadLocation(tz); err == nil {
+		} else if loc, err := time.LoadLocation(currentStatus.TimeLocation); err == nil {
+			now = now.In(loc)
+		}
+	} else if isUTCLikeLocation(currentStatus.Timestamp.Location()) && settings.Location != nil && settings.Location.TimeZone != "" {
+		if loc, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
 			now = now.In(loc)
 		}
 	}
@@ -498,7 +509,7 @@ func (c *Controller) Plan(
 		return Decision{}, types.Plan{}, fmt.Errorf("buildPlanningTimeline: %w", err)
 	}
 	vppEvents = filterVPPAnchorsToTimeline(vppEvents, timeline)
-	postHorizon := c.buildPostHorizonValuation(ctx, timeline, futurePrices, settings, currentStatus, model)
+	postHorizon := c.buildPostHorizonValuation(ctx, timeline, futurePrices, settings, currentStatus, model, history)
 
 	// 4. Initial battery state
 	capKWH := currentStatus.BatteryCapacityKWH
@@ -516,7 +527,8 @@ func (c *Controller) Plan(
 	}
 
 	// 5. Perform the two-pass regime block plan search across the timeline
-	winningPath := c.searchOptimalPlanBlocks(ctx, timeline, initialState, vppEvents, postHorizon, settings, currentStatus, lastAction)
+	completedHistory := FilterCompletedHourlyStats(history, now)
+	winningPath := c.searchOptimalPlanBlocks(ctx, timeline, initialState, vppEvents, postHorizon, settings, currentStatus, lastAction, completedHistory)
 
 	// 6. Finalize output: extract immediate Decision for hardware dispatch and full Plan for UI
 	decision, plan := finalizeDecisionAndPlan(ctx, winningPath, timeline, currentStatus, currentPrice, now, settings, history, model)
@@ -726,8 +738,15 @@ func (c *Controller) buildPlanningTimeline(
 		return nil, types.SimulationParams{}, nil, fmt.Errorf("insufficient pricing horizon: %.2f hours available, minimum required is %d hours", availableHours, minPlanningHorizonHours)
 	}
 
-	// Build energy model for hourly load and solar forecasts
-	model, simParams := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+	// Build energy model for hourly load and solar forecasts using completed hourly intervals.
+	// When no prior completed intervals exist (e.g. synthetic forward-stamped 24h fixtures in TestPlanHistory
+	// or a brand-new site's first hour), fall back to the raw history slice.
+	completedHistory := FilterCompletedHourlyStats(history, now)
+	modelHistory := completedHistory
+	if len(modelHistory) == 0 {
+		modelHistory = history
+	}
+	model, simParams, siteEVMinThresholdKW, siteEVMinStepKW := c.BuildHourlyEnergyModel(ctx, now, modelHistory, weather, settings)
 
 	// Build solar trend adjustment
 	todaySolarTrend := 1.0
@@ -999,7 +1018,7 @@ func (c *Controller) buildPlanningTimeline(
 	// On Balanced and Conservative profiles, elevate forecasted home load during peak-rate intervals
 	// to the 75th percentile (P75) while keeping P55 elsewhere so peak survival buffers scale with each
 	// site's empirical load volatility and naturally taper down as peak hours pass.
-	if len(timeline) > 0 && len(history) > 0 && shouldUsePeakP75Load(ctx, settings) {
+	if len(timeline) > 0 && shouldUsePeakP75Load(ctx, settings, len(history)) {
 		minImp, maxImp := calculateTimelinePriceRange(timeline)
 		for i := range timeline {
 			if isTruePeakRate(timeline[i].importRate, minImp, maxImp, settings) {
@@ -1010,6 +1029,12 @@ func (c *Controller) buildPlanningTimeline(
 				}
 			}
 		}
+	}
+
+	if len(timeline) > 0 && IsEVStandbyEligible(settings, timeline[0].startTime) {
+		isEV, _ := detectEVChargingWithThresholds(ctx, currentStatus.HomeKW, completedHistory, settings, siteEVMinThresholdKW, siteEVMinStepKW)
+		timeline[0].hasStepZeroEVEval = true
+		timeline[0].stepZeroEVActive = isEV
 	}
 
 	totalHorizonDuration := time.Duration(0)
@@ -1105,6 +1130,7 @@ func (c *Controller) buildPostHorizonValuation(
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 	model []TimeProfile,
+	history []types.EnergyStats,
 ) postHorizonValuation {
 	var postHorizon postHorizonValuation
 	if len(timeline) == 0 {
@@ -1151,7 +1177,7 @@ func (c *Controller) buildPostHorizonValuation(
 		}
 	}
 	minImp, maxImp := calculateTimelinePriceRange(timeline)
-	usePeakP75 := shouldUsePeakP75Load(ctx, settings)
+	usePeakP75 := shouldUsePeakP75Load(ctx, settings, len(history))
 	var postHorizonSolarSurplusKWH float64
 	lastHourRate := postHorizon.knownPostHorizonRate
 	defaultHourlyLoadKWH := defaultPostHorizonLoadKWH / float64(postHorizonLoadForecastHours)

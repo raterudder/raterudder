@@ -32,16 +32,24 @@ type energyHistoryBaseline struct {
 }
 
 var energyHistoryBaselines = map[string]energyHistoryBaseline{
+	// site2 (America/Chicago): mid-summer central AC evenings (11.0..36.0°C) coexisting with 48A EVChargingStandby
+	"site2_mid-summer.json": {maeKWH: 1.131, underPredictKWH: 1468.8, overPredictKWH: 910.4},
+	// site2 (America/Chicago): autumn transition (-1.0..33.6°C), high-standby vacation, Friday laundry surges, 48A EVChargingStandby, and fall-back DST
+	"site2_oct-nov.json": {maeKWH: 0.672, underPredictKWH: 1067.8, overPredictKWH: 233.0},
 	// site3 (America/Chicago): 13 vacation days + post-vacation recovery across varying temps (13.5..30.8°C)
-	"site3_late-summer.json": {maeKWH: 0.965, underPredictKWH: 1518.0, overPredictKWH: 903.0},
+	"site3_late-summer.json": {maeKWH: 0.960, underPredictKWH: 1498.2, overPredictKWH: 909.8},
 	// site5 (America/New_York): configured EVChargingStandby, 4 vacation days, and 1.67x heavy weekends
-	"site5_late-summer.json": {maeKWH: 0.766, underPredictKWH: 1444.7, overPredictKWH: 475.6},
+	"site5_late-summer.json": {maeKWH: 0.765, underPredictKWH: 1427.7, overPredictKWH: 491.0},
+	// site5 (America/New_York): autumn cold snaps (-3.9..28.2°C, 96 hrs <= 3°C) with morning/overnight electric heating surges and EVChargingStandby
+	"site5_oct-nov.json": {maeKWH: 0.471, underPredictKWH: 499.7, overPredictKWH: 122.1},
 	// site6 (America/Los_Angeles): steady coastal temperatures (13.8..26.9°C) and tight daily load distribution
-	"site6_late-summer.json": {maeKWH: 0.362, underPredictKWH: 512.8, overPredictKWH: 395.9},
+	"site6_late-summer.json": {maeKWH: 0.361, underPredictKWH: 499.8, overPredictKWH: 405.5},
 	// site11 (America/Chicago): wide late-summer temperature swings / heatwaves (13.7..31.0°C) driving large AC loads
-	"site11_late-summer.json": {maeKWH: 0.971, underPredictKWH: 1132.1, overPredictKWH: 1303.8},
+	"site11_late-summer.json": {maeKWH: 0.985, underPredictKWH: 1144.2, overPredictKWH: 1325.2},
 	// site12 (America/Los_Angeles): strong day-of-week / weekend load surges (1.71x weekend-to-weekday ratio) + unconfigured EV spikes
-	"site12_late-summer.json": {maeKWH: 0.688, underPredictKWH: 1548.3, overPredictKWH: 176.0},
+	"site12_late-summer.json": {maeKWH: 0.687, underPredictKWH: 1552.7, overPredictKWH: 170.8},
+	// site17 (America/Los_Angeles): mixed slow (5-7.7 kW multi-hour overnight) + fast Level 2 EV sessions with EVChargingStandby across warm autumn (11.5..38.0°C)
+	"site17_oct-nov.json": {maeKWH: 0.488, underPredictKWH: 567.4, overPredictKWH: 377.8},
 }
 
 type energyEvalMetrics struct {
@@ -189,6 +197,16 @@ func TestEnergyHistory(t *testing.T) {
 				}
 			}
 
+			sort.Slice(allHours, func(i, j int) bool {
+				return allHours[i].TSHourStart.Before(allHours[j].TSHourStart)
+			})
+
+			siteEVMinThresholdKW, siteEVMinStepKW := inferSiteEVThresholdsFromStats(ctx, allHours, settings)
+			actualAnchorMinKW := siteEVMinThresholdKW
+			if siteEVMinThresholdKW > EVMinThresholdKW+0.5 {
+				actualAnchorMinKW = max(siteEVMinThresholdKW, evActualAnchorMinAdaptiveKW)
+			}
+
 			var validLoads []float64
 			for _, h := range allHours {
 				if h.HomeKWH > 0.05 {
@@ -201,25 +219,92 @@ func TestEnergyHistory(t *testing.T) {
 				standbyLoadKWH = max(0.1, validLoads[int(float64(len(validLoads)-1)*0.01)])
 			}
 
-			// BuildHourlyEnergyModel strips EV charging spikes inside eligible EV charging windows to predict
-			// underlying household load, so target actuals are sanitized the same way before scoring.
-			findNonEVActualKWH := func(localTS time.Time, rawLoadKWH float64) float64 {
-				if rawLoadKWH >= EVMinThresholdKW && IsEVStandbyEligible(settings, localTS) {
-					for dayOffset := 1; dayOffset <= 7; dayOffset++ {
-						prevUTC := localTS.AddDate(0, 0, -dayOffset).Truncate(time.Hour).UTC()
-						if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
-							return prevKWH
-						}
-					}
-					utcTS := localTS.Truncate(time.Hour).UTC()
-					for lb := 1; lb <= 12; lb++ {
-						if prevKWH, ok := historyByUTC[utcTS.Add(-time.Duration(lb)*time.Hour)]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
-							return prevKWH
-						}
-					}
-					return standbyLoadKWH
+			// BuildHourlyEnergyModel strips EV charging spikes (and adjacent 1-hop partial-charge shoulders)
+			// inside eligible EV charging windows while preserving sustained non-EV household loads (e.g. evening AC
+			// or sub-charger-threshold appliances), so target actuals are sanitized the same way before scoring.
+			fullEVByUTC := make(map[time.Time]bool)
+			isConfirmedFullEV := func(localTS time.Time, loadKWH float64) bool {
+				if !IsEVStandbyEligible(settings, localTS) || loadKWH < siteEVMinThresholdKW {
+					return false
 				}
-				return rawLoadKWH
+				utcTS := localTS.Truncate(time.Hour).UTC()
+				if cached, ok := fullEVByUTC[utcTS]; ok {
+					return cached
+				}
+				cutoff := sort.Search(len(allHours), func(i int) bool {
+					return !allHours[i].TSHourStart.Before(localTS)
+				})
+				prior := allHours[max(0, cutoff-14*24):cutoff]
+				isEV, _ := detectEVChargingWithThresholds(ctx, loadKWH, prior, settings, siteEVMinThresholdKW, siteEVMinStepKW)
+				fullEVByUTC[utcTS] = isEV
+				return isEV
+			}
+
+			evHourByUTC := make(map[time.Time]bool)
+			isEVStandbyHour := func(localTS time.Time, loadKWH float64) bool {
+				if !IsEVStandbyEligible(settings, localTS) || loadKWH < evShoulderMinThresholdKW {
+					return false
+				}
+				utcTS := localTS.Truncate(time.Hour).UTC()
+				if cached, ok := evHourByUTC[utcTS]; ok {
+					return cached
+				}
+				if loadKWH >= siteEVMinThresholdKW {
+					res := isConfirmedFullEV(localTS, loadKWH)
+					evHourByUTC[utcTS] = res
+					return res
+				}
+				hasAdjacentAnchor := false
+				for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+					adjUTC := utcTS.Add(offset)
+					if adjKWH, ok := historyByUTC[adjUTC]; ok && adjKWH >= actualAnchorMinKW {
+						if isConfirmedFullEV(adjUTC.In(fileLoc), adjKWH) {
+							hasAdjacentAnchor = true
+							break
+						}
+					}
+				}
+				if !hasAdjacentAnchor {
+					evHourByUTC[utcTS] = false
+					return false
+				}
+				cutoff := sort.Search(len(allHours), func(i int) bool {
+					return !allHours[i].TSHourStart.Before(localTS)
+				})
+				prior := allHours[max(0, cutoff-14*24):cutoff]
+				baselineKW := calculateRecentBaseline(ctx, prior, siteEVMinThresholdKW, settings)
+				res := loadKWH-baselineKW >= evShoulderMinStepKW && loadKWH > max(baselineKW, hourlyOutlierFloorKWH)*evShoulderMultiple
+				evHourByUTC[utcTS] = res
+				return res
+			}
+
+			sanitizedActualByUTC := make(map[time.Time]float64)
+			findNonEVActualKWH := func(localTS time.Time, rawLoadKWH float64) float64 {
+				if !isEVStandbyHour(localTS, rawLoadKWH) {
+					return rawLoadKWH
+				}
+				utcTS := localTS.Truncate(time.Hour).UTC()
+				if cached, ok := sanitizedActualByUTC[utcTS]; ok {
+					return cached
+				}
+				for dayOffset := 1; dayOffset <= 7; dayOffset++ {
+					prevLocal := localTS.AddDate(0, 0, -dayOffset)
+					prevUTC := prevLocal.Truncate(time.Hour).UTC()
+					if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
+						sanitizedActualByUTC[utcTS] = prevKWH
+						return prevKWH
+					}
+				}
+				for lb := 1; lb <= 12; lb++ {
+					prevUTC := utcTS.Add(-time.Duration(lb) * time.Hour)
+					prevLocal := prevUTC.In(fileLoc)
+					if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
+						sanitizedActualByUTC[utcTS] = prevKWH
+						return prevKWH
+					}
+				}
+				sanitizedActualByUTC[utcTS] = standbyLoadKWH
+				return standbyLoadKWH
 			}
 
 			simStartStr := dataset.SimStart.UTC().Format("2006-01-02")
@@ -272,7 +357,7 @@ func TestEnergyHistory(t *testing.T) {
 						}
 					}
 
-					model, _ := c.BuildHourlyEnergyModel(ctx, now, histSlice, weatherSlice, settings)
+					model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, histSlice, weatherSlice, settings)
 
 					hm := byHour[runHr]
 					hm.daysCount++

@@ -48,7 +48,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		if assert.Len(t, model, 24) {
 			assert.False(t, model[14].TSHourStart.IsZero())
@@ -87,7 +87,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The vacation day should be filtered out, so the average load is 2.0.
 		if assert.Len(t, model, 24) {
@@ -123,7 +123,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The high outlier day should be filtered out, so the average load is 2.0.
 		if assert.Len(t, model, 24) {
@@ -158,7 +158,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Weighted 50p median of [0.2, 2.0, 2.0] is 2.0.
 		if assert.Len(t, model, 24) {
@@ -203,7 +203,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Saturday target hour 12:
 		// Saturday count = 1 (< 3).
@@ -247,7 +247,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Monday target hour 12:
 		// Monday count = 1 (< 3).
@@ -288,7 +288,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The 8.0 KWH charge should be filtered out because the median is 1.0, and limit is 3.0.
 		// So the prediction should reflect the baseline (1.0).
@@ -326,7 +326,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Adjacent hour blending at 55p captures the recurring elevated charging load.
 		if assert.Len(t, model, 24) {
@@ -368,7 +368,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected baseline load for Mon is ~1.0 KWH.
 		// Since the last 4 days consistently average 2.0 KWH, the forecast should shift up.
@@ -414,7 +414,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected baseline load for Mon is ~2.0 KWH.
 		// Since the last 4 days consistently average 1.0 KWH, the forecast should shift down.
@@ -447,7 +447,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The last 4 days match the baseline exactly, so the shift should be 0.
 		if assert.Len(t, model, 24) {
@@ -526,7 +526,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// Overnight idle load (hour 3) must be protected by standby baseline (>= 0.6 kWh).
 		if assert.Len(t, model, 24) {
@@ -608,7 +608,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		})
 
 		settings := types.Settings{}
-		model, simParams := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, simParams, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// The single day spike must NOT trigger an adaptive shift.
 		assert.Equal(t, "none", simParams.DetectedShift)
@@ -649,7 +649,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Weighted 50p median of the blended pool is 1.0.
 		if assert.Len(t, model, 24) {
@@ -685,7 +685,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Weighted 50p median of [0.1, 0.1, 0.3] is 0.1.
 		if assert.Len(t, model, 24) {
@@ -728,7 +728,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		settings := types.Settings{}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Weighted 50th percentile at 19:00 remains anchored at 1.0 kWh baseline.
 		if assert.Len(t, model, 24) {
@@ -748,7 +748,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 2.1743589743589746, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -760,7 +760,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 0.09, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -774,7 +774,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		testNow := time.Date(2026, 7, 3, 18, 0, 0, 0, time.UTC) // Friday hour 18
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 2.0, model[18].AvgHomeLoadKWH, 0.001)
 	})
 
@@ -790,7 +790,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h3, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier
 		}
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
-		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{})
 		assert.InDelta(t, 1.1174358974358976, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 2: Majority of days are high (not removed because 30th percentile is 10.0)
@@ -799,7 +799,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0}, // High day 1
 			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // High day 2
 		}
-		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyMulti, nil, types.Settings{})
+		modelMulti, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyMulti, nil, types.Settings{})
 		assert.InDelta(t, 12.0, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 3: Not enough points (min 3)
@@ -807,13 +807,13 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
 		}
-		modelFew, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyFew, nil, types.Settings{})
+		modelFew, _, _, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyFew, nil, types.Settings{})
 		assert.InDelta(t, 6.284615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
 
 	t.Run("AfternoonSolarEVCharging3To4DaysPerWeek", func(t *testing.T) {
 		// Verify that when a homeowner charges their EV 3-4 days a week in the afternoon
-		// to soak up solar (with no EVChargingPeriods configured), automatic zero-config
+		// to soak up solar (with EVChargingStandby disabled), automatic zero-config
 		// EV filtering prevents the model from predicting EV charging every afternoon on
 		// both AvgHomeLoadKWH and P75HomeLoadKWH.
 		// Covers common 40A breaker (7.7 kW) and 50A breaker (9.6 kW) Level 2 chargers as
@@ -852,7 +852,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				}
 			}
 
-			model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+			model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
 			if assert.Len(t, model, 24) {
 				for _, hr := range []int{13, 14, 15} {
 					assert.InDelta(t, 1.5, model[hr].AvgHomeLoadKWH, 0.25, "hour %d AvgHomeLoadKWH should reflect non-EV afternoon load", hr)
@@ -919,7 +919,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				})
 			}
 
-			model, params := c.BuildHourlyEnergyModel(ctx, nowDayPlusOne, fullHistory, nil, types.Settings{})
+			model, params, _, _ := c.BuildHourlyEnergyModel(ctx, nowDayPlusOne, fullHistory, nil, types.Settings{})
 			assert.Equal(t, "none", params.DetectedShift)
 
 			// Because past vacation days (July 15-21) are excluded from the prediction pool,
@@ -947,7 +947,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				})
 			}
 
-			model, params := c.BuildHourlyEnergyModel(ctx, nowDayPlusTwo, fullHistory, nil, types.Settings{})
+			model, params, _, _ := c.BuildHourlyEnergyModel(ctx, nowDayPlusTwo, fullHistory, nil, types.Settings{})
 			assert.Equal(t, "none", params.DetectedShift)
 			assert.GreaterOrEqual(t, model[14].AvgHomeLoadKWH, 1.8)
 		})
@@ -979,7 +979,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				})
 			}
 
-			model, params := c.BuildHourlyEnergyModel(ctx, nowOnVacation, fullHistory, nil, types.Settings{})
+			model, params, _, _ := c.BuildHourlyEnergyModel(ctx, nowOnVacation, fullHistory, nil, types.Settings{})
 			assert.Equal(t, "down", params.DetectedShift)
 			// While on vacation, load prediction remains low (< 0.5 kWh/hr)
 			assert.LessOrEqual(t, model[14].AvgHomeLoadKWH, 0.5)
@@ -1027,7 +1027,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			GridExportSolar:          false,
 			SolarBellCurveMultiplier: 1.0,
 		}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		assert.Greater(t, model[13].AvgSolarKWH, 4.8, "Should reconstruct bell curve peak to ~5.0 using off-peak data")
 		assert.Less(t, model[13].AvgSolarKWH, 5.2, "Should be around 5.0")
@@ -1035,7 +1035,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		for i := range history {
 			history[i].SolarKWH = 0.05
 		}
-		modelNoData, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		modelNoData, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 		assert.Equal(t, 0.0, modelNoData[13].AvgSolarKWH)
 	})
 
@@ -1055,7 +1055,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		for h := 0; h < 24; h++ {
 			assert.InDelta(t, 0.0, model[h].AvgSolarKWH, 0.001, "Hour %d should have no solar", h)
@@ -1085,7 +1085,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		assert.GreaterOrEqual(t, model[13].AvgSolarKWH, 3.0, "Should use fallback data and maintain at least the raw average")
 	})
@@ -1122,7 +1122,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: true, SolarBellCurveMultiplier: 1.0}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		assert.Less(t, model[13].AvgSolarKWH, 25.0, "Peak should not explode from noisy edge data")
 		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should still boost above the baseline peak of 2.0")
@@ -1165,7 +1165,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			GridExportSolar:          true,
 			SolarBellCurveMultiplier: 1.0,
 		}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		assert.Less(t, model[13].AvgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
 		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should capture the average including outlier")
@@ -1197,7 +1197,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The 50p median of [2.0 (weight 28-day decay), 8.0 (weight 7-day decay)]
 		// will be biased towards 8.0 because the 7-day weight is much larger.
@@ -1261,7 +1261,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// 1. Extreme Heatwave: Today is 31.0C, historical max is 25.0C.
 		// This is > 2.0C threshold and > 28.0C min temp gate.
 		// Expected boost: 1.0 * 1.2 = 1.2.
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 		if assert.Len(t, model, 24) {
 			assert.InDelta(t, 1.2, model[12].AvgHomeLoadKWH, 0.001)
 		}
@@ -1287,7 +1287,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			ForecastHours: todayMildForecast,
 		})
 
-		modelMild, _ := c.BuildHourlyEnergyModel(ctx, now, history, mildWeather, settings)
+		modelMild, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, mildWeather, settings)
 		if assert.Len(t, modelMild, 24) {
 			assert.InDelta(t, 1.0, modelMild[12].AvgHomeLoadKWH, 0.001)
 		}
@@ -1332,7 +1332,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Model for remaining hours (e.g. 15:00) should be close to 0.5 (standby), not 2.0.
 		if assert.Len(t, model, 24) {
@@ -1374,7 +1374,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Hour 8 (Saturday morning chore peak) should be close to 2.5 kWh, well above the 1.0 weekday level.
 		if assert.Len(t, model, 24) {
@@ -1409,7 +1409,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Hour 7 should not be diluted down by hour 6's 0.15 kWh sleeping load.
 		if assert.Len(t, model, 24) {
@@ -1450,7 +1450,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Sunday morning peak (hour 8) should be boosted to near weekend level (>= 2.2 kWh)
 		if assert.Len(t, model, 24) {
@@ -1489,7 +1489,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Wednesday morning peak (hour 8) should reflect the Wednesday surge (>= 2.2 kWh)
 		if assert.Len(t, model, 24) {
@@ -1522,7 +1522,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		if assert.Len(t, model, 24) {
 			assert.InDelta(t, 1.0, model[8].AvgHomeLoadKWH, 0.2)
@@ -1575,7 +1575,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// On vacation, Saturday morning (hour 8) should NOT be inflated to 2.5-3.0 kWh;
 		// it should drop toward vacation levels (< 1.0 kWh).
@@ -1623,7 +1623,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			})
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
 		if assert.Len(t, model, 24) {
 			// Hour 0 on Sunday should NOT be inflated by Sunday 23:00; and Saturday 23:00 should remain localized
 			assert.InDelta(t, 1.0, model[0].AvgHomeLoadKWH, 0.25)
@@ -1683,14 +1683,14 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
 		if assert.Len(t, model, 24) {
 			assert.InDelta(t, 2.213, model[23].AvgHomeLoadKWH, 0.05, "hour 23 should interpolate to ~2.213 without wrapping to same-day 00:00 (2.606) or leaking todayStr 00:00 (2.495)")
 		}
 	})
 
-	t.Run("ConfiguredEVChargingPeriodsUsesSameHourBaselineAndPreservesCallerSlice", func(t *testing.T) {
-		// Verify Fix 1B: when EVChargingPeriods is configured for overnight hours (01:00-04:00),
+	t.Run("ConfiguredEVChargingStandbyUsesSameHourBaselineAndPreservesCallerSlice", func(t *testing.T) {
+		// Verify Fix 1B: when EVChargingStandby is enabled for overnight hours (20:00-06:59),
 		// loads above EVThresholdKW are replaced using the same hour-of-day from prior non-EV nights
 		// (0.4 kWh sleeping load) rather than late-evening waking hours (2.8 kWh at 23:00),
 		// and the caller's history slice is never mutated in-place.
@@ -1725,7 +1725,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		settings := types.Settings{
 			EVChargingStandby: true,
 		}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Verify caller slice was not mutated
 		for i := range history {
@@ -1802,7 +1802,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
 		if assert.Len(t, model, 24) {
 			assert.Greater(t, model[15].AvgHomeLoadKWH, 3.4, "hot target day forecast should stay near 4.0 kWh and not be dragged down by missing/partial weather cool days")
 		}
@@ -1841,7 +1841,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			}
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
 		if assert.Len(t, model, 24) {
 			assert.Greater(t, model[15].AvgHomeLoadKWH, 2.0, "Wednesday afternoon hour 15 should be boosted by the Wednesday full-day outlier weight")
 		}
@@ -1890,63 +1890,94 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			})
 		}
 
-		model, params := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
+		model, params, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
 		assert.Equal(t, "none", params.DetectedShift, "weather-explained recent high load matching historical hot days should not trigger an 'up' occupancy shift")
 		if assert.Len(t, model, 24) {
 			assert.InDelta(t, 3.5, model[15].AvgHomeLoadKWH, 0.35, "afternoon forecast should match 3.5 kWh hot-day load without Option G double-counting")
 		}
 	})
 
-	t.Run("FloatingWeekdayBlockLoadProportionallyScalesWashedOutHours", func(t *testing.T) {
-		// Verify that when a recurring weekday multi-hour load (e.g. Friday electric dryer/laundry)
-		// floats across a 5-hour daytime block (09:00-13:00) from week to week so that individual
-		// 1-hour P55 predictions wash out to baseline (~1.0 kWh), overlapping 5-hour block scaling
-		// detects the Friday block outlier and proportionally scales up the washed-out hours in the block.
-		now := time.Date(2025, 7, 4, 4, 0, 0, 0, time.UTC) // Friday 04:00 AM
-		var history []types.EnergyStats
+	t.Run("DSTFallBack25HourDayNormalizesMerged1AMBucket", func(t *testing.T) {
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 
-		startDate := time.Date(2025, 5, 30, 0, 0, 0, 0, time.UTC) // 5 historical Fridays before 2025-07-04
-		fridayIndex := 0
-		for d := 0; d <= 35; d++ {
-			dayTime := startDate.AddDate(0, 0, d)
-			isToday := d == 35
-			isFri := dayTime.Weekday() == time.Friday && !isToday
-			surgeStartHr := -1
-			if isFri {
-				// Each historical Friday has a 2-hour laundry surge that shifts across 09:00-13:00
-				// (09-10, 11-12, 10-11, 12-13, 09-10) so no single hour has a majority of Fridays elevated.
-				offsets := []int{9, 11, 10, 12, 9}
-				surgeStartHr = offsets[fridayIndex%len(offsets)]
-				fridayIndex++
-			}
-			for h := 0; h < 24; h++ {
-				if isToday && h >= 4 {
+		// 2026-11-01 is the 25-hour autumn DST transition Sunday in America/Chicago.
+		// Simulate 14 days ending on Sunday 2026-11-08 at 00:00 CST where normal hours draw 1.0 kWh,
+		// and 2026-11-01 has a single merged 01:00 record spanning 2 elapsed hours up to 02:00 CST with 2.0 kWh.
+		now := time.Date(2026, 11, 8, 0, 0, 0, 0, chicagoLoc)
+		var history []types.EnergyStats
+		startDate := time.Date(2026, 10, 25, 0, 0, 0, 0, chicagoLoc)
+		for d := 0; d < 14; d++ {
+			dayStart := startDate.AddDate(0, 0, d)
+			nextDay := dayStart.AddDate(0, 0, 1)
+			for ts := dayStart; ts.Before(nextDay); ts = ts.Add(time.Hour) {
+				localTS := ts.In(chicagoLoc)
+				if localTS.Format("2006-01-02") == "2026-11-01" && localTS.Hour() == 1 {
+					// Emit only the first 01:00 CDT bucket with 2 hours of merged 1.0 kWh/hr load (2.0 kWh)
+					// and skip the repeated 01:00 CST bucket so 02:00 CST is 2 elapsed hours later.
+					_, offsetSec := localTS.Zone()
+					if offsetSec == -5*3600 {
+						history = append(history, types.EnergyStats{
+							TSHourStart:  localTS,
+							TimeLocation: "America/Chicago",
+							HomeKWH:      2.0,
+						})
+					}
 					continue
 				}
-				load := 0.35
-				if h >= 6 && h <= 21 {
-					load = 0.75 + 0.12*float64(d%5) // Natural daily variation (0.75..1.23 kWh, mean ~0.99)
-					if isFri && (h == surgeStartHr || h == surgeStartHr+1) {
-						load = 2.8 // 2-hour electric dryer load floating inside 09:00-13:00
-					}
-				}
 				history = append(history, types.EnergyStats{
-					TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
-					HomeKWH:     load,
+					TSHourStart:  localTS,
+					TimeLocation: "America/Chicago",
+					HomeKWH:      1.0,
 				})
 			}
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
 		if assert.Len(t, model, 24) {
-			var blockSum float64
-			for h := 9; h <= 13; h++ {
-				blockSum += model[h].AvgHomeLoadKWH
+			assert.InDelta(t, 1.0, model[1].AvgHomeLoadKWH, 0.05, "merged 2-hour 01:00 fall-back bucket (2.0 kWh over 2h) must normalize to 1.0 kWh/hr")
+		}
+	})
+
+	t.Run("OutlierWeekdayCalmMorningDampensRemainingTodayHours", func(t *testing.T) {
+		now := time.Date(2025, 7, 2, 10, 0, 0, 0, time.UTC) // Wednesday 10:00 AM
+		startDate := time.Date(2025, 5, 28, 0, 0, 0, 0, time.UTC)
+
+		buildHistory := func(todayMorningKWH float64) []types.EnergyStats {
+			var history []types.EnergyStats
+			for d := 0; d <= 35; d++ {
+				dayTime := startDate.AddDate(0, 0, d)
+				isToday := d == 35
+				isWed := dayTime.Weekday() == time.Wednesday && !isToday
+				for h := 0; h < 24; h++ {
+					if isToday && h >= 10 {
+						continue
+					}
+					load := 0.30
+					if h >= 6 && h <= 20 {
+						if isToday {
+							load = todayMorningKWH
+						} else if isWed {
+							load = 2.40
+						} else {
+							load = 0.90 + 0.20*float64(d%5) // Natural daily variation (0.90..1.70 kWh, P50 ~1.30 kWh)
+						}
+					}
+					history = append(history, types.EnergyStats{
+						TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+						HomeKWH:     load,
+					})
+				}
 			}
-			blockAvg := blockSum / 5.0
-			assert.Greater(t, blockAvg, 1.20, "Friday 09:00-13:00 block average should be scaled above the ~0.98 kWh baseline")
-			// Evening hours outside the floating laundry block should remain at normal baseline (~0.98 kWh)
-			assert.InDelta(t, 0.98, model[19].AvgHomeLoadKWH, 0.20, "non-laundry evening hour 19 should remain near baseline")
+			return history
+		}
+
+		activeModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, buildHistory(2.40), nil, types.Settings{})
+		calmModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, buildHistory(0.95), nil, types.Settings{})
+		if assert.Len(t, activeModel, 24) && assert.Len(t, calmModel, 24) {
+			assert.Greater(t, activeModel[15].AvgHomeLoadKWH, 2.00, "active Wednesday morning must preserve elevated Wednesday afternoon forecast")
+			assert.Less(t, calmModel[15].AvgHomeLoadKWH, 1.65, "remaining Wednesday afternoon hour today should cap down after calm morning")
+			assert.InDelta(t, activeModel[3].AvgHomeLoadKWH, calmModel[3].AvgHomeLoadKWH, 1e-6, "tomorrow's overnight hour (Thursday 03:00) must not be modified by today's calm-morning dampening")
 		}
 	})
 }
@@ -2905,6 +2936,93 @@ func TestDetectLoadShift(t *testing.T) {
 		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.50)
 		assert.Equal(t, "down", shift, "prolonged multi-week vacation (>25%% of history) must remain in vacation mode")
 	})
+
+	t.Run("HighStandbyVacationShiftAndFlatEscapeGuard", func(t *testing.T) {
+		now := time.Date(2025, 6, 22, 13, 0, 0, 0, loc)
+		todayStr := "2025-06-22"
+		yesterdayStr := "2025-06-21"
+		standbyKWH := 0.75
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// 20 baseline days: 6 mild non-HVAC days (~1.05 kWh avg, active ~0.30 kWh, hourQ1 ~0.90 kWh, stddev ~0.35)
+		// and 14 normal active days (~2.25 kWh avg, active ~1.50 kWh, stddev ~0.85).
+		startDate := time.Date(2025, 6, 1, 0, 0, 0, 0, loc)
+		for d := 0; d < 20; d++ {
+			dt := startDate.AddDate(0, 0, d)
+			dStr := dt.Format("2006-01-02")
+			isMild := d < 6
+			var pts []types.EnergyStats
+			var sum float64
+			for h := 0; h < 24; h++ {
+				val := 1.40
+				if h%2 == 0 {
+					val = 3.10
+				}
+				if isMild {
+					val = 0.88
+					if h >= 17 && h <= 20 {
+						val = 1.90
+					}
+				}
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     val,
+				})
+				sum += val
+			}
+			dayMap[dStr] = &dayPoints{date: dStr, dayTime: dt, points: pts}
+			dayAveragesMap[dStr] = sum / 24.0
+		}
+
+		// Yesterday is flat unoccupied standby (~0.93 kWh, active 0.18 kWh, stddev ~0.01)
+		var yPts []types.EnergyStats
+		yDate := time.Date(2025, 6, 21, 0, 0, 0, 0, loc)
+		for h := 0; h < 24; h++ {
+			val := 0.92 + 0.02*float64(h%2)
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: yDate.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     val,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, dayTime: yDate, points: yPts}
+		dayAveragesMap[yesterdayStr] = 0.93
+
+		// Today hours 00:00..12:00 remain flat at 0.93 kWh (>= mild-day hourQ1 0.88 kWh, but flat < 0.15 stddev)
+		tDate := time.Date(2025, 6, 22, 0, 0, 0, 0, loc)
+		var flatTodayPts []types.EnergyStats
+		for h := 0; h < 13; h++ {
+			val := 0.92 + 0.02*float64(h%2)
+			flatTodayPts = append(flatTodayPts, types.EnergyStats{
+				TSHourStart: tDate.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     val,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, dayTime: tDate, points: flatTodayPts}
+		dayAveragesMap[todayStr] = 0.93
+
+		shiftFlat := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 13, standbyKWH)
+		assert.Equal(t, "down", shiftFlat, "high-standby flat vacation day must trigger 'down' and resist premature escape on flat standby hours")
+
+		// If the household genuinely returns home at 09:00..12:00 with normal elevated volatile loads, escape triggers
+		var returnedPts []types.EnergyStats
+		returnLoads := map[int]float64{9: 1.80, 10: 2.50, 11: 2.00, 12: 2.70}
+		for h := 0; h < 13; h++ {
+			val := 0.93
+			if rl, ok := returnLoads[h]; ok {
+				val = rl
+			}
+			returnedPts = append(returnedPts, types.EnergyStats{
+				TSHourStart: tDate.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     val,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, dayTime: tDate, points: returnedPts}
+
+		shiftReturned := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 13, standbyKWH)
+		assert.Equal(t, "none", shiftReturned, "4 genuinely elevated volatile occupancy hours must still escape vacation mode")
+	})
 }
 
 func TestDualTimezoneHistoryAndSimulation(t *testing.T) {
@@ -2937,7 +3055,7 @@ func TestDualTimezoneHistoryAndSimulation(t *testing.T) {
 	history := []types.EnergyStats{h1, h2}
 	settings := types.Settings{}
 
-	model, _ := c.BuildHourlyEnergyModel(ctx, nowChicago, history, nil, settings)
+	model, _, _, _ := c.BuildHourlyEnergyModel(ctx, nowChicago, history, nil, settings)
 	// Hour 20 should have aggregated both 8 PM local points
 	assert.Len(t, model, 24)
 }
@@ -3057,7 +3175,7 @@ func TestIdentifyHistoricalVacationDays(t *testing.T) {
 		}
 
 		c := NewController()
-		model, params := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, params, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		assert.Equal(t, "none", params.DetectedShift)
 		// Option G must NOT drag predictions down to the 0.09 kWh floor.
@@ -3234,6 +3352,59 @@ func TestIdentifyHistoricalVacationDays(t *testing.T) {
 
 		vacDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
 		assert.False(t, vacDays["2025-06-05"], "partial historical day (< 18 hours) must not be flagged via low-volatility Condition B")
+	})
+
+	t.Run("HighStandbyMultiDayVacationDetectedAndIsolatedQuietDayIgnored", func(t *testing.T) {
+		highStandbyKWH := 0.75
+		tStr := "2025-06-25"
+		yStr := "2025-06-24"
+
+		buildHighStandbyPool := func(flatDates map[string]bool) ([]float64, map[string]float64, map[string]*dayPoints) {
+			dAvgMap := make(map[string]float64)
+			dMap := make(map[string]*dayPoints)
+			var avgs []float64
+
+			start := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+			for d := 0; d < 24; d++ {
+				dt := start.AddDate(0, 0, d)
+				dStr := dt.Format("2006-01-02")
+				var pts []types.EnergyStats
+				var loads []float64
+				var sum float64
+				for h := 0; h < 24; h++ {
+					val := 1.20
+					if h >= 14 && h <= 20 {
+						val = 2.60 // Normal daily occupancy volatility (stddev ~0.62, avg ~1.61)
+					}
+					if flatDates[dStr] {
+						val = 0.92 + 0.02*float64(h%2) // Flat standby+fridge cycling (~0.93 kWh, > 0.55 * q1R)
+					}
+					pts = append(pts, types.EnergyStats{TSHourStart: dt.Add(time.Duration(h) * time.Hour), HomeKWH: val})
+					loads = append(loads, val)
+					sum += val
+				}
+				avg := sum / 24.0
+				dAvgMap[dStr] = avg
+				avgs = append(avgs, avg)
+				dMap[dStr] = &dayPoints{date: dStr, dayTime: dt, loads: loads, points: pts}
+			}
+			return avgs, dAvgMap, dMap
+		}
+
+		// 3 consecutive flat high-standby vacation days (06-10..06-12) + 1 isolated quiet mild day (06-18)
+		flatSet := map[string]bool{
+			"2025-06-10": true,
+			"2025-06-11": true,
+			"2025-06-12": true,
+			"2025-06-18": true,
+		}
+		avgs, dAvgMap, dMap := buildHighStandbyPool(flatSet)
+		vacDays := identifyHistoricalVacationDays(ctx, avgs, dAvgMap, dMap, tStr, yStr, highStandbyKWH)
+
+		assert.True(t, vacDays["2025-06-10"], "consecutive multi-day high-standby vacation day 1 must be flagged")
+		assert.True(t, vacDays["2025-06-11"], "consecutive multi-day high-standby vacation day 2 must be flagged")
+		assert.True(t, vacDays["2025-06-12"], "consecutive multi-day high-standby vacation day 3 must be flagged")
+		assert.False(t, vacDays["2025-06-18"], "isolated 1-day mild non-HVAC dip must not be misclassified as a vacation day")
 	})
 }
 
@@ -3724,171 +3895,17 @@ func TestDetectDayOfWeekOutliers(t *testing.T) {
 	})
 }
 
-func TestComputeDayBlockAvg(t *testing.T) {
-	t.Run("NilDayAndInsufficientHours", func(t *testing.T) {
-		avg, ok := computeDayBlockAvg(nil, 10, 14, nil)
-		assert.False(t, ok)
-		assert.Equal(t, 0.0, avg)
-
-		// 5-hour block [10..14] requires minHours = max(2, 5/2+1) = 3 hours.
-		// Provide only 2 valid hours (10 and 11) plus a zero-load hour (12).
-		dayTime := time.Date(2025, 6, 6, 0, 0, 0, 0, time.UTC)
-		dp := &dayPoints{
-			date:    "2025-06-06",
-			dayTime: dayTime,
-			weekday: time.Friday,
-			points: []types.EnergyStats{
-				{TSHourStart: dayTime.Add(10 * time.Hour), HomeKWH: 1.5},
-				{TSHourStart: dayTime.Add(11 * time.Hour), HomeKWH: 2.5},
-				{TSHourStart: dayTime.Add(12 * time.Hour), HomeKWH: 0.0},
-				{TSHourStart: dayTime.Add(16 * time.Hour), HomeKWH: 3.0}, // outside [10..14]
-			},
-		}
-		avg, ok = computeDayBlockAvg(dp, 10, 14, nil)
-		assert.False(t, ok, "fewer than 3 valid hours in a 5-hour block should return false")
-		assert.Equal(t, 0.0, avg)
-	})
-
-	t.Run("ValidFiveHourBlockExcludesIgnoredOutlierHours", func(t *testing.T) {
-		dayTime := time.Date(2025, 6, 6, 0, 0, 0, 0, time.UTC)
-		dp := &dayPoints{
-			date:    "2025-06-06",
-			dayTime: dayTime,
-			weekday: time.Friday,
-			points: []types.EnergyStats{
-				{TSHourStart: dayTime.Add(10 * time.Hour), HomeKWH: 1.0},
-				{TSHourStart: dayTime.Add(11 * time.Hour), HomeKWH: 2.0},
-				{TSHourStart: dayTime.Add(12 * time.Hour), HomeKWH: 3.0},
-				{TSHourStart: dayTime.Add(13 * time.Hour), HomeKWH: 9.5}, // EV spike to ignore
-				{TSHourStart: dayTime.Add(14 * time.Hour), HomeKWH: 2.0},
-			},
-		}
-		ignored := map[dayHourKey]bool{
-			{date: "2025-06-06", hour: 13}: true,
-		}
-		avg, ok := computeDayBlockAvg(dp, 10, 14, ignored)
-		assert.True(t, ok)
-		assert.InDelta(t, 2.0, avg, 1e-6, "average of remaining 4 hours (1.0, 2.0, 3.0, 2.0) should be 2.0 kWh")
-	})
-}
-
-func TestIsWeekdayBlockOutlier(t *testing.T) {
-	makeBlockDay := func(dateStr string, blockLoad, otherLoad float64, bStart, bEnd int) *dayPoints {
-		dt, err := time.ParseInLocation("2006-01-02", dateStr, time.UTC)
-		require.NoError(t, err)
-		var pts []types.EnergyStats
-		var loads []float64
-		for h := 0; h < 24; h++ {
-			val := otherLoad
-			if h >= bStart && h <= bEnd {
-				val = blockLoad
-			}
-			pts = append(pts, types.EnergyStats{
-				TSHourStart: dt.Add(time.Duration(h) * time.Hour),
-				HomeKWH:     val,
-			})
-			loads = append(loads, val)
-		}
-		return &dayPoints{
-			date:    dateStr,
-			dayTime: dt,
-			weekday: dt.Weekday(),
-			points:  pts,
-			loads:   loads,
-		}
-	}
-
-	t.Run("ConfirmsConsistentFridayAfternoonBlockOutlier", func(t *testing.T) {
-		dayMap := make(map[string]*dayPoints)
-		validDays := make(map[string]bool)
-
-		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
-		for i, d := range fridays {
-			dayMap[d] = makeBlockDay(d, 2.2+0.1*float64(i%2), 0.9, 10, 14)
-			validDays[d] = true
-		}
-		preceding := []string{
-			"2025-06-04", "2025-06-05",
-			"2025-06-11", "2025-06-12",
-			"2025-06-18", "2025-06-19",
-			"2025-06-25", "2025-06-26",
-		}
-		for i, d := range preceding {
-			dayMap[d] = makeBlockDay(d, 0.9+0.05*float64(i%2), 0.9, 10, 14)
-			validDays[d] = true
-		}
-
-		isValid := func(ds string) bool { return validDays[ds] }
-		assert.True(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14))
-		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 16, 20), "non-elevated evening block should not be flagged")
-	})
-
-	t.Run("SundayBlockOutlierFallbackAgainstThursdayFriday", func(t *testing.T) {
-		dayMap := make(map[string]*dayPoints)
-		validDays := make(map[string]bool)
-
-		// Both Saturday and Sunday have elevated midday block (2.4 kWh), while Thu/Fri are 0.9 kWh.
-		sundays := []string{"2025-06-08", "2025-06-15", "2025-06-22", "2025-06-29"}
-		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
-		for _, d := range append(sundays, saturdays...) {
-			dayMap[d] = makeBlockDay(d, 2.4, 0.9, 11, 15)
-			validDays[d] = true
-		}
-		thuFri := []string{
-			"2025-06-05", "2025-06-06",
-			"2025-06-12", "2025-06-13",
-			"2025-06-19", "2025-06-20",
-			"2025-06-26", "2025-06-27",
-		}
-		for _, d := range thuFri {
-			dayMap[d] = makeBlockDay(d, 0.9, 0.9, 11, 15)
-			validDays[d] = true
-		}
-
-		isValid := func(ds string) bool { return validDays[ds] }
-		assert.True(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Sunday, 11, 15), "Sunday should qualify via Thursday+Friday fallback even when Saturday is also high")
-	})
-
-	t.Run("RejectsSingleSpikeAndInsufficientTargetDays", func(t *testing.T) {
-		dayMap := make(map[string]*dayPoints)
-		validDays := make(map[string]bool)
-
-		// 3 normal Fridays (0.9 kWh) and 1 high Friday (4.0 kWh) -> high variance fails Welch's t >= 1.70
-		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
-		for i, d := range fridays {
-			blkLoad := 0.9
-			if i == 3 {
-				blkLoad = 4.0
-			}
-			dayMap[d] = makeBlockDay(d, blkLoad, 0.9, 10, 14)
-			validDays[d] = true
-		}
-		preceding := []string{
-			"2025-06-04", "2025-06-05",
-			"2025-06-11", "2025-06-12",
-			"2025-06-18", "2025-06-19",
-			"2025-06-25", "2025-06-26",
-		}
-		for _, d := range preceding {
-			dayMap[d] = makeBlockDay(d, 0.9, 0.9, 10, 14)
-			validDays[d] = true
-		}
-
-		isValid := func(ds string) bool { return validDays[ds] }
-		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14), "single Friday spike must fail Welch's t-test")
-
-		// Fewer than 3 target weekday occurrences must return false
-		delete(validDays, "2025-06-06")
-		delete(validDays, "2025-06-13")
-		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14), "fewer than 3 target days must return false")
-	})
-}
-
-func TestApplyProportionalBlockScaling(t *testing.T) {
-	buildFridayHistoryFixture := func() (map[string]*dayPoints, map[string]bool, []string) {
+func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
+	buildFixture := func(todayMorningLoadKWH float64, morningHours int) (
+		map[string]*dayPoints,
+		map[string]bool,
+		[24]bool,
+		[24]time.Time,
+		[24]float64,
+		[24]float64,
+	) {
 		dayMap := make(map[string]*dayPoints)
 		validDaysMap := make(map[string]bool)
-
 		startDate := time.Date(2025, 5, 30, 0, 0, 0, 0, time.UTC) // Friday
 		for d := 0; d < 35; d++ {
 			dt := startDate.AddDate(0, 0, d)
@@ -3897,12 +3914,9 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 			var pts []types.EnergyStats
 			var loads []float64
 			for h := 0; h < 24; h++ {
-				val := 0.4
-				if h >= 6 && h <= 22 {
-					val = 0.9
-					if isFri && h >= 10 && h <= 14 {
-						val = 2.1 // Consistent 2.1 kWh average across [10..14] on Fridays vs 0.9 kWh on Wed/Thu
-					}
+				val := 1.0
+				if isFri && h >= 7 && h <= 17 {
+					val = 2.8
 				}
 				pts = append(pts, types.EnergyStats{
 					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
@@ -3910,277 +3924,116 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 				})
 				loads = append(loads, val)
 			}
-			dayMap[ds] = &dayPoints{
-				date:    ds,
-				dayTime: dt,
-				weekday: dt.Weekday(),
-				points:  pts,
-				loads:   loads,
-			}
+			dayMap[ds] = &dayPoints{date: ds, dayTime: dt, weekday: dt.Weekday(), points: pts, loads: loads}
 			validDaysMap[ds] = true
 		}
-		recentValidDates := []string{"2025-07-03", "2025-07-02", "2025-07-01", "2025-06-30", "2025-06-29", "2025-06-28", "2025-06-27"}
-		return dayMap, validDaysMap, recentValidDates
+
+		todayStr := "2025-07-04"
+		todayDate := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+		var tPts []types.EnergyStats
+		for h := 7; h < 7+morningHours; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: todayDate.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     todayMorningLoadKWH,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, dayTime: todayDate, weekday: time.Friday, points: tPts}
+
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			if h < 10 {
+				targetTimes[h] = todayDate.AddDate(0, 0, 1).Add(time.Duration(h) * time.Hour)
+			} else {
+				targetTimes[h] = todayDate.Add(time.Duration(h) * time.Hour)
+			}
+			rawAvgLoadA[h] = 2.6
+			rawP75LoadA[h] = 2.9
+		}
+		return dayMap, validDaysMap, hasHour, targetTimes, rawAvgLoadA, rawP75LoadA
 	}
 
-	t.Run("ScalesWashedOutHoursAndPreservesAlreadyElevatedHours", func(t *testing.T) {
-		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
-		todayStr := "2025-07-04" // Friday
-		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+	t.Run("CapsRemainingTodayHoursOnCalmOutlierMorningAndLeavesTomorrowUntouched", func(t *testing.T) {
+		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.80, 3)
+		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
+		outliers := map[time.Weekday]bool{time.Friday: true}
 
-		var rawAvgLoadA, rawP75LoadA [24]float64
-		var hasHour [24]bool
-		var targetTimes [24]time.Time
-		for h := 0; h < 24; h++ {
-			hasHour[h] = true
-			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
-			rawAvgLoadA[h] = 0.90
-			rawP75LoadA[h] = 1.05
-		}
-		// Make hour 10 already elevated above baseMean*1.25 (0.9 * 1.25 = 1.125) while 11..14 are washed out at 0.90
-		rawAvgLoadA[10] = 1.35
-
-		applyProportionalBlockScaling(
+		applyOutlierDayCalmMorningDampening(
 			context.Background(),
-			&rawAvgLoadA,
-			&rawP75LoadA,
+			&rawAvg,
+			&rawP75,
 			hasHour,
 			targetTimes,
+			now,
+			time.UTC,
+			10,
+			"2025-07-04",
 			dayMap,
 			validDaysMap,
 			nil,
-			recentValidDates,
-			todayStr,
+			outliers,
 			nil,
 			nil,
+			0.3,
+			types.Settings{},
 		)
 
-		assert.InDelta(t, 1.35, rawAvgLoadA[10], 1e-6, "already-elevated hour 10 (>= 1.25 * baseMean) must not be over-boosted")
-		for _, h := range []int{11, 12, 13, 14} {
-			assert.Greater(t, rawAvgLoadA[h], 1.20, "washed-out Friday hour %d in [10..14] should be proportionally raised", h)
-			assert.GreaterOrEqual(t, rawP75LoadA[h], rawAvgLoadA[h], "P75 must remain >= scaled AvgHomeLoadKWH at hour %d", h)
-		}
-		assert.InDelta(t, 0.90, rawAvgLoadA[19], 1e-6, "non-outlier evening hour 19 must remain unchanged")
+		assert.InDelta(t, 1.0, rawAvg[14], 0.15, "today's remaining hour 14 should cap to unboosted all-days P55 (~1.0 kWh)")
+		assert.GreaterOrEqual(t, rawP75[14], rawAvg[14])
+		assert.InDelta(t, 2.6, rawAvg[8], 1e-6, "tomorrow's hour 8 must not be modified")
 	})
 
-	t.Run("SkipsScalingWhenModelBlockAverageAlreadyMatchesExpected", func(t *testing.T) {
-		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
-		todayStr := "2025-07-04"
-		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+	t.Run("SkipsWhenNotOutlierWeekdayOrFewerThanTwoMorningHours", func(t *testing.T) {
+		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.80, 1)
+		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
+		outliers := map[time.Weekday]bool{time.Friday: true}
 
-		var rawAvgLoadA, rawP75LoadA [24]float64
-		var hasHour [24]bool
-		var targetTimes [24]time.Time
-		for h := 0; h < 24; h++ {
-			hasHour[h] = true
-			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
-			rawAvgLoadA[h] = 0.90
-			if h >= 10 && h <= 14 {
-				// Model already predicts 1.50 kWh across [10..14], so expectedBlkAvg (~1.62) / modelAvg (1.50) = 1.08 < 1.25
-				rawAvgLoadA[h] = 1.50
-			}
-			rawP75LoadA[h] = rawAvgLoadA[h]
-		}
-
-		applyProportionalBlockScaling(
+		// Only 1 observed morning hour -> no-op
+		applyOutlierDayCalmMorningDampening(
 			context.Background(),
-			&rawAvgLoadA,
-			&rawP75LoadA,
+			&rawAvg,
+			&rawP75,
 			hasHour,
 			targetTimes,
+			now,
+			time.UTC,
+			10,
+			"2025-07-04",
 			dayMap,
 			validDaysMap,
 			nil,
-			recentValidDates,
-			todayStr,
+			outliers,
 			nil,
 			nil,
+			0.3,
+			types.Settings{},
 		)
+		assert.InDelta(t, 2.6, rawAvg[14], 1e-6)
 
-		for h := 10; h <= 14; h++ {
-			assert.InDelta(t, 1.50, rawAvgLoadA[h], 1e-6, "hour %d should not be scaled when block deficit ratio < 1.25", h)
-		}
-	})
-
-	t.Run("PreservesAfternoonBoostWhenMorningHoursAreAtNormalBaseline", func(t *testing.T) {
-		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
-		todayStr := "2025-07-04"
-		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
-
-		// Populate todayStr with 4 normal baseline morning waking hours (06:00..09:00 at 0.85 kWh < 0.9 * 1.25)
-		// before an expected midday/afternoon laundry block (10:00..14:00).
-		var todayPts []types.EnergyStats
-		var todayLoads []float64
-		for h := 0; h <= 9; h++ {
-			todayPts = append(todayPts, types.EnergyStats{
-				TSHourStart: targetDay.Add(time.Duration(h) * time.Hour),
-				HomeKWH:     0.85,
-			})
-			todayLoads = append(todayLoads, 0.85)
-		}
-		dayMap[todayStr] = &dayPoints{
-			date:    todayStr,
-			dayTime: targetDay,
-			weekday: time.Friday,
-			points:  todayPts,
-			loads:   todayLoads,
-		}
-
-		var rawAvgLoadA, rawP75LoadA [24]float64
-		var hasHour [24]bool
-		var targetTimes [24]time.Time
-		for h := 0; h < 24; h++ {
-			hasHour[h] = true
-			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
-			rawAvgLoadA[h] = 0.90
-			rawP75LoadA[h] = 1.00
-		}
-
-		applyProportionalBlockScaling(
+		// Non-outlier weekday -> no-op
+		dayMap2, validDaysMap2, hasHour2, targetTimes2, rawAvg2, rawP752 := buildFixture(0.80, 3)
+		applyOutlierDayCalmMorningDampening(
 			context.Background(),
-			&rawAvgLoadA,
-			&rawP75LoadA,
-			hasHour,
-			targetTimes,
-			dayMap,
-			validDaysMap,
+			&rawAvg2,
+			&rawP752,
+			hasHour2,
+			targetTimes2,
+			now,
+			time.UTC,
+			10,
+			"2025-07-04",
+			dayMap2,
+			validDaysMap2,
 			nil,
-			recentValidDates,
-			todayStr,
+			map[time.Weekday]bool{},
 			nil,
 			nil,
+			0.3,
+			types.Settings{},
 		)
-
-		for h := 10; h <= 14; h++ {
-			assert.Greater(t, rawAvgLoadA[h], 1.30, "midday/afternoon hour %d should still be boosted when morning hours are at normal baseline", h)
-		}
-	})
-
-	t.Run("PreservesRemainingBlockBoostAfterEarlierMorningLoads", func(t *testing.T) {
-		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
-		todayStr := "2025-07-04"
-		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
-
-		// Even if 2 hours of elevated load occurred earlier in the morning (07:00 and 08:00),
-		// a household may still have more laundry/chores in the 10:00..14:00 block.
-		var todayPts []types.EnergyStats
-		var todayLoads []float64
-		for h := 0; h <= 10; h++ {
-			val := 0.85
-			if h == 7 || h == 8 {
-				val = 2.50
-			}
-			todayPts = append(todayPts, types.EnergyStats{
-				TSHourStart: targetDay.Add(time.Duration(h) * time.Hour),
-				HomeKWH:     val,
-			})
-			todayLoads = append(todayLoads, val)
-		}
-		dayMap[todayStr] = &dayPoints{
-			date:    todayStr,
-			dayTime: targetDay,
-			weekday: time.Friday,
-			points:  todayPts,
-			loads:   todayLoads,
-		}
-
-		var rawAvgLoadA, rawP75LoadA [24]float64
-		var hasHour [24]bool
-		var targetTimes [24]time.Time
-		for h := 0; h < 24; h++ {
-			hasHour[h] = true
-			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
-			rawAvgLoadA[h] = 0.90
-			rawP75LoadA[h] = 1.00
-		}
-
-		applyProportionalBlockScaling(
-			context.Background(),
-			&rawAvgLoadA,
-			&rawP75LoadA,
-			hasHour,
-			targetTimes,
-			dayMap,
-			validDaysMap,
-			nil,
-			recentValidDates,
-			todayStr,
-			nil,
-			nil,
-		)
-
-		for h := 11; h <= 14; h++ {
-			assert.Greater(t, rawAvgLoadA[h], 1.30, "midday hour %d should still be boosted when the 10:00..14:00 block is washed out", h)
-		}
-	})
-
-	t.Run("SundayFullWeekendFallbackUsesThursdayFridayBaseline", func(t *testing.T) {
-		dayMap := make(map[string]*dayPoints)
-		validDaysMap := make(map[string]bool)
-
-		startDate := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) // Sunday
-		for d := 0; d < 35; d++ {
-			dt := startDate.AddDate(0, 0, d)
-			ds := dt.Format("2006-01-02")
-			isWeekend := dt.Weekday() == time.Saturday || dt.Weekday() == time.Sunday
-			var pts []types.EnergyStats
-			var loads []float64
-			for h := 0; h < 24; h++ {
-				val := 0.4
-				if h >= 6 && h <= 22 {
-					val = 0.9
-					if isWeekend && h >= 10 && h <= 14 {
-						val = 2.2 // Both Saturday and Sunday are elevated (2.2 kWh vs 0.9 kWh on Thu/Fri)
-					}
-				}
-				pts = append(pts, types.EnergyStats{
-					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
-					HomeKWH:     val,
-				})
-				loads = append(loads, val)
-			}
-			dayMap[ds] = &dayPoints{
-				date:    ds,
-				dayTime: dt,
-				weekday: dt.Weekday(),
-				points:  pts,
-				loads:   loads,
-			}
-			validDaysMap[ds] = true
-		}
-
-		todayStr := "2025-07-06" // Sunday
-		targetDay := time.Date(2025, 7, 6, 0, 0, 0, 0, time.UTC)
-		recentValidDates := []string{"2025-07-05", "2025-07-04", "2025-07-03", "2025-07-02", "2025-07-01", "2025-06-30", "2025-06-29"}
-
-		var rawAvgLoadA, rawP75LoadA [24]float64
-		var hasHour [24]bool
-		var targetTimes [24]time.Time
-		for h := 0; h < 24; h++ {
-			hasHour[h] = true
-			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
-			rawAvgLoadA[h] = 0.90
-			rawP75LoadA[h] = 1.00
-		}
-
-		applyProportionalBlockScaling(
-			context.Background(),
-			&rawAvgLoadA,
-			&rawP75LoadA,
-			hasHour,
-			targetTimes,
-			dayMap,
-			validDaysMap,
-			nil,
-			recentValidDates,
-			todayStr,
-			nil,
-			nil,
-		)
-
-		for h := 10; h <= 14; h++ {
-			assert.Greater(t, rawAvgLoadA[h], 1.30, "Sunday hour %d should scale using the Thursday+Friday baseline even when Saturday is also high", h)
-		}
+		assert.InDelta(t, 2.6, rawAvg2[14], 1e-6)
 	})
 }
 
