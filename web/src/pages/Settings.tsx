@@ -563,6 +563,8 @@ const ESSForm = ({
     const consecutiveSetFailures = effectiveAuthStatus?.consecutiveSetFailures ?? 0;
     const hasStoredCredsForSelectedESS = Boolean(!isWizard && settings.ess && settings.hasCredentials?.[settings.ess]);
     const isAuthFailing = hasStoredCredsForSelectedESS && (consecutiveFailures >= 3 || consecutiveSetFailures >= 3);
+    const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
+    const isTOUSupported = settings.ess === 'tesla' || settings.ess === 'franklin' || (settings.ess === 'enphase' && enphaseExportSchedules);
     const cooldownSeconds = getRemainingESSCooldownSeconds(effectiveAuthStatus, nowMs);
     const isCoolingDown = cooldownSeconds > 0;
     const showFirstRetryCaution = !isCoolingDown && hasRecentFirstInteractiveFailure(effectiveAuthStatus, nowMs);
@@ -887,7 +889,7 @@ const ESSForm = ({
                                             id="gridExportSolar"
                                             checked={settings.gridExportSolar}
                                             onCheckedChange={(checked) => {
-                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess)) {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && isTOUSupported) {
                                                     onChange('manageTOUSchedules', true);
                                                 } else if (!checked && !settings.gridExportBatteries && settings.manageTOUSchedules) {
                                                     onChange('manageTOUSchedules', false);
@@ -909,7 +911,7 @@ const ESSForm = ({
                                             id="gridExportBatteries"
                                             checked={settings.gridExportBatteries}
                                             onCheckedChange={(checked) => {
-                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess)) {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && isTOUSupported) {
                                                     onChange('manageTOUSchedules', true);
                                                 } else if (!checked && !settings.gridExportSolar && settings.manageTOUSchedules) {
                                                     onChange('manageTOUSchedules', false);
@@ -932,7 +934,7 @@ const ESSForm = ({
                                 )}
                             </div>
 
-                            {['tesla', 'franklin'].includes(settings.ess) && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                            {isTOUSupported && (settings.gridExportSolar || settings.gridExportBatteries) && (
                                 <div
                                     className={`grid-strategy-grid tou-management-grid${highlightTOU ? ' highlighted-section' : ''}`}
                                     data-testid="tou-management-section"
@@ -956,7 +958,9 @@ const ESSForm = ({
                                         </Field.Description>
                                         {settings.manageTOUSchedules && (
                                             <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
-                                                Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
+                                                {settings.ess === 'enphase'
+                                                    ? "Notice: This feature requires RateRudder to sync your Enphase Electricity Rate (TOU) tariff to your utility plan and manage Savings profile switching and Discharge to Grid schedules, overwriting manual TOU or discharge schedules in the Enphase App."
+                                                    : "Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app."}
                                             </div>
                                         )}
                                     </Field.Root>
@@ -1063,8 +1067,8 @@ const Settings = ({
     const [forceFullSettings, setForceFullSettings] = useState(false);
     const [wizardStep, setWizardStep] = useState(1);
     const [isInWizard, setIsInWizard] = useState<boolean | null>(null);
-    const [showTeslaGridModal, setShowTeslaGridModal] = useState(false);
-    const [teslaGridDirty, setTeslaGridDirty] = useState(false);
+    const [showGridSettingsModal, setShowGridSettingsModal] = useState(false);
+    const [gridSettingsDirty, setGridSettingsDirty] = useState(false);
 
     useEffect(() => {
         if (settings && isInWizard === null) {
@@ -1090,6 +1094,9 @@ const Settings = ({
     const [copiedMcpUrl, setCopiedMcpUrl] = useState(false);
 
     const isAppsFeatureEnabled = useFeatureFlag('connectedApps');
+    const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
+    const isTOUSupportedESS = (ess?: string) =>
+        ess === 'tesla' || ess === 'franklin' || (ess === 'enphase' && enphaseExportSchedules);
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
     const validateUtilityAndPeriods = async (
@@ -1756,18 +1763,7 @@ const Settings = ({
 
             const isESSNowConfigured = updatedSettings ? (!!updatedSettings.ess && updatedSettings.ess !== "" && !!updatedSettings.hasCredentials?.[updatedSettings.ess]) : false;
 
-            const isGridModalSetup = (finalSettings.ess === 'tesla' || finalSettings.ess === 'franklin') && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured;
-            if (isGridModalSetup) {
-                setTeslaGridDirty(false);
-                setShowTeslaGridModal(true);
-            } else {
-                if (!isESSAlreadyConfigured && isESSNowConfigured && !updatedSettings.pause) {
-                    if (onShowTutorial) {
-                        onShowTutorial();
-                    }
-                }
-            }
-
+            const isGridModalSetup = ['tesla', 'franklin', 'enphase'].includes(finalSettings.ess) && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured;
             setSettings(updatedSettings);
             originalSettingsRef.current = JSON.stringify(updatedSettings);
             if (credentialsPayload && settings.ess) {
@@ -1780,6 +1776,17 @@ const Settings = ({
 
             if (onSettingsSaved) {
                 await onSettingsSaved();
+            }
+
+            if (isGridModalSetup) {
+                setGridSettingsDirty(false);
+                setShowGridSettingsModal(true);
+            } else {
+                if (!isESSAlreadyConfigured && isESSNowConfigured && !updatedSettings.pause) {
+                    if (onShowTutorial) {
+                        onShowTutorial();
+                    }
+                }
             }
 
             setTimeout(() => setSuccessMessage(null), 3000);
@@ -1924,11 +1931,11 @@ const Settings = ({
             setIsUtilityDirty(false);
             setIsESSDirty(false);
             originalSettingsRef.current = JSON.stringify(finalSettings);
-            if (finalSettings.ess === 'tesla' || finalSettings.ess === 'franklin') {
+            if (['tesla', 'franklin', 'enphase'].includes(finalSettings.ess)) {
                 savingRef.current = false;
                 setIsSaving(false);
-                setTeslaGridDirty(false);
-                setShowTeslaGridModal(true);
+                setGridSettingsDirty(false);
+                setShowGridSettingsModal(true);
             } else {
                 if (!isESSAlreadyConfigured && isESSNowConfigured && !finalSettings.pause) {
                     if (onShowTutorial) {
@@ -1952,10 +1959,10 @@ const Settings = ({
         }
     };
 
-    const handleConfirmTeslaGridSettings = async () => {
+    const handleConfirmGridSettings = async () => {
         if (!settings) return;
-        if (!teslaGridDirty) {
-            setShowTeslaGridModal(false);
+        if (!gridSettingsDirty) {
+            setShowGridSettingsModal(false);
             if (onShowTutorial && !settings.pause) {
                 onShowTutorial();
             }
@@ -1974,7 +1981,7 @@ const Settings = ({
             await updateSettings(nextSettings, siteID);
             setSettings(nextSettings);
             originalSettingsRef.current = JSON.stringify(nextSettings);
-            setShowTeslaGridModal(false);
+            setShowGridSettingsModal(false);
             if (onSettingsSaved) {
                 await onSettingsSaved();
             }
@@ -2118,18 +2125,18 @@ const Settings = ({
     const utilityHighlightClass = showChecklist && !isUtilityConfigured && !isUtilityDirty ? "highlighted-section" : "";
     const essHighlightClass = (highlightESS || (showChecklist && !isESSConfigured && !isESSDirty)) ? "highlighted-section" : "";
 
-    const renderTeslaGridModal = () => (
-        <Dialog.Root open={showTeslaGridModal} onOpenChange={(open) => {
+    const renderGridSettingsModal = () => (
+        <Dialog.Root open={showGridSettingsModal} onOpenChange={(open) => {
             if (!open) {
-                handleConfirmTeslaGridSettings();
+                handleConfirmGridSettings();
             }
         }}>
             <Dialog.Portal>
                 <Dialog.Backdrop className="dialog-backdrop" />
-                <Dialog.Popup className="dialog-popup" data-testid="tesla-grid-modal">
+                <Dialog.Popup className="dialog-popup" data-testid="grid-settings-modal">
                     <Dialog.Title className="dialog-title">Confirm Grid Settings</Dialog.Title>
                     <Dialog.Description className="dialog-description">
-                        Based on your {settings?.ess === 'franklin' ? 'FranklinWH' : 'Tesla Powerwall'} configuration, we've detected the following grid settings. Please confirm or adjust them:
+                        Based on your {settings?.ess === 'franklin' ? 'FranklinWH' : settings?.ess === 'enphase' ? 'Enphase' : 'Tesla Powerwall'} configuration, we've detected the following grid settings. Please confirm or adjust them:
                     </Dialog.Description>
                     {settings && (
                         <>
@@ -2141,7 +2148,7 @@ const Settings = ({
                                             checked={settings.gridChargeBatteries ?? true}
                                             onCheckedChange={(checked) => {
                                                 handleChange('gridChargeBatteries', checked);
-                                                setTeslaGridDirty(true);
+                                                setGridSettingsDirty(true);
                                             }}
                                             className="switch-root"
                                         >
@@ -2157,13 +2164,13 @@ const Settings = ({
                                             id="modal-gridExportSolar"
                                             checked={settings.gridExportSolar ?? false}
                                             onCheckedChange={(checked) => {
-                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess || '')) {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && isTOUSupportedESS(settings.ess)) {
                                                     handleChange('manageTOUSchedules', true);
                                                 } else if (!checked && !settings.gridExportBatteries && settings.manageTOUSchedules) {
                                                     handleChange('manageTOUSchedules', false);
                                                 }
                                                 handleChange('gridExportSolar', checked);
-                                                setTeslaGridDirty(true);
+                                                setGridSettingsDirty(true);
                                             }}
                                             className="switch-root"
                                         >
@@ -2179,13 +2186,13 @@ const Settings = ({
                                             id="modal-gridExportBatteries"
                                             checked={settings.gridExportBatteries ?? false}
                                             onCheckedChange={(checked) => {
-                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess || '')) {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && isTOUSupportedESS(settings.ess)) {
                                                     handleChange('manageTOUSchedules', true);
                                                 } else if (!checked && !settings.gridExportSolar && settings.manageTOUSchedules) {
                                                     handleChange('manageTOUSchedules', false);
                                                 }
                                                 handleChange('gridExportBatteries', checked);
-                                                setTeslaGridDirty(true);
+                                                setGridSettingsDirty(true);
                                             }}
                                             className="switch-root"
                                         >
@@ -2196,13 +2203,13 @@ const Settings = ({
                                 </Field.Root>
 
                                 {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
-                                    <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="tesla-grid-modal-warning">
+                                    <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-settings-modal-warning">
                                         Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
                                     </div>
                                 )}
                             </div>
 
-                            {['tesla', 'franklin'].includes(settings.ess || '') && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                            {isTOUSupportedESS(settings.ess) && (settings.gridExportSolar || settings.gridExportBatteries) && (
                                 <div className="grid-strategy-grid tou-management-grid" style={{ marginBottom: '0.5rem' }}>
                                     <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
                                         <div className="switch-row">
@@ -2211,7 +2218,7 @@ const Settings = ({
                                                 checked={settings.manageTOUSchedules ?? false}
                                                 onCheckedChange={(checked) => {
                                                     handleChange('manageTOUSchedules', checked);
-                                                    setTeslaGridDirty(true);
+                                                    setGridSettingsDirty(true);
                                                 }}
                                                 className="switch-root"
                                             >
@@ -2224,7 +2231,9 @@ const Settings = ({
                                         </Field.Description>
                                         {settings.manageTOUSchedules && (
                                             <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
-                                                Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
+                                                {settings.ess === 'enphase'
+                                                    ? "Notice: This feature requires RateRudder to sync your Enphase Electricity Rate (TOU) tariff to your utility plan and manage Savings profile switching and Discharge to Grid schedules, overwriting manual TOU or discharge schedules in the Enphase App."
+                                                    : "Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app."}
                                             </div>
                                         )}
                                     </Field.Root>
@@ -2236,7 +2245,7 @@ const Settings = ({
                         <button
                             type="button"
                             className="btn btn-primary"
-                            onClick={handleConfirmTeslaGridSettings}
+                            onClick={handleConfirmGridSettings}
                             disabled={isSaving}
                         >
                             {isSaving ? 'Saving...' : 'Confirm & Finish'}
@@ -2367,7 +2376,7 @@ const Settings = ({
                         </button>
                     </div>
                 </div>
-                {renderTeslaGridModal()}
+                {renderGridSettingsModal()}
             </div>
         );
     }
@@ -3548,7 +3557,7 @@ const Settings = ({
                 </div>
             )}
 
-            {renderTeslaGridModal()}
+            {renderGridSettingsModal()}
         </div>
     );
 };

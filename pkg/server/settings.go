@@ -492,7 +492,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					newSettings.GridChargeBatteries = gridSettings.GridChargeBatteries
 					newSettings.GridExportSolar = gridSettings.GridExportSolar
 					newSettings.GridExportBatteries = gridSettings.GridExportBatteries
-					if (newSettings.ESS == "tesla" || newSettings.ESS == "franklin") && (gridSettings.GridExportSolar || gridSettings.GridExportBatteries) {
+					if (newSettings.ESS == "tesla" || newSettings.ESS == "franklin" || (newSettings.ESS == "enphase" && ess.EnphaseExportSchedulesEnabled(ctx))) &&
+						(gridSettings.GridExportSolar || gridSettings.GridExportBatteries) {
 						newSettings.ManageTOUSchedules = true
 					}
 				}

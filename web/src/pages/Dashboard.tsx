@@ -5,6 +5,7 @@ import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
 import DateSelector from '../components/DateSelector';
+import { useFeatureFlag } from '../utils/features';
 import {
     gridChargeCost,
     getActionTimestamp,
@@ -77,6 +78,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [showTOUNotice, setShowTOUNotice] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
     const [showLocationWarning, setShowLocationWarning] = useState(false);
+    const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
 
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const lastHiddenTimeRef = useRef<number | null>(
@@ -141,7 +143,8 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
 
             const touKey = siteID ? `tou_notice_dismissed_${siteID}` : 'tou_notice_dismissed';
             const isTOUDismissed = localStorage.getItem(touKey) === 'true';
-            const supportsTOU = ['tesla', 'franklin'].includes(settings.ess || '');
+            const supportsTOU = ['tesla', 'franklin'].includes(settings.ess || '') ||
+                (settings.ess === 'enphase' && enphaseExportSchedules);
             const canExport = Boolean(settings.gridExportSolar || settings.gridExportBatteries);
             setShowTOUNotice(supportsTOU && canExport && !settings.manageTOUSchedules && !isTOUDismissed);
         } else {
@@ -149,7 +152,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             setShowLocationWarning(false);
             setShowTOUNotice(false);
         }
-    }, [settings, siteID]);
+    }, [settings, siteID, enphaseExportSchedules]);
 
     const dismissTOUNotice = () => {
         const key = siteID ? `tou_notice_dismissed_${siteID}` : 'tou_notice_dismissed';

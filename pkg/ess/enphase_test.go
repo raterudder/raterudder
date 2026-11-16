@@ -535,6 +535,12 @@ func TestEnphase(t *testing.T) {
 				return
 			}
 
+			if r.URL.Path == "/app-api/123/grid_control_check.json" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"gridOutageCheck": false}`))
+				return
+			}
+
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -563,6 +569,7 @@ func TestEnphase(t *testing.T) {
 		assert.True(t, status.ElevatedMinBatterySOC)
 		assert.True(t, status.BatteryAboveMinSOC)
 		assert.False(t, status.EmergencyMode)
+		assert.False(t, status.GridUnavailable)
 		assert.True(t, status.VPPActive)
 
 		assert.Len(t, status.Storms, 1)
@@ -633,6 +640,12 @@ func TestEnphase(t *testing.T) {
 					"max_capacity": 6.72,
 					"available_power": 2.56
 				}`))
+				return
+			}
+
+			if r.URL.Path == "/app-api/123/grid_control_check.json" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"gridOutageCheck": false}`))
 				return
 			}
 
@@ -1240,7 +1253,9 @@ func TestEnphase(t *testing.T) {
 			assert.Equal(t, "self-consumption", lastPayload.Usage)
 		}
 		assert.True(t, putCalled)
-		assert.True(t, lastSettingsPut.ChargeFromGrid)
+		if assert.NotNil(t, lastSettingsPut.ChargeFromGrid) {
+			assert.True(t, *lastSettingsPut.ChargeFromGrid)
+		}
 	})
 
 	t.Run("getToday future intervals truncated and null SOC handled and cached", func(t *testing.T) {
@@ -1389,5 +1404,1020 @@ func TestEnphase(t *testing.T) {
 			assert.False(t, gs.GridExportSolar)
 			assert.False(t, gs.GridExportBatteries)
 		})
+
+		t.Run("NullGridModeWithDTGControl", func(t *testing.T) {
+			dtgLocked := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/app-api/123/data.json" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"state": map[string]any{
+							"batteryGridMode": nil,
+							"batteryConfig": map[string]any{
+								"charge_from_grid": false,
+							},
+						},
+					})
+					return
+				}
+				if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"data": map[string]any{
+							"chargeFromGrid": true,
+							"dtgControl": map[string]any{
+								"show":    true,
+								"enabled": false,
+								"locked":  dtgLocked,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			e := newEnphase()
+			e.baseURL, _ = url.Parse(server.URL)
+			e.systemID = 123
+
+			gs, err := e.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.True(t, gs.GridExportBatteries)
+
+			e.dataExpiry = time.Time{}
+			dtgLocked = true
+			gsLocked, err := e.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.False(t, gsLocked.GridExportBatteries)
+		})
+	})
+
+	t.Run("GetStatus ManagedTOUMode", func(t *testing.T) {
+		usage := "cost_savings"
+		dtgEnabled := false
+		gridOutage := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App: enphaseApp{Timezone: "UTC"},
+					State: enphaseState{
+						SiteID: 123,
+						BatteryConfig: enphaseBatteryConfig{
+							Usage:                   usage,
+							BatteryBackupPercentage: 20,
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.Write([]byte(`{"start_date":"2026-06-06","battery_details":{"aggregate_soc":50},"stats":[]}`))
+				return
+			}
+			if r.URL.Path == "/pv/settings/123/battery_status.json" {
+				w.Write([]byte(`{"max_capacity":10,"available_power":5}`))
+				return
+			}
+			if r.URL.Path == "/app-api/123/grid_control_check.json" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"gridOutageCheck":           gridOutage,
+					"userInitiatedGridToggle":   false,
+					"disableGridControl":        false,
+					"sunlightBackupSystemCheck": false,
+				})
+				return
+			}
+			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"profile": usage,
+						"dtgControl": map[string]any{
+							"show":    true,
+							"enabled": dtgEnabled,
+						},
+					},
+				})
+				return
+			}
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{MinBatterySOC: 20}
+		ctx := ffEnphaseExportSchedules.With(context.Background(), true)
+
+		t.Run("cost_savings marks ManagedTOUMode true", func(t *testing.T) {
+			usage = "cost_savings"
+			dtgEnabled = false
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, st.ManagedTOUMode)
+		})
+
+		t.Run("self-consumption with dtgControl enabled marks ManagedTOUMode true", func(t *testing.T) {
+			usage = "self-consumption"
+			dtgEnabled = true
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, st.ManagedTOUMode)
+		})
+
+		t.Run("self-consumption without dtgControl marks ManagedTOUMode false", func(t *testing.T) {
+			usage = "self-consumption"
+			dtgEnabled = false
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, st.ManagedTOUMode)
+		})
+
+		t.Run("ai_optimisation never marks ManagedTOUMode true", func(t *testing.T) {
+			usage = "ai_optimisation"
+			dtgEnabled = false
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, st.ManagedTOUMode)
+		})
+
+		t.Run("backup_only marks EmergencyMode true and ManagedTOUMode false", func(t *testing.T) {
+			usage = "backup_only"
+			dtgEnabled = true
+			gridOutage = false
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, st.EmergencyMode)
+			assert.False(t, st.ManagedTOUMode)
+			assert.False(t, st.GridUnavailable)
+		})
+
+		t.Run("grid_control_check gridOutageCheck marks GridUnavailable true", func(t *testing.T) {
+			usage = "self-consumption"
+			dtgEnabled = false
+			gridOutage = true
+			e.dataExpiry = time.Time{}
+			e.todayCacheExpiry = time.Time{}
+			st, err := e.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, st.GridUnavailable)
+		})
+	})
+
+	t.Run("SetModes BatteryModeExport DTG Schedule", func(t *testing.T) {
+		now := time.Now().UTC()
+		startH := now.Hour()
+		endH := startH + 2
+		if endH > 24 {
+			endH = 24
+		}
+		expectedStart := fmt.Sprintf("%02d:00", startH)
+		expectedEnd := fmt.Sprintf("%02d:00", endH)
+		if endH == 24 {
+			expectedEnd = "23:59"
+		}
+
+		var createdSchedule enphaseBatteryScheduleDetail
+		var activeSchedule *enphaseBatteryScheduleDetail
+		var isValidCalls int
+		var schedGetCalls int
+		var expectedIsValidCSRF = "csrf_sched"
+		var settingsPuts []enphaseBatterySettingsPayload
+		currentDTGEnabled := false
+		currentProfile := "self-consumption"
+		currentReserve := 20
+		currentCFG := true
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App: enphaseApp{Timezone: "UTC", UserID: 555},
+					State: enphaseState{
+						SiteID:          123,
+						BatteryGridMode: "ImportAndExport",
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: currentReserve,
+							Usage:                   currentProfile,
+							ChargeFromGrid:          currentCFG,
+						},
+					},
+				})
+			case r.URL.Path == "/pv/systems/123/today":
+				w.Write([]byte(`{"start_date":"2026-06-06","battery_details":{"aggregate_soc":80},"stats":[]}`))
+			case r.URL.Path == "/app-api/123/tariff.json":
+				json.NewEncoder(w).Encode(enphaseTariffJSONResponse{
+					SiteID: 123,
+					Purchase: &enphaseTariffSection{
+						TypeID: "tou",
+						Seasons: []enphaseTariffSeason{{
+							Days: []enphaseTariffDaySchedule{{
+								Days: []int{1, 2, 3, 4, 5, 6, 7},
+								Periods: []enphaseTariffPeriod{
+									{StartTime: startH * 60, EndTime: endH * 60, Rate: "0.35", Type: "peak"},
+									{StartTime: "", EndTime: "", Rate: "0.10", Type: "off-peak"},
+								},
+							}},
+						}},
+					},
+					Buyback: &enphaseTariffSection{
+						TypeID: "tou",
+						Seasons: []enphaseTariffSeason{{
+							Days: []enphaseTariffDaySchedule{{
+								Days: []int{1, 2, 3, 4, 5, 6, 7},
+								Periods: []enphaseTariffPeriod{
+									{StartTime: startH * 60, EndTime: endH * 60, Rate: "0.35", Type: "peak"},
+									{StartTime: "", EndTime: "", Rate: "0.10", Type: "off-peak"},
+								},
+							}},
+						}},
+					},
+				})
+			case r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_bs")
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"chargeFromGrid":             currentCFG,
+						"profile":                    currentProfile,
+						"batteryBackupPercentage":    currentReserve,
+						"batteryBackupPercentageMin": 5,
+						"veryLowSoc":                 5,
+						"dtgControl": map[string]any{
+							"show":              true,
+							"enabled":           currentDTGEnabled,
+							"locked":            false,
+							"scheduleSupported": true,
+						},
+					},
+				})
+			case r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "PUT":
+				assert.Equal(t, "csrf_bs", r.Header.Get("X-Xsrf-Token"))
+				assert.Equal(t, "555", r.Header.Get("Username"))
+				var p enphaseBatterySettingsPayload
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
+				settingsPuts = append(settingsPuts, p)
+				if p.ChargeFromGrid != nil {
+					currentCFG = *p.ChargeFromGrid
+				}
+				if p.DTGControl != nil {
+					currentDTGEnabled = p.DTGControl.Enabled
+				}
+				w.Write([]byte(`{"message":"success"}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/battery/sites/123/schedules" && r.Method == "GET":
+				schedGetCalls++
+				w.Header().Set("X-Csrf-Token", "csrf_sched")
+				var details []enphaseBatteryScheduleDetail
+				if activeSchedule != nil {
+					details = append(details, *activeSchedule)
+				}
+				json.NewEncoder(w).Encode(enphaseBatterySchedulesResponse{
+					Type: "BATTERY_SCHEDULES_CONFIG",
+					DTG: enphaseBatteryScheduleGroup{
+						ScheduleStatus: "active",
+						Count:          len(details),
+						Details:        details,
+					},
+				})
+			case r.URL.Path == "/service/batteryConfig/api/v1/battery/sites/123/schedules" && r.Method == "POST":
+				assert.Equal(t, "csrf_sched", r.Header.Get("X-Xsrf-Token"))
+				assert.Equal(t, "555", r.Header.Get("Username"))
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&createdSchedule))
+				createdSchedule.ScheduleID = "dtg-uuid-1"
+				createdSchedule.IsEnabled = true
+				activeSchedule = &createdSchedule
+				w.Header().Set("X-Csrf-Token", "csrf_sched_post")
+				expectedIsValidCSRF = "csrf_sched_post"
+				w.Write([]byte(`{"scheduleId":"dtg-uuid-1"}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/battery/sites/123/schedules/dtg-uuid-1" && r.Method == "PUT":
+				assert.NotEmpty(t, r.Header.Get("X-Xsrf-Token"))
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&createdSchedule))
+				createdSchedule.ScheduleID = "dtg-uuid-1"
+				createdSchedule.IsEnabled = true
+				activeSchedule = &createdSchedule
+				w.Header().Set("X-Csrf-Token", "csrf_sched_put")
+				expectedIsValidCSRF = "csrf_sched_put"
+				json.NewEncoder(w).Encode(createdSchedule)
+			case r.URL.Path == "/service/batteryConfig/api/v1/battery/sites/123/schedules/isValid" && r.Method == "POST":
+				assert.Equal(t, expectedIsValidCSRF, r.Header.Get("X-Xsrf-Token"))
+				isValidCalls++
+				w.Header().Set("X-Csrf-Token", expectedIsValidCSRF)
+				w.Write([]byte(`{"isValid":true}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_prof")
+				json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"profile": currentProfile}})
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "PUT":
+				var p enphaseBatteryProfilePayload
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
+				currentProfile = p.Profile
+				currentReserve = p.BatteryBackupPercentage
+				w.Write([]byte(`{"message":"success"}`))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.userID = 555
+		e.settings = types.Settings{
+			MinBatterySOC:       15,
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+		ctx := ffEnphaseExportSchedules.With(context.Background(), true)
+
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{
+					StartHour:     startH,
+					StartMinute:   0,
+					EndHour:       endH,
+					EndMinute:     0,
+					ImportDollars: 0.35,
+					ExportDollars: 0.35,
+					BatteryMode:   types.BatteryModeExport,
+					SolarMode:     types.SolarModeAny,
+					Peak:          true,
+				},
+			},
+		}
+
+		changed, err := e.SetModes(ctx, types.BatteryModeExport, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 10,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, expectedStart, createdSchedule.StartTime)
+		assert.Equal(t, expectedEnd, createdSchedule.EndTime)
+		assert.Equal(t, 10, createdSchedule.Limit)
+		assert.Equal(t, "DTG", createdSchedule.ScheduleType)
+		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7}, createdSchedule.Days)
+		assert.Equal(t, 1, isValidCalls)
+		assert.Equal(t, 1, schedGetCalls)
+		if assert.Len(t, settingsPuts, 1) {
+			if assert.NotNil(t, settingsPuts[0].ChargeFromGrid) {
+				assert.False(t, *settingsPuts[0].ChargeFromGrid)
+			}
+			if assert.NotNil(t, settingsPuts[0].DTGControl) {
+				assert.True(t, settingsPuts[0].DTGControl.Enabled)
+			}
+		}
+
+		// Idempotent second call should make no schedule or settings mutations
+		changed, err = e.SetModes(ctx, types.BatteryModeExport, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 10,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Len(t, settingsPuts, 1)
+		assert.Equal(t, 2, schedGetCalls)
+
+		// Updating existing schedule should reuse PUT response X-Csrf-Token for isValid without extra GET /schedules
+		changed, err = e.SetModes(ctx, types.BatteryModeExport, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 25,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 25, createdSchedule.Limit)
+		assert.Equal(t, 2, isValidCalls)
+		assert.Equal(t, 3, schedGetCalls)
+		assert.Len(t, settingsPuts, 2)
+
+		// Transitioning back to BatteryModeLoad disables DTG control without re-sending CFG fields
+		changed, err = e.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 15,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		if assert.Len(t, settingsPuts, 3) {
+			assert.Nil(t, settingsPuts[2].ChargeFromGrid)
+			if assert.NotNil(t, settingsPuts[2].DTGControl) {
+				assert.False(t, settingsPuts[2].DTGControl.Enabled)
+			}
+		}
+	})
+
+	t.Run("SetModes SolarModeExport CostSavings and Real-Rate Tariff Sync", func(t *testing.T) {
+		now := time.Now().UTC()
+		curH := now.Hour()
+
+		// Build a 24h multi-tier schedule covering super-off-peak, off-peak, partial-peak, and peak (including curH)
+		var periods []types.TOUPeriod
+		for h := 0; h < 24; h++ {
+			imp := 0.12
+			exp := 0.04
+			solMode := types.SolarModeAny
+			isPeak := false
+			switch {
+			case h == curH:
+				imp = 0.45
+				exp = 0.15
+				solMode = types.SolarModeExport
+				isPeak = true
+			case h >= 0 && h < 6 && h != curH:
+				imp = 0.06
+				exp = 0.02
+			case h >= 17 && h < 21 && h != curH:
+				imp = 0.25
+				exp = 0.05
+			}
+			periods = append(periods, types.TOUPeriod{
+				StartHour:     h,
+				EndHour:       h + 1,
+				ImportDollars: imp,
+				ExportDollars: exp,
+				BatteryMode:   types.BatteryModeLoad,
+				SolarMode:     solMode,
+				Peak:          isPeak,
+			})
+		}
+		sched := &types.TOUSchedule{Periods: periods}
+
+		var tariffPosts int
+		var postedJourney map[string]any
+		var profilePuts []enphaseBatteryProfilePayload
+		var callOrder []string
+		isBatteryChangePending := false
+		tariffSynced := false
+		currentProfile := "self-consumption"
+		currentReserve := 20
+		currentCFG := false
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App: enphaseApp{Timezone: "UTC", UserID: 777},
+					State: enphaseState{
+						SiteID:          123,
+						BatteryGridMode: "ImportOnly",
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: currentReserve,
+							Usage:                   currentProfile,
+							ChargeFromGrid:          currentCFG,
+						},
+					},
+				})
+			case r.URL.Path == "/pv/systems/123/today":
+				w.Write([]byte(`{"start_date":"2026-06-06","battery_details":{"aggregate_soc":64.7},"stats":[]}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_bs")
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"chargeFromGrid":             currentCFG,
+						"profile":                    currentProfile,
+						"batteryBackupPercentage":    currentReserve,
+						"batteryBackupPercentageMin": 5,
+						"veryLowSoc":                 5,
+						"isBatteryChangePending":     isBatteryChangePending,
+					},
+				})
+			case r.URL.Path == "/app-api/123/tariff.json":
+				if !tariffSynced {
+					json.NewEncoder(w).Encode(enphaseTariffJSONResponse{
+						SiteID: 123,
+						Purchase: &enphaseTariffSection{
+							TypeID: "flat",
+							Seasons: []enphaseTariffSeason{{
+								Days: []enphaseTariffDaySchedule{{
+									Days:    []int{1, 2, 3, 4, 5, 6, 7},
+									Periods: []enphaseTariffPeriod{{StartTime: "", EndTime: "", Rate: "0.10", Type: "off-peak"}},
+								}},
+							}},
+						},
+					})
+					return
+				}
+				json.NewEncoder(w).Encode(enphaseTariffJSONResponse{
+					SiteID: 123,
+					Purchase: &enphaseTariffSection{
+						TypeID: "tou",
+						Source: "manual",
+						Seasons: []enphaseTariffSeason{{
+							Days: []enphaseTariffDaySchedule{{
+								Days: []int{1, 2, 3, 4, 5, 6, 7},
+								Periods: []enphaseTariffPeriod{
+									{StartTime: curH * 60, EndTime: (curH + 1) * 60, Rate: "0.45", Type: "peak"},
+									{StartTime: "", EndTime: "", Rate: "0.12", Type: "off-peak"},
+								},
+							}},
+						}},
+					},
+					Buyback: &enphaseTariffSection{
+						TypeID: "tou",
+						Seasons: []enphaseTariffSeason{{
+							Days: []enphaseTariffDaySchedule{{
+								Days: []int{1, 2, 3, 4, 5, 6, 7},
+								Periods: []enphaseTariffPeriod{
+									{StartTime: curH * 60, EndTime: (curH + 1) * 60, Rate: "0.15", Type: "peak"},
+									{StartTime: "", EndTime: "", Rate: "0.03", Type: "off-peak"},
+								},
+							}},
+						}},
+					},
+				})
+			case r.URL.Path == "/service/tariff/tariff-ms/systems/123/tariff-journey" && r.Method == "GET":
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"journeyId": "journey-standard",
+						"defaultValues": map[string]any{
+							"tariffMode": "autofill",
+							"country":    "US",
+						},
+						"screens": []any{
+							map[string]any{
+								"id":         "tariff-type-selection",
+								"components": []any{map[string]any{"id": "tariffMode", "defaultValue": "autofill"}},
+							},
+							map[string]any{
+								"id":         "season-rate-entry",
+								"components": []any{map[string]any{"id": "energy-rate-entry_default_rate_1"}},
+							},
+							map[string]any{
+								"id":         "export-type-selection",
+								"components": []any{map[string]any{"id": "exportType", "defaultValue": "net_metering"}},
+							},
+							map[string]any{
+								"id":         "export-season-entry",
+								"components": []any{map[string]any{"id": "export-energy-rate-entry_default_rate_1"}},
+							},
+						},
+					},
+				})
+			case r.URL.Path == "/service/tariff/tariff-ms/systems/123/tariff-journey" && r.Method == "POST":
+				assert.Equal(t, "777", r.Header.Get("Username"))
+				callOrder = append(callOrder, "tariff")
+				tariffPosts++
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&postedJourney))
+				tariffSynced = true
+				w.Write([]byte(`{"type":"tariff-journey","data":{"message":"Tariff saved successfully"}}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_prof")
+				json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"profile": currentProfile}})
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "PUT":
+				callOrder = append(callOrder, "profile")
+				var p enphaseBatteryProfilePayload
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
+				profilePuts = append(profilePuts, p)
+				currentProfile = p.Profile
+				currentReserve = p.BatteryBackupPercentage
+				w.Write([]byte(`{"message":"success"}`))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.userID = 777
+		e.settings = types.Settings{
+			MinBatterySOC:       5,
+			GridExportSolar:     true,
+			GridChargeBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+		ctx := ffEnphaseExportSchedules.With(context.Background(), true)
+
+		// 1. Defer tariff update when battery change is pending, and do NOT enter cost_savings without peak at curH
+		isBatteryChangePending = true
+		changed, err := e.SetModes(ctx, types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			MinimumSOC: 5,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed) // reserve SOC updated 20 -> 5 (dynamic min 5%!)
+		assert.Equal(t, 0, tariffPosts)
+		if assert.Len(t, profilePuts, 1) {
+			assert.Equal(t, "self-consumption", profilePuts[0].Profile)
+			assert.Equal(t, 5, profilePuts[0].BatteryBackupPercentage)
+		}
+
+		// 2. Now allow tariff update -> syncs real multi-tier import & TOU export rates BEFORE switching to cost_savings
+		isBatteryChangePending = false
+		callOrder = nil
+		changed, err = e.SetModes(ctx, types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
+			MinimumSOC: 5,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, tariffPosts)
+		assert.Equal(t, []string{"tariff", "profile"}, callOrder)
+
+		if assert.NotNil(t, postedJourney) {
+			dv, ok := postedJourney["defaultValues"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "tou", dv["tariffType"])
+			assert.Equal(t, "tou", dv["exportType"])
+			ratesMap := dv["rates"].(map[string]any)
+			rateEntry := ratesMap["default"].([]any)[0].(map[string]any)
+			assert.Equal(t, "0.45", rateEntry["peakRate"])
+			assert.Equal(t, "0.06", rateEntry["offPeak"])
+			assert.NotEmpty(t, rateEntry["midPeakPeriods"])
+		}
+		if assert.Len(t, profilePuts, 2) {
+			assert.Equal(t, "cost_savings", profilePuts[1].Profile)
+			assert.Equal(t, 64, profilePuts[1].BatteryBackupPercentage) // floor(64.7) for BatteryModeStandby
+		}
+
+		// 3. Subsequent call with matching tariff skips /tariff-journey POST
+		changed, err = e.SetModes(ctx, types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
+			MinimumSOC: 5,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 1, tariffPosts)
+
+		// 4. ManageTOUSchedules: false skips tariff sync, cost_savings, and DTG schedules
+		e.settings.ManageTOUSchedules = false
+		tariffSynced = false
+		changed, err = e.SetModes(ctx, types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			MinimumSOC: 5,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed) // reverts cost_savings -> self-consumption and reserve 64 -> 5
+		assert.Equal(t, 1, tariffPosts)
+		if assert.Len(t, profilePuts, 3) {
+			assert.Equal(t, "self-consumption", profilePuts[2].Profile)
+			assert.Equal(t, 5, profilePuts[2].BatteryBackupPercentage)
+		}
+	})
+
+	t.Run("Partial RequestedConfig and Seasonal Tariff Journey Synthesis", func(t *testing.T) {
+		now := time.Now().UTC()
+		curH := now.Hour()
+
+		// Verify parseEnphaseTariffTOUSchedule handles differing buy/sell peak boundaries cleanly
+		parsed := parseEnphaseTariffTOUSchedule(enphaseTariffJSONResponse{
+			Purchase: &enphaseTariffSection{
+				TypeID: "tou",
+				Seasons: []enphaseTariffSeason{{
+					Days: []enphaseTariffDaySchedule{{
+						Days:    []int{1, 2, 3, 4, 5, 6, 7},
+						Periods: []enphaseTariffPeriod{{StartTime: "", EndTime: "", Rate: "0.10", Type: "off-peak"}},
+					}},
+				}},
+			},
+			Buyback: &enphaseTariffSection{
+				TypeID: "tou",
+				Seasons: []enphaseTariffSeason{{
+					Days: []enphaseTariffDaySchedule{{
+						Days: []int{1, 2, 3, 4, 5, 6, 7},
+						Periods: []enphaseTariffPeriod{
+							{StartTime: 840, EndTime: 1020, Rate: "0.25", Type: "peak"},
+							{StartTime: "", EndTime: "", Rate: "0.05", Type: "off-peak"},
+						},
+					}},
+				}},
+			},
+		}, now)
+		require.NotNil(t, parsed)
+		assert.Len(t, parsed.Periods, 3)
+		assert.True(t, parsed.Periods[1].Peak)
+		assert.Equal(t, 0.25, parsed.Periods[1].ExportDollars)
+
+		// Verify applyEnphaseTariffPlanToJourney replaces seasonal components cleanly and enforces 3DP + net_metering stripping
+		journey := map[string]any{
+			"defaultValues": map[string]any{
+				"hasSeasonalRates": "yes",
+				"installDate":      "2026-01-01",
+			},
+			"screens": []any{
+				map[string]any{
+					"id": "season-rate-entry",
+					"components": []any{
+						map[string]any{"id": "energy-rate-entry_summer_rate_1", "type": "SEASON_RATE_REPEATER"},
+						map[string]any{"id": "energy-rate-entry_winter_rate_1", "type": "SEASON_RATE_REPEATER"},
+						map[string]any{"id": "demandChargeDetails", "type": "SECTION"},
+					},
+				},
+				map[string]any{
+					"id": "export-season-entry",
+					"components": []any{
+						map[string]any{"id": "export-energy-rate-entry_summer_rate_1", "type": "SEASON_RATE_REPEATER"},
+					},
+				},
+			},
+		}
+		netMeterSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: curH, EndHour: curH + 1, ImportDollars: 0.30, ExportDollars: 0.30, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: (curH + 1) % 24, EndHour: (curH+1)%24 + 1, ImportDollars: 0.0, ExportDollars: 0.0, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), netMeterSched, now)
+		require.NotNil(t, plan)
+		assert.Equal(t, "0.001", formatEnphaseRate(0))
+		assert.Equal(t, "0.125", formatEnphaseRate(0.1254))
+		assert.Equal(t, "net_metering", plan.ExportType)
+
+		applyEnphaseTariffPlanToJourney(journey, plan, now)
+		screens := journey["screens"].([]any)
+		seasonComps := screens[0].(map[string]any)["components"].([]any)
+		assert.Len(t, seasonComps, 2)
+		assert.Equal(t, "energy-rate-entry_default_rate_1", seasonComps[0].(map[string]any)["id"])
+		assert.Equal(t, "demandChargeDetails", seasonComps[1].(map[string]any)["id"])
+		exportComps := screens[1].(map[string]any)["components"].([]any)
+		assert.Empty(t, exportComps)
+
+		// Verify SetModes with partial requestedConfig (only dtgControl) and ScheduleSupported=false
+		var settingsPut bool
+		var profPut *enphaseBatteryProfilePayload
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App: enphaseApp{Timezone: "UTC", UserID: 888},
+					State: enphaseState{
+						SiteID: 123,
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: 20,
+							Usage:                   "cost_savings",
+						},
+					},
+				})
+			case r.URL.Path == "/pv/systems/123/today":
+				w.Write([]byte(`{"start_date":"2026-06-06","battery_details":{"aggregate_soc":70},"stats":[]}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_bs")
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"chargeFromGrid":          false,
+						"profile":                 "cost_savings",
+						"batteryBackupPercentage": 20,
+						"requestedConfig": map[string]any{
+							"dtgControl": map[string]any{"enabled": false},
+						},
+						"dtgControl": map[string]any{
+							"show":              true,
+							"enabled":           false,
+							"locked":            false,
+							"scheduleSupported": false,
+						},
+					},
+				})
+			case r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "PUT":
+				settingsPut = true
+				w.Write([]byte(`{"message":"success"}`))
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "GET":
+				w.Header().Set("X-Csrf-Token", "csrf_prof")
+				json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"profile": "cost_savings"}})
+			case r.URL.Path == "/service/batteryConfig/api/v1/profile/123" && r.Method == "PUT":
+				var p enphaseBatteryProfilePayload
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
+				profPut = &p
+				w.Write([]byte(`{"message":"success"}`))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC:      20,
+			ManageTOUSchedules: true,
+		}
+		ctx := ffEnphaseExportSchedules.With(context.Background(), true)
+		changed, err := e.SetModes(ctx, types.BatteryModeExport, types.SolarModeAny, types.ModesOptions{MinimumSOC: 20})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		// Partial requestedConfig must still detect profile transition cost_savings -> self-consumption!
+		if assert.NotNil(t, profPut) {
+			assert.Equal(t, "self-consumption", profPut.Profile)
+			assert.Equal(t, 20, profPut.BatteryBackupPercentage)
+		}
+		// ScheduleSupported=false warns and skips DTG schedule configuration instead of guessing settings fields
+		assert.False(t, settingsPut)
+	})
+}
+
+func TestBuildEnphaseTariffPlan(t *testing.T) {
+	now := time.Date(2026, 6, 15, 14, 15, 0, 0, time.UTC)
+
+	t.Run("Nil empty and non-peak schedules return nil", func(t *testing.T) {
+		assert.Nil(t, buildEnphaseTariffPlan(context.Background(), nil, now))
+		assert.Nil(t, buildEnphaseTariffPlan(context.Background(), &types.TOUSchedule{}, now))
+		assert.Nil(t, buildEnphaseTariffPlan(context.Background(), &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 24, ImportDollars: 0.12, ExportDollars: 0.12, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}, now))
+	})
+
+	t.Run("Two-tier net metering TOU plan", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 16, ImportDollars: 0.12, ExportDollars: 0.12, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 16, EndHour: 21, ImportDollars: 0.45, ExportDollars: 0.45, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, EndHour: 24, ImportDollars: 0.12, ExportDollars: 0.12, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.InDelta(t, 0.45, plan.ImportPeakDollars, 1e-9)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 960, EndMin: 1260}}, plan.ImportPeakRanges)
+		assert.Empty(t, plan.ImportMidPeakGroups)
+		assert.InDelta(t, 0.12, plan.ImportOffPeakDollars, 1e-9)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 0, EndMin: 960}, {StartMin: 1260, EndMin: 1440}}, plan.ImportOffPeakRanges)
+		assert.Equal(t, "net_metering", plan.ExportType)
+	})
+
+	t.Run("Three-tier asymmetric TOU plan", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 6, ImportDollars: 0.08, ExportDollars: 0.02, BatteryMode: types.BatteryModeChargeAny},
+				{StartHour: 6, EndHour: 16, ImportDollars: 0.22, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 16, EndHour: 21, ImportDollars: 0.50, ExportDollars: 0.18, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, EndHour: 24, ImportDollars: 0.22, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.InDelta(t, 0.50, plan.ImportPeakDollars, 1e-9)
+		assert.InDelta(t, 0.08, plan.ImportOffPeakDollars, 1e-9)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 0, EndMin: 360}}, plan.ImportOffPeakRanges)
+		if assert.Len(t, plan.ImportMidPeakGroups, 1) {
+			assert.InDelta(t, 0.22, plan.ImportMidPeakGroups[0].RateDollars, 1e-9)
+			assert.Equal(t, []enphaseMinuteRange{{StartMin: 360, EndMin: 960}, {StartMin: 1260, EndMin: 1440}}, plan.ImportMidPeakGroups[0].Ranges)
+		}
+		assert.Equal(t, "tou", plan.ExportType)
+		assert.InDelta(t, 0.18, plan.ExportPeakDollars, 1e-9)
+		// Weighted export rate (6*0.02 + 13*0.04)/19 rounded to 5 decimal places by calculateDurationWeightedRates
+		assert.InDelta(t, 0.03368, plan.ExportOffPeakDollars, 1e-9)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 960, EndMin: 1260}}, plan.ExportPeakRanges)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 0, EndMin: 960}, {StartMin: 1260, EndMin: 1440}}, plan.ExportOffPeakRanges)
+	})
+
+	t.Run("Four-tier asymmetric TOU plan", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 6, ImportDollars: 0.06, ExportDollars: 0.02, BatteryMode: types.BatteryModeChargeAny},
+				{StartHour: 6, EndHour: 15, ImportDollars: 0.15, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 15, EndHour: 17, ImportDollars: 0.28, ExportDollars: 0.06, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 17, EndHour: 21, ImportDollars: 0.55, ExportDollars: 0.20, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, EndHour: 24, ImportDollars: 0.15, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.InDelta(t, 0.55, plan.ImportPeakDollars, 1e-9)
+		assert.InDelta(t, 0.06, plan.ImportOffPeakDollars, 1e-9)
+		if assert.Len(t, plan.ImportMidPeakGroups, 2) {
+			assert.InDelta(t, 0.15, plan.ImportMidPeakGroups[0].RateDollars, 1e-9)
+			assert.InDelta(t, 0.28, plan.ImportMidPeakGroups[1].RateDollars, 1e-9)
+		}
+		assert.Equal(t, "tou", plan.ExportType)
+		assert.InDelta(t, 0.20, plan.ExportPeakDollars, 1e-9)
+	})
+
+	t.Run("All-peak schedule synthesizes lower off-peak fallback", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 24, ImportDollars: 0.30, ExportDollars: 0.10, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.InDelta(t, 0.30, plan.ImportPeakDollars, 1e-9)
+		assert.InDelta(t, 0.29, plan.ImportOffPeakDollars, 1e-9)
+		assert.Equal(t, []enphaseMinuteRange{{StartMin: 0, EndMin: 1440}}, plan.ImportPeakRanges)
+		assert.Empty(t, plan.ImportOffPeakRanges)
+		assert.Equal(t, "tou", plan.ExportType)
+		assert.InDelta(t, 0.09, plan.ExportOffPeakDollars, 1e-9)
+		assert.InDelta(t, 0.10, plan.ExportPeakDollars, 1e-9)
+	})
+
+	t.Run("Exceeding max peak periods keeps active and longest windows", func(t *testing.T) {
+		// now is 14:15 (minute 855): the 14:00-14:30 peak is short (30m) but currently active,
+		// while 09:00-09:30 is short (30m) and inactive so it must be demoted.
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 1, ImportDollars: 0.08, ExportDollars: 0.02, BatteryMode: types.BatteryModeChargeAny},
+				{StartHour: 1, EndHour: 2, EndMinute: 30, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},                   // 90m
+				{StartHour: 3, EndHour: 5, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},                                  // 120m
+				{StartHour: 6, EndHour: 7, EndMinute: 15, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},                   // 75m
+				{StartHour: 7, EndHour: 9, ImportDollars: 0.16, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},                                            // off-peak tier 2
+				{StartHour: 9, StartMinute: 0, EndHour: 9, EndMinute: 30, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},   // 30m inactive -> demoted
+				{StartHour: 10, EndHour: 12, ImportDollars: 0.16, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad},                                          // off-peak tier 2
+				{StartHour: 12, EndHour: 13, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},                                // 60m inactive -> demoted
+				{StartHour: 14, StartMinute: 0, EndHour: 14, EndMinute: 30, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true}, // 30m active at 14:15 -> kept
+				{StartHour: 16, EndHour: 17, EndMinute: 45, ImportDollars: 0.50, ExportDollars: 0.20, SolarMode: types.SolarModeExport, Peak: true},                 // 105m
+				{StartHour: 18, EndHour: 24, ImportDollars: 0.08, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.Equal(t, []enphaseMinuteRange{
+			{StartMin: 60, EndMin: 150},   // 01:00-02:30 (90m)
+			{StartMin: 180, EndMin: 300},  // 03:00-05:00 (120m)
+			{StartMin: 360, EndMin: 435},  // 06:00-07:15 (75m)
+			{StartMin: 840, EndMin: 870},  // 14:00-14:30 (30m active)
+			{StartMin: 960, EndMin: 1065}, // 16:00-17:45 (105m)
+		}, plan.ImportPeakRanges)
+		// Demoted peak windows (09:00-09:30 and 12:00-13:00) coalesce with adjacent mid-peak ranges while staying < ImportPeakDollars
+		if assert.Len(t, plan.ImportMidPeakGroups, 1) {
+			assert.Equal(t, []enphaseMinuteRange{
+				{StartMin: 435, EndMin: 570}, // 07:15-09:00 + demoted 09:00-09:30
+				{StartMin: 600, EndMin: 780}, // 10:00-12:00 + demoted 12:00-13:00
+			}, plan.ImportMidPeakGroups[0].Ranges)
+			assert.Less(t, plan.ImportMidPeakGroups[0].RateDollars, plan.ImportPeakDollars)
+		}
+	})
+
+	t.Run("Short peaks expand to 15m clamp at midnight and merge overlaps", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 8, ImportDollars: 0.10, ExportDollars: 0.10, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 8, StartMinute: 0, EndHour: 8, EndMinute: 10, ImportDollars: 0.35, ExportDollars: 0.35, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 8, StartMinute: 5, EndHour: 8, EndMinute: 20, ImportDollars: 0.35, ExportDollars: 0.35, BatteryMode: types.BatteryModeExport, Peak: true},
+				{StartHour: 8, StartMinute: 20, EndHour: 23, EndMinute: 55, ImportDollars: 0.10, ExportDollars: 0.10, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 23, StartMinute: 55, EndHour: 24, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.35, SolarMode: types.SolarModeExport, Peak: true},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.Equal(t, []enphaseMinuteRange{
+			{StartMin: 480, EndMin: 500},   // 08:00-08:15 merged with 08:05-08:20
+			{StartMin: 1425, EndMin: 1440}, // 23:55-24:00 expanded backward to 15m
+		}, plan.ImportPeakRanges)
+		assert.Equal(t, []enphaseMinuteRange{
+			{StartMin: 0, EndMin: 480},
+			{StartMin: 500, EndMin: 1425},
+		}, plan.ImportOffPeakRanges)
+	})
+
+	t.Run("Negative prices clamp to 0.001 and export peak enforces strictly higher rate", func(t *testing.T) {
+		negSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 15, ImportDollars: -0.02, ExportDollars: -0.03, BatteryMode: types.BatteryModeChargeAny},
+				{StartHour: 15, EndHour: 18, ImportDollars: 0.08, ExportDollars: 0.03, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 18, EndHour: 24, ImportDollars: -0.01, ExportDollars: -0.02, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		negPlan := buildEnphaseTariffPlan(context.Background(), negSched, now)
+		require.NotNil(t, negPlan)
+		assert.InDelta(t, 0.001, negPlan.ImportOffPeakDollars, 1e-9)
+		assert.InDelta(t, 0.08, negPlan.ImportPeakDollars, 1e-9)
+		assert.Equal(t, "tou", negPlan.ExportType)
+		assert.InDelta(t, 0.001, negPlan.ExportOffPeakDollars, 1e-9)
+		assert.InDelta(t, 0.03, negPlan.ExportPeakDollars, 1e-9)
+
+		invertedExportSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 15, ImportDollars: 0.02, ExportDollars: 0.05, BatteryMode: types.BatteryModeChargeAny},
+				{StartHour: 15, EndHour: 18, ImportDollars: 0.08, ExportDollars: 0.03, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 18, EndHour: 24, ImportDollars: 0.02, ExportDollars: 0.05, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		invPlan := buildEnphaseTariffPlan(context.Background(), invertedExportSched, now)
+		require.NotNil(t, invPlan)
+		assert.Equal(t, "tou", invPlan.ExportType)
+		assert.InDelta(t, 0.05, invPlan.ExportOffPeakDollars, 1e-9)
+		assert.InDelta(t, 0.051, invPlan.ExportPeakDollars, 1e-9)
+	})
+
+	t.Run("Rates within net metering tolerance treat plan as net_metering", func(t *testing.T) {
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, EndHour: 17, ImportDollars: 0.10, ExportDollars: 0.104, BatteryMode: types.BatteryModeLoad},
+				{StartHour: 17, EndHour: 21, ImportDollars: 0.30, ExportDollars: 0.297, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, EndHour: 24, ImportDollars: 0.10, ExportDollars: 0.10, BatteryMode: types.BatteryModeLoad},
+			},
+		}
+		plan := buildEnphaseTariffPlan(context.Background(), sched, now)
+		require.NotNil(t, plan)
+		assert.Equal(t, "net_metering", plan.ExportType)
 	})
 }

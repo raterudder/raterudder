@@ -14,6 +14,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +22,17 @@ import (
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
+
+var ffEnphaseExportSchedules = feats.Bool("enphaseExportSchedules", false)
+
+// EnphaseExportSchedulesEnabled reports whether Enphase TOU and DTG export schedule management is enabled.
+func EnphaseExportSchedulesEnabled(ctx context.Context) bool {
+	return ffEnphaseExportSchedules.Enabled(ctx)
+}
 
 var errEnphaseUnauthorized = errors.New("unauthorized")
 
@@ -71,18 +80,25 @@ func newEnphase() *Enphase {
 	}
 }
 
+func enphaseCSRFKey(path string) string {
+	if idx := strings.Index(path, "/schedules"); idx != -1 {
+		return path[:idx+len("/schedules")]
+	}
+	return path
+}
+
 func (e *Enphase) getCSRFToken(ctx context.Context, path string, fetchFunc func() error) (string, error) {
-	tokenObj, ok := e.lastCSRFToken[path]
+	key := enphaseCSRFKey(path)
+	tokenObj, ok := e.lastCSRFToken[key]
 	if !ok || tokenObj.Token == "" || time.Since(tokenObj.CreatedAt) > 60*time.Second {
 		if err := fetchFunc(); err != nil {
 			return "", err
 		}
-		tokenObj = e.lastCSRFToken[path]
+		tokenObj = e.lastCSRFToken[key]
 		if tokenObj.Token == "" {
 			return "", fmt.Errorf("missing CSRF token for path: %s", path)
 		}
 	}
-	delete(e.lastCSRFToken, path)
 	return tokenObj.Token, nil
 }
 
@@ -234,9 +250,12 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 			log.Ctx(ctx).WarnContext(ctx, "enphase credential validation failed", slog.Any("error", err))
 			return creds, false, fmt.Errorf("credential validation failed: %w", err)
 		}
-	} else if res.App.UserID != 0 && creds.Enphase.UserID != res.App.UserID {
-		creds.Enphase.UserID = res.App.UserID
-		changed = true
+	} else if res.App.UserID != 0 {
+		e.userID = res.App.UserID
+		if creds.Enphase.UserID != res.App.UserID {
+			creds.Enphase.UserID = res.App.UserID
+			changed = true
+		}
 	}
 
 	return creds, changed, nil
@@ -260,6 +279,26 @@ func (e *Enphase) GridSettings(ctx context.Context) (types.GridSettings, error) 
 		data.State.BatteryGridMode == "ExportOnly"
 
 	exportSolar := data.State.BatteryGridMode != "NoImportOrExport"
+
+	// Newer Enphase IQ8 + IQ Meter Collar setups leave batteryGridMode empty/null
+	// and expose grid charge and DTG capabilities via cfgControl / dtgControl in batterySettings.
+	if data.State.BatteryGridMode == "" {
+		if settingsData, err := e.getBatterySettings(ctx); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get enphase battery settings for grid settings", slog.Any("error", err))
+		} else {
+			if settingsData.ChargeFromGrid || (settingsData.CFGControl != nil && settingsData.CFGControl.Show) {
+				chargeFromGrid = true
+			}
+			// dtgControl.locked is temporarily true during backup_only, ai_optimisation, or StormGuard;
+			// only treat locked as a grid restriction outside those temporary profile/storm states.
+			tempLocked := settingsData.Profile == "backup_only" ||
+				settingsData.Profile == "ai_optimisation" ||
+				data.State.BatteryConfig.SevereWeatherWatch == "active"
+			if settingsData.DTGControl != nil && settingsData.DTGControl.Show && (!settingsData.DTGControl.Locked || tempLocked) {
+				exportBatteries = true
+			}
+		}
+	}
 
 	return types.GridSettings{
 		GridChargeBatteries: chargeFromGrid,
@@ -442,22 +481,48 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		batteryChargingDisabled = true
 	}
 
+	usage := data.State.BatteryConfig.Usage
+	var dtgEnabled bool
+	if ffEnphaseExportSchedules.Enabled(ctx) && !emergencyMode {
+		if settingsData, err := e.getBatterySettings(ctx); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get enphase battery settings for status", slog.Any("error", err))
+		} else {
+			if settingsData.RequestedConfig.Profile != "" {
+				usage = settingsData.RequestedConfig.Profile
+			}
+			if settingsData.RequestedConfig.DTGControl != nil {
+				dtgEnabled = settingsData.RequestedConfig.DTGControl.Enabled
+			} else if settingsData.DTGControl != nil {
+				dtgEnabled = settingsData.DTGControl.Enabled
+			}
+		}
+	}
+	managedTOUMode := !emergencyMode && usage != "ai_optimisation" && (usage == "cost_savings" || dtgEnabled)
+
+	var gridUnavailable bool
+	if gridCheck, err := e.getGridControlCheck(ctx); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get enphase grid control check for status", slog.Any("error", err))
+	} else {
+		log.Ctx(ctx).DebugContext(ctx, "enphase grid control check", slog.Any("gridControlCheck", gridCheck))
+		gridUnavailable = gridCheck.GridOutageCheck
+	}
+
 	status := types.SystemStatus{
-		Timestamp:             time.Now().In(loc),
-		TimeLocation:          loc.String(),
-		BatterySOC:            currentSOC,
-		BatteryKW:             batteryKW,
-		BatteryCapacityKWH:    capacityKWH,
-		MaxBatteryDischargeKW: maxPower,
-		MaxBatteryChargeKW:    maxPower,
-		SolarKW:               solarKW,
-		GridKW:                gridKW,
-		HomeKW:                homeKW,
-		ElevatedMinBatterySOC: backupReserveSOC > 0 && backupReserveSOC > e.settings.MinBatterySOC,
-		BatteryAboveMinSOC:    currentSOC >= backupReserveSOC,
-		EmergencyMode:         emergencyMode,
-		// TODO: determine GridUnavailable
-		// TODO: detect ManagedTOUMode for Enphase once battery settings (e.g. is_tou) or operation modes are integrated into GetStatus
+		Timestamp:               time.Now().In(loc),
+		TimeLocation:            loc.String(),
+		BatterySOC:              currentSOC,
+		BatteryKW:               batteryKW,
+		BatteryCapacityKWH:      capacityKWH,
+		MaxBatteryDischargeKW:   maxPower,
+		MaxBatteryChargeKW:      maxPower,
+		SolarKW:                 solarKW,
+		GridKW:                  gridKW,
+		HomeKW:                  homeKW,
+		ElevatedMinBatterySOC:   backupReserveSOC > 0 && backupReserveSOC > e.settings.MinBatterySOC,
+		BatteryAboveMinSOC:      currentSOC >= backupReserveSOC,
+		EmergencyMode:           emergencyMode,
+		ManagedTOUMode:          managedTOUMode,
+		GridUnavailable:         gridUnavailable,
 		BatteryChargingDisabled: batteryChargingDisabled,
 		Alarms:                  alarms,
 		Storms:                  storms,
@@ -490,8 +555,9 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	if err != nil {
 		loc = time.UTC
 	}
+	now := time.Now().In(loc)
 
-	todayStatsRaw, err := e.getToday(ctx, time.Now().In(loc), true)
+	todayStatsRaw, err := e.getToday(ctx, now, true)
 	if err != nil {
 		return false, fmt.Errorf("failed to get enphase today stats in SetModes: %w", err)
 	}
@@ -512,12 +578,25 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	currentChargeFromGridScheduleEnabled := settingsData.ChargeFromGridScheduleEnabled
 	currentReserveSOC := float64(settingsData.BatteryBackupPercentage)
 	currentProfile := settingsData.Profile
+	var currentDTGEnabled bool
+	if settingsData.DTGControl != nil {
+		currentDTGEnabled = settingsData.DTGControl.Enabled
+	}
 
-	if settingsData.RequestedConfig != (enphaseRequestedConfig{}) {
-		currentChargeFromGrid = settingsData.RequestedConfig.ChargeFromGrid
-		currentChargeFromGridScheduleEnabled = settingsData.RequestedConfig.ChargeFromGridScheduleEnabled
-		currentReserveSOC = float64(settingsData.RequestedConfig.BatteryBackupPercentage)
+	if settingsData.RequestedConfig.ChargeFromGrid != nil {
+		currentChargeFromGrid = *settingsData.RequestedConfig.ChargeFromGrid
+	}
+	if settingsData.RequestedConfig.ChargeFromGridScheduleEnabled != nil {
+		currentChargeFromGridScheduleEnabled = *settingsData.RequestedConfig.ChargeFromGridScheduleEnabled
+	}
+	if settingsData.RequestedConfig.BatteryBackupPercentage != nil {
+		currentReserveSOC = float64(*settingsData.RequestedConfig.BatteryBackupPercentage)
+	}
+	if settingsData.RequestedConfig.Profile != "" {
 		currentProfile = settingsData.RequestedConfig.Profile
+	}
+	if settingsData.RequestedConfig.DTGControl != nil {
+		currentDTGEnabled = settingsData.RequestedConfig.DTGControl.Enabled
 	}
 
 	severeWeatherWatchActive := data.State.BatteryConfig.SevereWeatherWatch == "active"
@@ -531,7 +610,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 		var targetChargeFromGrid bool
 		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
+		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby, types.BatteryModeExport:
 			targetChargeFromGrid = e.settings.GridChargeBatteries
 		default:
 			return false, fmt.Errorf("unknown battery mode: %v", bat)
@@ -555,9 +634,10 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 					slog.Bool("severeWeatherWatchActive", severeWeatherWatchActive),
 					slog.Bool("isBackup", isBackup),
 				)
+				cfgScheduleDisabled := false
 				payload := enphaseBatterySettingsPayload{
-					ChargeFromGrid:                targetChargeFromGrid,
-					ChargeFromGridScheduleEnabled: false,
+					ChargeFromGrid:                &targetChargeFromGrid,
+					ChargeFromGridScheduleEnabled: &cfgScheduleDisabled,
 				}
 				if err := e.updateBatterySettings(ctx, payload); err != nil {
 					return false, err
@@ -572,18 +652,55 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return false, nil
 	}
 
+	enphaseSchedules := ffEnphaseExportSchedules.Enabled(ctx)
+	manageSchedules := enphaseSchedules && e.settings.ManageTOUSchedules
+	var changed bool
+	var tariffHasPeakNow bool
+
+	// Sync TOU tariff before modifying battery profile or settings so tariff-ms
+	// does not reject edits with error 934 ("active profile request pending").
+	if manageSchedules && (opts.Schedule != nil || sol == types.SolarModeExport) {
+		tariffChanged, hasPeakNow, err := e.ensureTOUTariffSynced(ctx, opts.Schedule, now, sol == types.SolarModeExport, settingsData.IsBatteryChangePending)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to check/sync enphase TOU tariff", slog.Any("error", err))
+		} else {
+			tariffHasPeakNow = hasPeakNow
+			if tariffChanged {
+				changed = true
+			}
+		}
+	}
+
+	minAllowedSOC := max(float64(settingsData.BatteryBackupPercentageMin), float64(settingsData.VeryLowSOC))
+	if minAllowedSOC <= 0 {
+		minAllowedSOC = 10
+	}
+
 	newReserveSOC := currentReserveSOC
 	newChargeFromGrid := currentChargeFromGrid
-	if e.settings.GridChargeBatteries && !currentChargeFromGrid {
+	if enphaseSchedules {
+		if bat != types.BatteryModeNoChange {
+			newChargeFromGrid = bat == types.BatteryModeChargeAny && e.settings.GridChargeBatteries
+		}
+	} else if e.settings.GridChargeBatteries && !currentChargeFromGrid {
 		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on enphase, enabling grid charge to match site settings")
 		newChargeFromGrid = true
 	}
+
 	minSOC := e.settings.MinBatterySOC
 	if opts.MinimumSOC != 0 {
 		minSOC = float64(opts.MinimumSOC)
 	}
 
 	newProfile := "self-consumption"
+	if manageSchedules && sol == types.SolarModeExport {
+		if tariffHasPeakNow {
+			newProfile = "cost_savings"
+		} else {
+			log.Ctx(ctx).WarnContext(ctx, "skipping enphase cost_savings profile because active tariff does not cover current hour as peak")
+		}
+	}
+
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// If they want to charge the battery, set the backup reserve SOC to 100% to
@@ -595,7 +712,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		newReserveSOC = float64(targetSOC)
 	case types.BatteryModeLoad, types.BatteryModeExport:
 		// Set the reserve SOC to the configured minimum battery SOC to begin discharging
-		// and covering home loads.
+		// and covering home loads (or exporting during DTG window).
 		newReserveSOC = minSOC
 	case types.BatteryModeStandby:
 		// Set reserve SOC to the floored current SOC to prevent discharging further,
@@ -608,8 +725,8 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 
 	if bat != types.BatteryModeNoChange {
-		if newReserveSOC < 10 {
-			newReserveSOC = 10
+		if newReserveSOC < minAllowedSOC {
+			newReserveSOC = minAllowedSOC
 		}
 		if newReserveSOC > 100 {
 			newReserveSOC = 100
@@ -620,42 +737,48 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 	}
 
-	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
-	updatedProfile := bat != types.BatteryModeNoChange && currentProfile != "" && currentProfile != newProfile
-	updatedChargeFromGrid := newChargeFromGrid != currentChargeFromGrid
-	disableSchedule := currentChargeFromGridScheduleEnabled
-
-	if !updatedSOC && !updatedProfile && !updatedChargeFromGrid && !disableSchedule {
-		log.Ctx(ctx).DebugContext(ctx, "no enphase reserve SOC, profile, charge settings, or schedule updates required")
-		return false, nil
-	}
-
-	var changed bool
-	// Update batterySettings if chargeFromGrid or schedules need to change/disable
-	if updatedChargeFromGrid || disableSchedule {
-		if e.settings.DryRun {
-			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings",
-				slog.Bool("chargeFromGrid", newChargeFromGrid),
-				slog.Bool("chargeFromGridScheduleEnabled", false),
-			)
-		} else {
-			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings",
-				slog.Bool("chargeFromGrid", newChargeFromGrid),
-				slog.Bool("chargeFromGridScheduleEnabled", false),
-			)
-			payload := enphaseBatterySettingsPayload{
-				ChargeFromGrid:                newChargeFromGrid,
-				ChargeFromGridScheduleEnabled: false,
-			}
-			if err := e.updateBatterySettings(ctx, payload); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+	var wantDTG bool
+	var dtgWindow *enphaseDTGWindow
+	dtgSupported := enphaseSchedules && settingsData.DTGControl != nil && settingsData.DTGControl.Show &&
+		!settingsData.DTGControl.Locked && settingsData.DTGControl.ScheduleSupported
+	if enphaseSchedules {
+		if manageSchedules && bat == types.BatteryModeExport {
+			if dtgSupported {
+				wantDTG = true
+				dtgLimit := max(int(math.Round(newReserveSOC)), int(math.Round(minAllowedSOC)))
+				w := computeEnphaseDTGWindow(opts.Schedule, now, dtgLimit)
+				dtgWindow = &w
 			} else {
-				changed = true
+				log.Ctx(ctx).WarnContext(ctx, "enphase DTG battery export requested but dtgControl is unavailable, locked, or schedule unsupported",
+					slog.Any("dtgControl", settingsData.DTGControl),
+				)
 			}
+		} else if bat == types.BatteryModeNoChange {
+			wantDTG = currentDTGEnabled
 		}
 	}
 
-	// Update batteryProfile if backup reserve SOC or profile needs to change
+	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
+	updatedProfile := (bat != types.BatteryModeNoChange || (manageSchedules && sol != types.SolarModeNoChange)) &&
+		currentProfile != "" && currentProfile != newProfile
+	updatedChargeFromGrid := newChargeFromGrid != currentChargeFromGrid
+	disableSchedule := currentChargeFromGridScheduleEnabled
+
+	log.Ctx(ctx).DebugContext(ctx, "computed enphase SetModes target",
+		slog.Bool("enphaseSchedules", enphaseSchedules),
+		slog.Bool("manageSchedules", manageSchedules),
+		slog.String("currentProfile", currentProfile),
+		slog.String("newProfile", newProfile),
+		slog.Float64("currentReserveSOC", currentReserveSOC),
+		slog.Float64("newReserveSOC", newReserveSOC),
+		slog.Bool("currentChargeFromGrid", currentChargeFromGrid),
+		slog.Bool("newChargeFromGrid", newChargeFromGrid),
+		slog.Bool("currentDTGEnabled", currentDTGEnabled),
+		slog.Bool("wantDTG", wantDTG),
+		slog.Bool("tariffHasPeakNow", tariffHasPeakNow),
+	)
+
+	// Update batteryProfile first so lowering batteryBackupPercentage takes effect before DTG schedule validation.
 	if updatedSOC || updatedProfile {
 		if e.settings.DryRun {
 			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery profile",
@@ -675,7 +798,52 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			}
 			if err := e.updateBatteryProfile(ctx, payload); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
-				return false, err
+				return changed, err
+			}
+			changed = true
+		}
+	}
+
+	var dtgScheduleChanged bool
+	if wantDTG && dtgWindow != nil {
+		dtgChanged, err := e.ensureDTGSchedule(ctx, tz, loc, *dtgWindow)
+		if err != nil {
+			return changed, fmt.Errorf("failed to configure enphase DTG schedule: %w", err)
+		}
+		dtgScheduleChanged = dtgChanged
+		if dtgScheduleChanged {
+			changed = true
+		}
+	}
+
+	updatedDTG := enphaseSchedules && (wantDTG != currentDTGEnabled || (wantDTG && dtgScheduleChanged))
+	if updatedChargeFromGrid || disableSchedule || updatedDTG {
+		var payload enphaseBatterySettingsPayload
+		if updatedChargeFromGrid || disableSchedule {
+			cfgVal := newChargeFromGrid
+			schedDisabled := false
+			payload.ChargeFromGrid = &cfgVal
+			payload.ChargeFromGridScheduleEnabled = &schedDisabled
+		}
+		if enphaseSchedules && (wantDTG || currentDTGEnabled) && updatedDTG {
+			payload.DTGControl = &enphaseControlToggle{Enabled: wantDTG}
+		}
+
+		if e.settings.DryRun {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings",
+				slog.Bool("chargeFromGrid", newChargeFromGrid),
+				slog.Bool("chargeFromGridScheduleEnabled", false),
+				slog.Bool("dtgEnabled", wantDTG),
+			)
+		} else if payload.ChargeFromGrid != nil || payload.ChargeFromGridScheduleEnabled != nil || payload.DTGControl != nil {
+			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings",
+				slog.Bool("chargeFromGrid", newChargeFromGrid),
+				slog.Bool("chargeFromGridScheduleEnabled", false),
+				slog.Bool("dtgEnabled", wantDTG),
+			)
+			if err := e.updateBatterySettings(ctx, payload); err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+				return changed, err
 			}
 			changed = true
 		}
@@ -686,11 +854,29 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	return changed, nil
 }
 
+type enphaseControlStatus struct {
+	Show                   bool   `json:"show"`
+	Enabled                bool   `json:"enabled"`
+	Disabled               bool   `json:"disabled,omitempty"`
+	Locked                 bool   `json:"locked"`
+	ScheduleSupported      bool   `json:"scheduleSupported,omitempty"`
+	ShowDaySchedule        bool   `json:"showDaySchedule,omitempty"`
+	StartTime              int    `json:"startTime,omitempty"`
+	EndTime                int    `json:"endTime,omitempty"`
+	DischargeUpTo          int    `json:"dischargeUpTo,omitempty"`
+	ShowDayScheduleMessage string `json:"showDayScheduleMessage,omitempty"`
+}
+
+type enphaseControlToggle struct {
+	Enabled bool `json:"enabled"`
+}
+
 type enphaseRequestedConfig struct {
-	ChargeFromGrid                bool   `json:"chargeFromGrid"`
-	ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
-	Profile                       string `json:"profile"`
-	BatteryBackupPercentage       int    `json:"batteryBackupPercentage"`
+	ChargeFromGrid                *bool                 `json:"chargeFromGrid,omitempty"`
+	ChargeFromGridScheduleEnabled *bool                 `json:"chargeFromGridScheduleEnabled,omitempty"`
+	Profile                       string                `json:"profile,omitempty"`
+	BatteryBackupPercentage       *int                  `json:"batteryBackupPercentage,omitempty"`
+	DTGControl                    *enphaseControlToggle `json:"dtgControl,omitempty"`
 }
 
 func (e *Enphase) getBatteryStatus(ctx context.Context) (enphaseBatteryStatusResponse, error) {
@@ -703,6 +889,27 @@ func (e *Enphase) getBatteryStatus(ctx context.Context) (enphaseBatteryStatusRes
 	var res enphaseBatteryStatusResponse
 	if err := e.doRequest(req, &res); err != nil {
 		return enphaseBatteryStatusResponse{}, err
+	}
+	return res, nil
+}
+
+type enphaseGridControlCheckResponse struct {
+	GridOutageCheck           bool `json:"gridOutageCheck"`
+	UserInitiatedGridToggle   bool `json:"userInitiatedGridToggle"`
+	DisableGridControl        bool `json:"disableGridControl"`
+	SunlightBackupSystemCheck bool `json:"sunlightBackupSystemCheck"`
+}
+
+func (e *Enphase) getGridControlCheck(ctx context.Context) (enphaseGridControlCheckResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("app-api/%d/grid_control_check.json", e.systemID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseGridControlCheckResponse{}, err
+	}
+
+	var res enphaseGridControlCheckResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseGridControlCheckResponse{}, err
 	}
 	return res, nil
 }
@@ -729,8 +936,9 @@ func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySetting
 }
 
 type enphaseBatterySettingsPayload struct {
-	ChargeFromGrid                bool `json:"chargeFromGrid"`
-	ChargeFromGridScheduleEnabled bool `json:"chargeFromGridScheduleEnabled"`
+	ChargeFromGrid                *bool                 `json:"chargeFromGrid,omitempty"`
+	ChargeFromGridScheduleEnabled *bool                 `json:"chargeFromGridScheduleEnabled,omitempty"`
+	DTGControl                    *enphaseControlToggle `json:"dtgControl,omitempty"`
 }
 
 func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatterySettingsPayload) error {
@@ -744,11 +952,12 @@ func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatt
 	}
 
 	u := e.baseURL.JoinPath(path)
+	q := u.Query()
 	if e.userID != 0 {
-		q := u.Query()
 		q.Set("userId", fmt.Sprintf("%d", e.userID))
-		u.RawQuery = q.Encode()
 	}
+	q.Set("source", "enho")
+	u.RawQuery = q.Encode()
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal battery settings payload: %w", err)
@@ -840,6 +1049,1455 @@ func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatte
 		return fmt.Errorf("battery profile update failed: %s", res.Message)
 	}
 	return nil
+}
+
+const (
+	enphaseMinScheduleMinutes = 15
+	enphaseMaxPeakPeriods     = 5
+)
+
+func (e *Enphase) getSchedulesCSRFToken(ctx context.Context) (string, error) {
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules", e.systemID)
+	return e.getCSRFToken(ctx, path, func() error {
+		_, err := e.getBatterySchedules(ctx)
+		return err
+	})
+}
+
+func (e *Enphase) getBatterySchedules(ctx context.Context) (enphaseBatterySchedulesResponse, error) {
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseBatterySchedulesResponse{}, err
+	}
+	var res enphaseBatterySchedulesResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseBatterySchedulesResponse{}, err
+	}
+	return res, nil
+}
+
+func (e *Enphase) createBatterySchedule(ctx context.Context, payload enphaseBatteryScheduleDetail) (string, error) {
+	csrfToken, err := e.getSchedulesCSRFToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal schedule payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
+	var res struct {
+		ScheduleID string `json:"scheduleId"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return "", fmt.Errorf("failed to create enphase schedule: %w", err)
+	}
+	return res.ScheduleID, nil
+}
+
+func (e *Enphase) updateBatterySchedule(ctx context.Context, scheduleID string, payload enphaseBatteryScheduleDetail) error {
+	csrfToken, err := e.getSchedulesCSRFToken(ctx)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules/%s", e.systemID, scheduleID)
+	u := e.baseURL.JoinPath(path)
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal schedule payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
+	var res enphaseBatteryScheduleDetail
+	if err := e.doRequest(req, &res); err != nil {
+		return fmt.Errorf("failed to update enphase schedule: %w", err)
+	}
+	return nil
+}
+
+func (e *Enphase) deleteBatterySchedule(ctx context.Context, scheduleID string) error {
+	csrfToken, err := e.getSchedulesCSRFToken(ctx)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules/%s/delete", e.systemID, scheduleID)
+	u := e.baseURL.JoinPath(path)
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
+	if err := e.doRequest(req, nil); err != nil {
+		return fmt.Errorf("failed to delete enphase schedule: %w", err)
+	}
+	return nil
+}
+
+func (e *Enphase) validateBatterySchedule(ctx context.Context, scheduleType string) (bool, error) {
+	csrfToken, err := e.getSchedulesCSRFToken(ctx)
+	if err != nil {
+		return false, err
+	}
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/battery/sites/%d/schedules/isValid", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	jsonBytes, err := json.Marshal(map[string]string{"scheduleType": scheduleType})
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
+	var res struct {
+		IsValid bool `json:"isValid"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return false, fmt.Errorf("failed to validate enphase schedule: %w", err)
+	}
+	return res.IsValid, nil
+}
+
+type enphaseDTGWindow struct {
+	StartMin int
+	EndMin   int
+	Limit    int
+}
+
+func computeEnphaseDTGWindow(sched *types.TOUSchedule, now time.Time, limit int) enphaseDTGWindow {
+	nowMin := now.Hour()*60 + now.Minute()
+	startMin := -1
+	endMin := -1
+
+	if sched != nil {
+		var exportWindows []enphaseMinuteRange
+		for _, p := range sched.Periods {
+			if p.BatteryMode != types.BatteryModeExport {
+				continue
+			}
+			sMin := p.StartHour*60 + p.StartMinute
+			eMin := p.EndHour*60 + p.EndMinute
+			if eMin > sMin {
+				exportWindows = append(exportWindows, enphaseMinuteRange{StartMin: sMin, EndMin: min(eMin, 1440)})
+			}
+		}
+		merged := mergeEnphaseMinuteRanges(exportWindows)
+		for _, w := range merged {
+			if w.StartMin <= nowMin && nowMin < w.EndMin {
+				startMin = w.StartMin
+				endMin = w.EndMin
+				break
+			}
+		}
+	}
+
+	if startMin < 0 || endMin <= startMin {
+		startMin = now.Hour() * 60
+		endMin = min(startMin+60, 1439)
+	}
+	if endMin >= 1440 {
+		endMin = 1439
+	}
+	if endMin-startMin < enphaseMinScheduleMinutes {
+		startMin = max(0, endMin-enphaseMinScheduleMinutes)
+	}
+
+	return enphaseDTGWindow{
+		StartMin: startMin,
+		EndMin:   endMin,
+		Limit:    limit,
+	}
+}
+
+func isDTGScheduleMatch(existing enphaseBatteryScheduleDetail, target enphaseBatteryScheduleDetail) bool {
+	if existing.IsDeleted || !existing.IsEnabled {
+		return false
+	}
+	if existing.Timezone != target.Timezone ||
+		existing.StartTime != target.StartTime ||
+		existing.EndTime != target.EndTime ||
+		existing.Limit != target.Limit {
+		return false
+	}
+	if len(existing.Days) != len(target.Days) {
+		return false
+	}
+	daySet := make(map[int]bool, len(existing.Days))
+	for _, d := range existing.Days {
+		daySet[d] = true
+	}
+	for _, d := range target.Days {
+		if !daySet[d] {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Enphase) ensureDTGSchedule(ctx context.Context, tz string, loc *time.Location, win enphaseDTGWindow) (bool, error) {
+	schedules, err := e.getBatterySchedules(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	var activeDTG []enphaseBatteryScheduleDetail
+	for _, d := range schedules.DTG.Details {
+		if !d.IsDeleted {
+			activeDTG = append(activeDTG, d)
+		}
+	}
+
+	targetTZ := tz
+	if len(activeDTG) > 0 && activeDTG[0].Timezone != "" {
+		if loadedLoc, err := time.LoadLocation(activeDTG[0].Timezone); err == nil && loadedLoc.String() == loc.String() {
+			targetTZ = activeDTG[0].Timezone
+		}
+	}
+	target := enphaseBatteryScheduleDetail{
+		Timezone:     targetTZ,
+		StartTime:    fmt.Sprintf("%02d:%02d", win.StartMin/60, win.StartMin%60),
+		EndTime:      fmt.Sprintf("%02d:%02d", win.EndMin/60, win.EndMin%60),
+		Limit:        win.Limit,
+		ScheduleType: "DTG",
+		Days:         []int{1, 2, 3, 4, 5, 6, 7},
+	}
+
+	if len(activeDTG) == 1 && isDTGScheduleMatch(activeDTG[0], target) {
+		log.Ctx(ctx).DebugContext(ctx, "enphase DTG schedule already matches target",
+			slog.String("scheduleID", activeDTG[0].ScheduleID),
+			slog.String("startTime", target.StartTime),
+			slog.String("endTime", target.EndTime),
+			slog.Int("limit", target.Limit),
+		)
+		return false, nil
+	}
+
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've configured enphase DTG schedule",
+			slog.String("startTime", target.StartTime),
+			slog.String("endTime", target.EndTime),
+			slog.Int("limit", target.Limit),
+			slog.String("timezone", target.Timezone),
+		)
+		return false, nil
+	}
+
+	// delete any other active schedules
+	for i := 1; i < len(activeDTG); i++ {
+		log.Ctx(ctx).DebugContext(ctx, "deleting extra enphase DTG schedule",
+			slog.String("scheduleID", activeDTG[i].ScheduleID),
+		)
+		if err := e.deleteBatterySchedule(ctx, activeDTG[i].ScheduleID); err != nil {
+			return false, err
+		}
+	}
+
+	if len(activeDTG) >= 1 {
+		log.Ctx(ctx).DebugContext(ctx, "updating existing enphase DTG schedule",
+			slog.String("scheduleID", activeDTG[0].ScheduleID),
+			slog.String("startTime", target.StartTime),
+			slog.String("endTime", target.EndTime),
+			slog.Int("limit", target.Limit),
+		)
+		if err := e.updateBatterySchedule(ctx, activeDTG[0].ScheduleID, target); err != nil {
+			return false, err
+		}
+	} else {
+		log.Ctx(ctx).DebugContext(ctx, "creating new enphase DTG schedule",
+			slog.String("startTime", target.StartTime),
+			slog.String("endTime", target.EndTime),
+			slog.Int("limit", target.Limit),
+		)
+		if _, err := e.createBatterySchedule(ctx, target); err != nil {
+			return false, err
+		}
+	}
+
+	valid, err := e.validateBatterySchedule(ctx, "dtg")
+	if err != nil {
+		return false, err
+	}
+	if !valid {
+		return false, errors.New("enphase DTG schedule rejected by isValid check")
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "configured enphase DTG export schedule",
+		slog.String("startTime", target.StartTime),
+		slog.String("endTime", target.EndTime),
+		slog.Int("limit", target.Limit),
+	)
+	return true, nil
+}
+
+type enphaseMinuteRange struct {
+	StartMin int
+	EndMin   int
+}
+
+func mergeEnphaseMinuteRanges(ranges []enphaseMinuteRange) []enphaseMinuteRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+	sorted := make([]enphaseMinuteRange, len(ranges))
+	copy(sorted, ranges)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].StartMin != sorted[j].StartMin {
+			return sorted[i].StartMin < sorted[j].StartMin
+		}
+		return sorted[i].EndMin < sorted[j].EndMin
+	})
+	var merged []enphaseMinuteRange
+	for _, r := range sorted {
+		if r.EndMin <= r.StartMin {
+			continue
+		}
+		if len(merged) > 0 && merged[len(merged)-1].EndMin >= r.StartMin {
+			if r.EndMin > merged[len(merged)-1].EndMin {
+				merged[len(merged)-1].EndMin = r.EndMin
+			}
+			continue
+		}
+		merged = append(merged, r)
+	}
+	return merged
+}
+
+func complementEnphaseMinuteRanges(covered []enphaseMinuteRange) []enphaseMinuteRange {
+	merged := mergeEnphaseMinuteRanges(covered)
+	var gaps []enphaseMinuteRange
+	cursor := 0
+	for _, r := range merged {
+		if r.StartMin > cursor {
+			gaps = append(gaps, enphaseMinuteRange{StartMin: cursor, EndMin: r.StartMin})
+		}
+		if r.EndMin > cursor {
+			cursor = r.EndMin
+		}
+	}
+	if cursor < 1440 {
+		gaps = append(gaps, enphaseMinuteRange{StartMin: cursor, EndMin: 1440})
+	}
+	return gaps
+}
+
+type enphaseTariffRateGroup struct {
+	RateDollars float64
+	Ranges      []enphaseMinuteRange
+}
+
+type enphaseTariffPlan struct {
+	ImportPeakDollars    float64
+	ImportPeakRanges     []enphaseMinuteRange
+	ImportMidPeakGroups  []enphaseTariffRateGroup
+	ImportOffPeakDollars float64
+	ImportOffPeakRanges  []enphaseMinuteRange
+	ExportType           string // "net_metering" or "tou"
+	ExportPeakDollars    float64
+	ExportPeakRanges     []enphaseMinuteRange
+	ExportOffPeakDollars float64
+	ExportOffPeakRanges  []enphaseMinuteRange
+}
+
+func (p *enphaseTariffPlan) hasPeakAt(now time.Time) bool {
+	if p == nil {
+		return false
+	}
+	nowMin := now.Hour()*60 + now.Minute()
+	for _, r := range p.ImportPeakRanges {
+		if r.StartMin <= nowMin && nowMin < r.EndMin {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *enphaseTariffPlan) toTOUSchedule() *types.TOUSchedule {
+	if p == nil {
+		return nil
+	}
+	exportPeakFor := func(startMin, endMin int) float64 {
+		if p.ExportType == "net_metering" {
+			return p.ImportPeakDollars
+		}
+		for _, er := range p.ExportPeakRanges {
+			if er.StartMin < endMin && startMin < er.EndMin {
+				return p.ExportPeakDollars
+			}
+		}
+		return p.ExportOffPeakDollars
+	}
+	exportNonPeakFor := func(importRate float64, startMin, endMin int) float64 {
+		if p.ExportType == "net_metering" {
+			return importRate
+		}
+		for _, er := range p.ExportPeakRanges {
+			if er.StartMin < endMin && startMin < er.EndMin {
+				return p.ExportPeakDollars
+			}
+		}
+		return p.ExportOffPeakDollars
+	}
+
+	var periods []types.TOUPeriod
+	for _, r := range p.ImportPeakRanges {
+		periods = append(periods, types.TOUPeriod{
+			StartHour:     r.StartMin / 60,
+			StartMinute:   r.StartMin % 60,
+			EndHour:       r.EndMin / 60,
+			EndMinute:     r.EndMin % 60,
+			ImportDollars: p.ImportPeakDollars,
+			ExportDollars: exportPeakFor(r.StartMin, r.EndMin),
+			BatteryMode:   types.BatteryModeLoad,
+			SolarMode:     types.SolarModeExport,
+			Peak:          true,
+		})
+	}
+	for _, g := range p.ImportMidPeakGroups {
+		for _, r := range g.Ranges {
+			periods = append(periods, types.TOUPeriod{
+				StartHour:     r.StartMin / 60,
+				StartMinute:   r.StartMin % 60,
+				EndHour:       r.EndMin / 60,
+				EndMinute:     r.EndMin % 60,
+				ImportDollars: g.RateDollars,
+				ExportDollars: exportNonPeakFor(g.RateDollars, r.StartMin, r.EndMin),
+				BatteryMode:   types.BatteryModeLoad,
+				SolarMode:     types.SolarModeAny,
+				Peak:          false,
+			})
+		}
+	}
+	for _, r := range p.ImportOffPeakRanges {
+		periods = append(periods, types.TOUPeriod{
+			StartHour:     r.StartMin / 60,
+			StartMinute:   r.StartMin % 60,
+			EndHour:       r.EndMin / 60,
+			EndMinute:     r.EndMin % 60,
+			ImportDollars: p.ImportOffPeakDollars,
+			ExportDollars: exportNonPeakFor(p.ImportOffPeakDollars, r.StartMin, r.EndMin),
+			BatteryMode:   types.BatteryModeLoad,
+			SolarMode:     types.SolarModeAny,
+			Peak:          false,
+		})
+	}
+
+	sort.Slice(periods, func(i, j int) bool {
+		return (periods[i].StartHour*60 + periods[i].StartMinute) < (periods[j].StartHour*60 + periods[j].StartMinute)
+	})
+	return &types.TOUSchedule{Periods: periods}
+}
+
+func enphaseTariffNeedsSync(sched *types.TOUSchedule) bool {
+	if sched == nil {
+		return false
+	}
+	for _, p := range sched.Periods {
+		if p.Peak || p.BatteryMode == types.BatteryModeExport || p.SolarMode == types.SolarModeExport {
+			return true
+		}
+	}
+	return false
+}
+
+func formatEnphaseRate(dollars float64) string {
+	//  enforces maxDigitsNumericFields=3 and strictly positive TOU rates (> 0).
+	if dollars < 0.001 {
+		dollars = 0.001
+	}
+	s := strconv.FormatFloat(dollars, 'f', 3, 64)
+	s = strings.TrimRight(s, "0")
+	if strings.HasSuffix(s, ".") {
+		s += "00"
+	} else if idx := strings.IndexByte(s, '.'); idx >= 0 && len(s)-idx-1 == 1 {
+		s += "0"
+	}
+	return s
+}
+
+func subtractEnphaseMinuteRanges(ranges, exclude []enphaseMinuteRange) []enphaseMinuteRange {
+	var out []enphaseMinuteRange
+	ex := mergeEnphaseMinuteRanges(exclude)
+	for _, r := range mergeEnphaseMinuteRanges(ranges) {
+		curStart := r.StartMin
+		for _, e := range ex {
+			if e.EndMin <= curStart {
+				continue
+			}
+			if e.StartMin >= r.EndMin {
+				break
+			}
+			if e.StartMin > curStart {
+				out = append(out, enphaseMinuteRange{StartMin: curStart, EndMin: e.StartMin})
+			}
+			if e.EndMin > curStart {
+				curStart = e.EndMin
+			}
+		}
+		if curStart < r.EndMin {
+			out = append(out, enphaseMinuteRange{StartMin: curStart, EndMin: r.EndMin})
+		}
+	}
+	return out
+}
+
+func ensureMinEnphasePeakDuration(ranges []enphaseMinuteRange) []enphaseMinuteRange {
+	var expanded []enphaseMinuteRange
+	for _, r := range ranges {
+		if r.EndMin-r.StartMin < enphaseMinScheduleMinutes {
+			if r.StartMin+enphaseMinScheduleMinutes <= 1440 {
+				r.EndMin = r.StartMin + enphaseMinScheduleMinutes
+			} else {
+				r.StartMin = max(0, 1440-enphaseMinScheduleMinutes)
+				r.EndMin = 1440
+			}
+		}
+		expanded = append(expanded, r)
+	}
+	return mergeEnphaseMinuteRanges(expanded)
+}
+
+func buildEnphaseTariffPlan(ctx context.Context, sched *types.TOUSchedule, now time.Time) *enphaseTariffPlan {
+	if sched == nil || len(sched.Periods) == 0 {
+		return nil
+	}
+
+	_, tierPeriods := classifyTOUScheduleTiers(sched.Periods)
+	onPeakPeriods := tierPeriods[touTierOnPeak]
+	if len(onPeakPeriods) == 0 {
+		return nil
+	}
+
+	var peakRanges []enphaseMinuteRange
+	for _, p := range onPeakPeriods {
+		peakRanges = append(peakRanges, enphaseMinuteRange{
+			StartMin: p.StartHour*60 + p.StartMinute,
+			EndMin:   min(p.EndHour*60+p.EndMinute, 1440),
+		})
+	}
+	mergedPeakRanges := ensureMinEnphasePeakDuration(mergeEnphaseMinuteRanges(peakRanges))
+
+	// Enphase limits manual TOU peak schedules to enphaseMaxPeakPeriods (5).
+	var overflowPeakRanges []enphaseMinuteRange
+	if len(mergedPeakRanges) > enphaseMaxPeakPeriods {
+		rawPeakRanges := mergedPeakRanges
+		nowMin := now.Hour()*60 + now.Minute()
+		type rankedRange struct {
+			r      enphaseMinuteRange
+			active bool
+		}
+		ranked := make([]rankedRange, len(mergedPeakRanges))
+		for i, r := range mergedPeakRanges {
+			ranked[i] = rankedRange{
+				r:      r,
+				active: r.StartMin <= nowMin && nowMin < r.EndMin,
+			}
+		}
+		sort.SliceStable(ranked, func(i, j int) bool {
+			if ranked[i].active != ranked[j].active {
+				return ranked[i].active
+			}
+			return (ranked[i].r.EndMin - ranked[i].r.StartMin) > (ranked[j].r.EndMin - ranked[j].r.StartMin)
+		})
+		kept := make([]enphaseMinuteRange, enphaseMaxPeakPeriods)
+		for i := 0; i < enphaseMaxPeakPeriods; i++ {
+			kept[i] = ranked[i].r
+		}
+		for i := enphaseMaxPeakPeriods; i < len(ranked); i++ {
+			overflowPeakRanges = append(overflowPeakRanges, ranked[i].r)
+		}
+		mergedPeakRanges = mergeEnphaseMinuteRanges(kept)
+		overflowPeakRanges = subtractEnphaseMinuteRanges(overflowPeakRanges, mergedPeakRanges)
+		log.Ctx(ctx).DebugContext(ctx, "enphase TOU schedule exceeded max peak periods; prioritizing active and longest windows",
+			slog.Int("totalPeakPeriods", len(rawPeakRanges)),
+			slog.Int("maxPeakPeriods", enphaseMaxPeakPeriods),
+			slog.Any("allPeakRanges", rawPeakRanges),
+			slog.Any("keptPeakRanges", mergedPeakRanges),
+			slog.Any("overflowPeakRanges", overflowPeakRanges),
+		)
+	}
+
+	peakBuy, peakSell := calculateDurationWeightedRates(onPeakPeriods)
+	peakBuy = max(0.001, peakBuy)
+	peakSell = max(0.001, peakSell)
+
+	// Determine base off-peak tier and up to two mid-peak groups while preserving real utility rates.
+	var nonPeakTiers []touTier
+	for _, t := range []touTier{touTierSuperOffPeak, touTierOffPeak, touTierPartialPeak} {
+		if len(tierPeriods[t]) > 0 {
+			nonPeakTiers = append(nonPeakTiers, t)
+		}
+	}
+
+	var baseOffPeakBuy, baseOffPeakSell float64
+	var midPeakGroups []enphaseTariffRateGroup
+	coveredByPeakAndMid := make([]enphaseMinuteRange, len(mergedPeakRanges))
+	copy(coveredByPeakAndMid, mergedPeakRanges)
+
+	if len(nonPeakTiers) > 0 {
+		baseTier := nonPeakTiers[0]
+		bRate, sRate := calculateDurationWeightedRates(tierPeriods[baseTier])
+		baseOffPeakBuy = max(0.001, bRate)
+		baseOffPeakSell = max(0.001, sRate)
+
+		prevMaxBuy := baseOffPeakBuy
+		for idx, midTier := range nonPeakTiers[1:] {
+			mBuy, _ := calculateDurationWeightedRates(tierPeriods[midTier])
+			mBuy = max(0.001, mBuy)
+			if mBuy <= prevMaxBuy {
+				mBuy = prevMaxBuy + 0.001
+			}
+			prevMaxBuy = mBuy
+
+			var mRanges []enphaseMinuteRange
+			for _, p := range tierPeriods[midTier] {
+				mRanges = append(mRanges, enphaseMinuteRange{
+					StartMin: p.StartHour*60 + p.StartMinute,
+					EndMin:   min(p.EndHour*60+p.EndMinute, 1440),
+				})
+			}
+			if idx == len(nonPeakTiers[1:])-1 && len(overflowPeakRanges) > 0 {
+				mRanges = append(mRanges, overflowPeakRanges...)
+				overflowPeakRanges = nil
+			}
+			// Trim against already-claimed peak/mid-peak intervals and enforce Enphase 15m minimum.
+			mTrimmed := subtractEnphaseMinuteRanges(mRanges, coveredByPeakAndMid)
+			var mValid []enphaseMinuteRange
+			for _, r := range mTrimmed {
+				if r.EndMin-r.StartMin >= enphaseMinScheduleMinutes {
+					mValid = append(mValid, r)
+				}
+			}
+			if len(mValid) > 0 {
+				midPeakGroups = append(midPeakGroups, enphaseTariffRateGroup{
+					RateDollars: mBuy,
+					Ranges:      mValid,
+				})
+				coveredByPeakAndMid = append(coveredByPeakAndMid, mValid...)
+			}
+		}
+		if len(overflowPeakRanges) > 0 {
+			mTrimmed := subtractEnphaseMinuteRanges(overflowPeakRanges, coveredByPeakAndMid)
+			var mValid []enphaseMinuteRange
+			for _, r := range mTrimmed {
+				if r.EndMin-r.StartMin >= enphaseMinScheduleMinutes {
+					mValid = append(mValid, r)
+				}
+			}
+			if len(mValid) > 0 {
+				mBuy := max(prevMaxBuy+0.001, peakBuy-0.001)
+				midPeakGroups = append(midPeakGroups, enphaseTariffRateGroup{
+					RateDollars: mBuy,
+					Ranges:      mValid,
+				})
+				coveredByPeakAndMid = append(coveredByPeakAndMid, mValid...)
+			}
+		}
+	} else {
+		baseOffPeakBuy = max(0.001, peakBuy-0.01)
+		baseOffPeakSell = max(0.001, peakSell-0.01)
+	}
+
+	highestNonPeakBuy := baseOffPeakBuy
+	if len(midPeakGroups) > 0 {
+		highestNonPeakBuy = midPeakGroups[len(midPeakGroups)-1].RateDollars
+	}
+	if peakBuy <= highestNonPeakBuy {
+		peakBuy = highestNonPeakBuy + 0.001
+	}
+
+	offPeakRanges := complementEnphaseMinuteRanges(coveredByPeakAndMid)
+
+	isNetMetering := true
+	var nonPeakExportPeriods []types.TOUPeriod
+	for _, p := range sched.Periods {
+		if math.Abs(p.ImportDollars-p.ExportDollars) > 0.005 {
+			isNetMetering = false
+		}
+		if !p.Peak && p.BatteryMode != types.BatteryModeExport && p.SolarMode != types.SolarModeExport {
+			nonPeakExportPeriods = append(nonPeakExportPeriods, p)
+		}
+	}
+
+	plan := &enphaseTariffPlan{
+		ImportPeakDollars:    peakBuy,
+		ImportPeakRanges:     mergedPeakRanges,
+		ImportMidPeakGroups:  midPeakGroups,
+		ImportOffPeakDollars: baseOffPeakBuy,
+		ImportOffPeakRanges:  offPeakRanges,
+		ExportType:           "net_metering",
+	}
+
+	if !isNetMetering {
+		exportOffPeakDollars := baseOffPeakSell
+		if len(nonPeakExportPeriods) > 0 {
+			_, expSell := calculateDurationWeightedRates(nonPeakExportPeriods)
+			exportOffPeakDollars = max(0.001, expSell)
+		}
+		exportPeakDollars := max(exportOffPeakDollars+0.001, peakSell)
+		plan.ExportType = "tou"
+		plan.ExportPeakDollars = exportPeakDollars
+		plan.ExportPeakRanges = mergedPeakRanges
+		plan.ExportOffPeakDollars = exportOffPeakDollars
+		plan.ExportOffPeakRanges = complementEnphaseMinuteRanges(mergedPeakRanges)
+	}
+
+	return plan
+}
+
+func (e *Enphase) getTariff(ctx context.Context) (enphaseTariffJSONResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("/app-api/%d/tariff.json", e.systemID))
+	q := u.Query()
+	q.Set("country", "us")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseTariffJSONResponse{}, err
+	}
+	var res enphaseTariffJSONResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseTariffJSONResponse{}, err
+	}
+	return res, nil
+}
+
+func parseEnphaseJSONInt(v any) (int, bool) {
+	switch val := v.(type) {
+	case float64:
+		return int(math.Round(val)), true
+	case int:
+		return val, true
+	case string:
+		if val == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func parseEnphaseJSONFloat(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case int:
+		return float64(val)
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		if err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+func normalizeEnphaseEndMinute(endMin int) int {
+	// Autofill tariffs store endTime on :59 boundaries (e.g., 1199 for 20:00, 1439 for 24:00).
+	if endMin%60 == 59 {
+		return min(endMin+1, 1440)
+	}
+	return min(endMin, 1440)
+}
+
+func findEnphaseTariffDaySchedule(section *enphaseTariffSection, now time.Time) *enphaseTariffDaySchedule {
+	if section == nil || len(section.Seasons) == 0 {
+		return nil
+	}
+	curMonth := int(now.Month())
+	selectedSeason := &section.Seasons[0]
+	for i := range section.Seasons {
+		s := &section.Seasons[i]
+		sm, ok1 := parseEnphaseJSONInt(s.StartMonth)
+		em, ok2 := parseEnphaseJSONInt(s.EndMonth)
+		if !ok1 || !ok2 || sm <= 0 || em <= 0 {
+			continue
+		}
+		if sm <= em {
+			if curMonth >= sm && curMonth <= em {
+				selectedSeason = s
+				break
+			}
+		} else if curMonth >= sm || curMonth <= em {
+			selectedSeason = s
+			break
+		}
+	}
+	if len(selectedSeason.Days) == 0 {
+		return nil
+	}
+	// Enphase days use 1=Mon..7=Sun.
+	enphaseDay := int(now.Weekday())
+	if enphaseDay == 0 {
+		enphaseDay = 7
+	}
+	for i := range selectedSeason.Days {
+		for _, d := range selectedSeason.Days[i].Days {
+			if d == enphaseDay {
+				return &selectedSeason.Days[i]
+			}
+		}
+	}
+	return &selectedSeason.Days[0]
+}
+
+type enphaseResolvedTariffSlot struct {
+	StartMin int
+	EndMin   int
+	Rate     float64
+	Type     string
+}
+
+func resolveEnphaseTariffSlots(section *enphaseTariffSection, now time.Time) []enphaseResolvedTariffSlot {
+	daySched := findEnphaseTariffDaySchedule(section, now)
+	if daySched == nil {
+		return nil
+	}
+	var timed []enphaseResolvedTariffSlot
+	var defaultRate float64
+	defaultType := "off-peak"
+	for _, p := range daySched.Periods {
+		rate := parseEnphaseJSONFloat(p.Rate)
+		sMin, ok1 := parseEnphaseJSONInt(p.StartTime)
+		eMin, ok2 := parseEnphaseJSONInt(p.EndTime)
+		if !ok1 || !ok2 {
+			defaultRate = rate
+			if p.Type != "" {
+				defaultType = p.Type
+			}
+			continue
+		}
+		eMin = normalizeEnphaseEndMinute(eMin)
+		if eMin > sMin {
+			timed = append(timed, enphaseResolvedTariffSlot{
+				StartMin: max(0, sMin),
+				EndMin:   eMin,
+				Rate:     rate,
+				Type:     p.Type,
+			})
+		}
+	}
+	sort.Slice(timed, func(i, j int) bool {
+		return timed[i].StartMin < timed[j].StartMin
+	})
+
+	var all []enphaseResolvedTariffSlot
+	cursor := 0
+	for _, sl := range timed {
+		if sl.StartMin > cursor {
+			all = append(all, enphaseResolvedTariffSlot{
+				StartMin: cursor,
+				EndMin:   sl.StartMin,
+				Rate:     defaultRate,
+				Type:     defaultType,
+			})
+		}
+		all = append(all, sl)
+		if sl.EndMin > cursor {
+			cursor = sl.EndMin
+		}
+	}
+	if cursor < 1440 {
+		all = append(all, enphaseResolvedTariffSlot{
+			StartMin: cursor,
+			EndMin:   1440,
+			Rate:     defaultRate,
+			Type:     defaultType,
+		})
+	}
+	return all
+}
+
+func enphaseTariffIsPeakAt(res enphaseTariffJSONResponse, now time.Time) bool {
+	nowMin := now.Hour()*60 + now.Minute()
+	for _, sl := range resolveEnphaseTariffSlots(res.Purchase, now) {
+		if sl.StartMin <= nowMin && nowMin < sl.EndMin {
+			return sl.Type == "peak"
+		}
+	}
+	return false
+}
+
+func findEnphaseSlotAt(slots []enphaseResolvedTariffSlot, mid int) (enphaseResolvedTariffSlot, bool) {
+	for _, s := range slots {
+		if s.StartMin <= mid && mid < s.EndMin {
+			return s, true
+		}
+	}
+	return enphaseResolvedTariffSlot{}, false
+}
+
+func parseEnphaseTariffTOUSchedule(res enphaseTariffJSONResponse, now time.Time) *types.TOUSchedule {
+	if res.Purchase == nil || (res.Purchase.TypeID != "" && res.Purchase.TypeID != "tou") {
+		return nil
+	}
+	buySlots := resolveEnphaseTariffSlots(res.Purchase, now)
+	if len(buySlots) == 0 {
+		return nil
+	}
+	sellSlots := resolveEnphaseTariffSlots(res.Buyback, now)
+
+	boundarySet := map[int]bool{0: true, 1440: true}
+	for _, s := range buySlots {
+		boundarySet[s.StartMin] = true
+		boundarySet[s.EndMin] = true
+	}
+	for _, s := range sellSlots {
+		boundarySet[s.StartMin] = true
+		boundarySet[s.EndMin] = true
+	}
+	boundaries := make([]int, 0, len(boundarySet))
+	for b := range boundarySet {
+		boundaries = append(boundaries, b)
+	}
+	sort.Ints(boundaries)
+
+	var periods []types.TOUPeriod
+	for i := 0; i < len(boundaries)-1; i++ {
+		startMin, endMin := boundaries[i], boundaries[i+1]
+		if endMin <= startMin {
+			continue
+		}
+		mid := (startMin + endMin) / 2
+		buySlot, hasBuy := findEnphaseSlotAt(buySlots, mid)
+		if !hasBuy {
+			continue
+		}
+		sellRate := buySlot.Rate
+		isSellPeak := false
+		if sellSlot, hasSell := findEnphaseSlotAt(sellSlots, mid); hasSell {
+			sellRate = sellSlot.Rate
+			isSellPeak = sellSlot.Type == "peak"
+		}
+		isPeak := buySlot.Type == "peak" || isSellPeak
+		solarMode := types.SolarModeAny
+		if isPeak {
+			solarMode = types.SolarModeExport
+		}
+		periods = append(periods, types.TOUPeriod{
+			StartHour:     startMin / 60,
+			StartMinute:   startMin % 60,
+			EndHour:       endMin / 60,
+			EndMinute:     endMin % 60,
+			ImportDollars: buySlot.Rate,
+			ExportDollars: sellRate,
+			BatteryMode:   types.BatteryModeLoad,
+			SolarMode:     solarMode,
+			Peak:          isPeak,
+		})
+	}
+	return &types.TOUSchedule{Periods: periods}
+}
+
+func enphaseTariffScheduleMatch(res enphaseTariffJSONResponse, plan *enphaseTariffPlan, now time.Time) bool {
+	if plan == nil {
+		return true
+	}
+	existingSched := parseEnphaseTariffTOUSchedule(res, now)
+	if existingSched == nil {
+		return false
+	}
+	targetSched := plan.toTOUSchedule()
+	if targetSched == nil {
+		return false
+	}
+	return !existingSched.IsSignificantlyDifferent(targetSched, now)
+}
+
+func (e *Enphase) getTariffJourney(ctx context.Context) (map[string]any, error) {
+	path := fmt.Sprintf("/service/tariff/tariff-ms/systems/%d/tariff-journey", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return nil, err
+	}
+	return res.Data, nil
+}
+
+func (e *Enphase) postTariffJourney(ctx context.Context, payload map[string]any) error {
+	path := fmt.Sprintf("/service/tariff/tariff-ms/systems/%d/tariff-journey", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tariff journey payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok, ok := e.lastCSRFToken[path]; ok && tok.Token != "" {
+		req.Header.Set("X-Xsrf-Token", tok.Token)
+		delete(e.lastCSRFToken, path)
+	}
+	var res struct {
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return fmt.Errorf("failed to post enphase tariff journey: %w", err)
+	}
+	return nil
+}
+
+func buildEnphaseJourneyPurchaseRate(plan *enphaseTariffPlan) map[string]any {
+	peakPeriods := make([]map[string]any, 0, len(plan.ImportPeakRanges))
+	peakStr := formatEnphaseRate(plan.ImportPeakDollars)
+	for _, r := range plan.ImportPeakRanges {
+		peakPeriods = append(peakPeriods, map[string]any{
+			"startTime": r.StartMin,
+			"endTime":   r.EndMin,
+			"rate":      peakStr,
+			"type":      "peak",
+		})
+	}
+	offPeakTimings := make([]map[string]any, 0, len(plan.ImportOffPeakRanges))
+	for _, r := range plan.ImportOffPeakRanges {
+		offPeakTimings = append(offPeakTimings, map[string]any{
+			"startTime": strconv.Itoa(r.StartMin),
+			"endTime":   strconv.Itoa(r.EndMin),
+		})
+	}
+
+	entry := map[string]any{
+		"baseline":       "",
+		"days":           []int{1, 2, 3, 4, 5, 6, 7},
+		"isFlatRate":     false,
+		"isSameRate":     false,
+		"offPeak":        formatEnphaseRate(plan.ImportOffPeakDollars),
+		"offPeakTimings": offPeakTimings,
+		"peakRate":       peakStr,
+		"periods":        peakPeriods,
+		"rate":           "",
+		"tiers":          []any{},
+	}
+
+	if len(plan.ImportMidPeakGroups) > 0 {
+		var midPeakList []map[string]any
+		for _, g := range plan.ImportMidPeakGroups {
+			var gPeriods []map[string]any
+			for _, r := range g.Ranges {
+				gPeriods = append(gPeriods, map[string]any{
+					"startTime": strconv.Itoa(r.StartMin),
+					"endTime":   strconv.Itoa(r.EndMin),
+				})
+			}
+			midPeakList = append(midPeakList, map[string]any{
+				"periods": gPeriods,
+				"rate":    formatEnphaseRate(g.RateDollars),
+				"type":    "mid-peak",
+			})
+		}
+		entry["midPeakPeriods"] = midPeakList
+	}
+
+	return entry
+}
+
+func buildEnphaseJourneyExportRate(plan *enphaseTariffPlan) map[string]any {
+	peakPeriods := make([]map[string]any, 0, len(plan.ExportPeakRanges))
+	peakStr := formatEnphaseRate(plan.ExportPeakDollars)
+	for _, r := range plan.ExportPeakRanges {
+		peakPeriods = append(peakPeriods, map[string]any{
+			"startTime": r.StartMin,
+			"endTime":   r.EndMin,
+			"rate":      peakStr,
+			"type":      "peak",
+		})
+	}
+	offPeakTimings := make([]map[string]any, 0, len(plan.ExportOffPeakRanges))
+	for _, r := range plan.ExportOffPeakRanges {
+		offPeakTimings = append(offPeakTimings, map[string]any{
+			"startTime": strconv.Itoa(r.StartMin),
+			"endTime":   strconv.Itoa(r.EndMin),
+		})
+	}
+
+	return map[string]any{
+		"baseline":       "",
+		"days":           []int{1, 2, 3, 4, 5, 6, 7},
+		"offPeak":        formatEnphaseRate(plan.ExportOffPeakDollars),
+		"offPeakTimings": offPeakTimings,
+		"peakRate":       peakStr,
+		"periods":        peakPeriods,
+		"rate":           "0.0",
+		"rateIndex":      0,
+		"rateType":       "tou",
+		"seasonId":       "default",
+		"tiers":          []any{},
+	}
+}
+
+func setJourneyComponentDefault(components []any, id string, val any) {
+	for _, c := range components {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cm["id"] == id {
+			cm["defaultValue"] = val
+		}
+		if children, ok := cm["children"].([]any); ok {
+			setJourneyComponentDefault(children, id, val)
+		}
+	}
+}
+
+func buildEnphaseImportRateComponent(importRateEntry map[string]any, plan *enphaseTariffPlan) map[string]any {
+	const prefix = "energy-rate-entry_default_rate_1"
+	peakStr := formatEnphaseRate(plan.ImportPeakDollars)
+	offPeakStr := formatEnphaseRate(plan.ImportOffPeakDollars)
+
+	touChildren := []any{
+		map[string]any{
+			"id":           prefix + "_touRateSection_offPeakRate",
+			"type":         "NUMBER_INPUT",
+			"defaultValue": offPeakStr,
+			"required":     true,
+		},
+		map[string]any{
+			"id":           prefix + "_touRateSection_peakRate",
+			"type":         "NUMBER_INPUT",
+			"defaultValue": peakStr,
+			"required":     true,
+		},
+	}
+	for i, r := range plan.ImportPeakRanges {
+		pid := fmt.Sprintf("%s_touRateSection_peakPeriods_p%d", prefix, i)
+		touChildren = append(touChildren, map[string]any{
+			"id":       pid,
+			"type":     "TOU_PERIOD_SELECTOR",
+			"required": true,
+			"children": []any{
+				map[string]any{"id": pid + "_startTime", "type": "TIME_PICKER", "defaultValue": r.StartMin, "required": true},
+				map[string]any{"id": pid + "_endTime", "type": "TIME_PICKER", "defaultValue": r.EndMin, "required": true},
+			},
+		})
+	}
+	for gIdx, g := range plan.ImportMidPeakGroups {
+		gid := fmt.Sprintf("%s_touRateSection_midPeakRateGroup_g%d", prefix, gIdx)
+		gChildren := []any{
+			map[string]any{
+				"id":           gid + "_midPeakRate",
+				"type":         "NUMBER_INPUT",
+				"defaultValue": formatEnphaseRate(g.RateDollars),
+				"required":     true,
+			},
+		}
+		for pIdx, r := range g.Ranges {
+			mpID := fmt.Sprintf("%s_midPeakPeriods_p%d", gid, pIdx)
+			gChildren = append(gChildren, map[string]any{
+				"id":       mpID,
+				"type":     "TOU_PERIOD_SELECTOR",
+				"required": false,
+				"children": []any{
+					map[string]any{"id": mpID + "_startTime", "type": "TIME_PICKER", "defaultValue": strconv.Itoa(r.StartMin), "required": true},
+					map[string]any{"id": mpID + "_endTime", "type": "TIME_PICKER", "defaultValue": strconv.Itoa(r.EndMin), "required": true},
+				},
+			})
+		}
+		touChildren = append(touChildren, map[string]any{
+			"id":       gid,
+			"type":     "RATE_GROUP_REPEATER",
+			"required": false,
+			"children": gChildren,
+		})
+	}
+
+	return map[string]any{
+		"id":           prefix,
+		"type":         "SEASON_RATE_REPEATER",
+		"dependsOn":    "seasons",
+		"properties":   map[string]any{"seasonId": "default"},
+		"defaultValue": importRateEntry,
+		"children": []any{
+			map[string]any{
+				"id":           prefix + "_isSameRate",
+				"type":         "CHECKBOX",
+				"defaultValue": false,
+				"dependsOn":    "tariffType",
+				"showWhen":     []string{"tou"},
+			},
+			map[string]any{
+				"id":           prefix + "_daySelection",
+				"type":         "DAY_SELECTOR",
+				"defaultValue": []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"},
+				"required":     true,
+			},
+			map[string]any{
+				"id":        prefix + "_touRateSection",
+				"type":      "SECTION",
+				"dependsOn": "tariffType",
+				"showWhen":  []string{"tou"},
+				"children":  touChildren,
+			},
+		},
+	}
+}
+
+func buildEnphaseExportRateComponent(exportRateEntry map[string]any, plan *enphaseTariffPlan) map[string]any {
+	const prefix = "export-energy-rate-entry_default_rate_1"
+	peakStr := formatEnphaseRate(plan.ExportPeakDollars)
+	offPeakStr := formatEnphaseRate(plan.ExportOffPeakDollars)
+
+	touChildren := []any{
+		map[string]any{
+			"id":           "offPeakRate",
+			"type":         "NUMBER_INPUT",
+			"defaultValue": offPeakStr,
+			"required":     true,
+		},
+		map[string]any{
+			"id":           "peakRate",
+			"type":         "NUMBER_INPUT",
+			"defaultValue": peakStr,
+			"required":     true,
+		},
+	}
+	for i, r := range plan.ExportPeakRanges {
+		pid := fmt.Sprintf("%s_peakPeriods_p%d", prefix, i)
+		touChildren = append(touChildren, map[string]any{
+			"id":       pid,
+			"type":     "TOU_PERIOD_SELECTOR",
+			"required": true,
+			"children": []any{
+				map[string]any{"id": pid + "_startTime", "type": "TIME_PICKER", "defaultValue": r.StartMin, "required": true},
+				map[string]any{"id": pid + "_endTime", "type": "TIME_PICKER", "defaultValue": r.EndMin, "required": true},
+			},
+		})
+	}
+
+	return map[string]any{
+		"id":           prefix,
+		"type":         "SEASON_RATE_REPEATER",
+		"dependsOn":    "exportSeasons",
+		"properties":   map[string]any{"seasonId": "default"},
+		"defaultValue": exportRateEntry,
+		"children": []any{
+			map[string]any{
+				"id":           prefix + "_daySelection",
+				"type":         "DAY_SELECTOR",
+				"defaultValue": []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"},
+				"required":     true,
+			},
+			map[string]any{
+				"id":        prefix + "_touRateSection",
+				"type":      "SECTION",
+				"dependsOn": "exportType&exportTodPayout",
+				"showWhen":  "exportType=tou|exportType=net_fit&exportTodPayout=yes",
+				"children":  touChildren,
+			},
+		},
+	}
+}
+
+func replaceJourneyComponentsByPrefix(components []any, prefix string, replacement map[string]any) []any {
+	var out []any
+	inserted := false
+	for _, c := range components {
+		cm, ok := c.(map[string]any)
+		if ok {
+			if id, _ := cm["id"].(string); strings.HasPrefix(id, prefix) {
+				if replacement != nil && !inserted {
+					out = append(out, replacement)
+					inserted = true
+				}
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	if replacement != nil && !inserted {
+		return append([]any{replacement}, out...)
+	}
+	return out
+}
+
+func applyEnphaseTariffPlanToJourney(journey map[string]any, plan *enphaseTariffPlan, now time.Time) {
+	if journey == nil || plan == nil {
+		return
+	}
+
+	defaultValues, ok := journey["defaultValues"].(map[string]any)
+	if !ok {
+		defaultValues = make(map[string]any)
+		journey["defaultValues"] = defaultValues
+	}
+
+	importRateEntry := buildEnphaseJourneyPurchaseRate(plan)
+
+	defaultValues["tariffMode"] = "manual"
+	defaultValues["tariffType"] = "tou"
+	defaultValues["hasSeasonalRates"] = "no"
+	defaultValues["hasDemandCharge"] = "no"
+	defaultValues["hasSeasonalDemandCharge"] = "no"
+	defaultValues["hasTimeBased"] = "no"
+	defaultValues["hasTieredDemand"] = "no"
+	defaultValues["hasMinBillableDemand"] = false
+	defaultValues["demandCharges"] = map[string]any{}
+	defaultValues["flatRates"] = map[string]any{}
+	defaultValues["tieredRates"] = map[string]any{}
+	defaultValues["rates"] = map[string]any{
+		"default": []any{importRateEntry},
+	}
+
+	defaultValues["exportSeasonalVariation"] = "no"
+	defaultValues["exportType"] = plan.ExportType
+	var exportRateEntry map[string]any
+	if plan.ExportType == "net_metering" {
+		defaultValues["exportTodPayout"] = "no"
+		defaultValues["exportRates"] = map[string]any{}
+	} else {
+		exportRateEntry = buildEnphaseJourneyExportRate(plan)
+		defaultValues["exportRates"] = map[string]any{
+			"default": []any{exportRateEntry},
+		}
+	}
+
+	todayStr := now.Format("2006-01-02")
+	bs, _ := defaultValues["billingStartDay"].(string)
+	if bs == "" || bs > todayStr {
+		bs = todayStr
+	}
+	if installDate, _ := defaultValues["installDate"].(string); installDate != "" && bs < installDate {
+		bs = installDate
+	}
+	defaultValues["billingStartDay"] = bs
+	if defaultValues["billingCycle"] == nil {
+		defaultValues["billingCycle"] = map[string]any{"type": "months", "value": 1}
+	}
+	defaultValues["_billingSet"] = "set"
+
+	screens, ok := journey["screens"].([]any)
+	if !ok {
+		return
+	}
+	for _, s := range screens {
+		sm, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		comps, _ := sm["components"].([]any)
+		switch sm["id"] {
+		case "tariff-type-selection":
+			setJourneyComponentDefault(comps, "tariffMode", "manual")
+			setJourneyComponentDefault(comps, "tariffType", "tou")
+			setJourneyComponentDefault(comps, "hasSeasonalRates", "no")
+			setJourneyComponentDefault(comps, "hasDemandCharge", "no")
+		case "season-rate-entry":
+			sm["components"] = replaceJourneyComponentsByPrefix(comps, "energy-rate-entry_", buildEnphaseImportRateComponent(importRateEntry, plan))
+		case "export-type-selection":
+			setJourneyComponentDefault(comps, "exportType", plan.ExportType)
+			setJourneyComponentDefault(comps, "exportSeasonalVariation", "no")
+			if plan.ExportType == "net_metering" {
+				setJourneyComponentDefault(comps, "exportTodPayout", "no")
+			}
+		case "export-season-entry":
+			if exportRateEntry != nil {
+				sm["components"] = replaceJourneyComponentsByPrefix(comps, "export-energy-rate-entry_", buildEnphaseExportRateComponent(exportRateEntry, plan))
+			} else {
+				sm["components"] = replaceJourneyComponentsByPrefix(comps, "export-energy-rate-entry_", nil)
+			}
+		case "billing-details":
+			setJourneyComponentDefault(comps, "billingStartDay", defaultValues["billingStartDay"])
+			setJourneyComponentDefault(comps, "billingCycle", defaultValues["billingCycle"])
+		}
+	}
+}
+
+func (e *Enphase) ensureTOUTariffSynced(ctx context.Context, sched *types.TOUSchedule, now time.Time, requirePeakNow bool, batteryChangePending bool) (bool, bool, error) {
+	existingTariff, err := e.getTariff(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	hasPeakNow := enphaseTariffIsPeakAt(existingTariff, now)
+
+	if !enphaseTariffNeedsSync(sched) {
+		log.Ctx(ctx).DebugContext(ctx, "skipping enphase TOU tariff sync: schedule has no peak or export periods",
+			slog.Bool("hasPeakNow", hasPeakNow),
+		)
+		return false, hasPeakNow, nil
+	}
+
+	plan := buildEnphaseTariffPlan(ctx, sched, now)
+	if plan == nil {
+		log.Ctx(ctx).DebugContext(ctx, "skipping enphase TOU tariff sync: no on-peak periods in schedule",
+			slog.Bool("hasPeakNow", hasPeakNow),
+		)
+		return false, hasPeakNow, nil
+	}
+
+	peakMismatch := requirePeakNow && plan.hasPeakAt(now) && !hasPeakNow
+	if !peakMismatch && enphaseTariffScheduleMatch(existingTariff, plan, now) {
+		log.Ctx(ctx).DebugContext(ctx, "enphase TOU tariff already matches schedule",
+			slog.Bool("hasPeakNow", hasPeakNow),
+			slog.Bool("requirePeakNow", requirePeakNow),
+		)
+		return false, hasPeakNow, nil
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "syncing enphase TOU tariff plan",
+		slog.Bool("peakMismatch", peakMismatch),
+		slog.Bool("hasPeakNow", hasPeakNow),
+		slog.Any("plan", plan),
+	)
+
+	if batteryChangePending {
+		log.Ctx(ctx).InfoContext(ctx, "enphase battery change pending, deferring tariff-journey update")
+		return false, hasPeakNow, nil
+	}
+
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase TOU tariff",
+			slog.Float64("importPeakDollars", plan.ImportPeakDollars),
+			slog.Float64("importOffPeakDollars", plan.ImportOffPeakDollars),
+			slog.Int("peakPeriods", len(plan.ImportPeakRanges)),
+			slog.String("exportType", plan.ExportType),
+		)
+		return false, hasPeakNow, nil
+	}
+
+	journey, err := e.getTariffJourney(ctx)
+	if err != nil {
+		return false, hasPeakNow, err
+	}
+	applyEnphaseTariffPlanToJourney(journey, plan, now)
+	if err := e.postTariffJourney(ctx, journey); err != nil {
+		return false, hasPeakNow, err
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "updated enphase TOU tariff",
+		slog.Float64("importPeakDollars", plan.ImportPeakDollars),
+		slog.Float64("importOffPeakDollars", plan.ImportOffPeakDollars),
+		slog.Int("peakPeriods", len(plan.ImportPeakRanges)),
+		slog.String("exportType", plan.ExportType),
+	)
+	return true, plan.hasPeakAt(now), nil
 }
 
 func hasCorruptEnphaseInterval(ctx context.Context, stat enphaseTodayStats, idx int, loc *time.Location) bool {
@@ -1449,6 +3107,9 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 	if e.sessionID != "" {
 		req.Header.Set("e-auth-token", e.sessionID)
 	}
+	if e.userID != 0 && (strings.Contains(req.URL.Path, "/service/batteryConfig/") || strings.Contains(req.URL.Path, "/service/tariff/")) {
+		req.Header.Set("Username", fmt.Sprintf("%d", e.userID))
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -1461,7 +3122,7 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 		if e.lastCSRFToken == nil {
 			e.lastCSRFToken = make(map[string]enphaseCSRFToken)
 		}
-		e.lastCSRFToken[req.URL.Path] = enphaseCSRFToken{
+		e.lastCSRFToken[enphaseCSRFKey(req.URL.Path)] = enphaseCSRFToken{
 			Token:     csrfToken,
 			CreatedAt: time.Now(),
 		}
@@ -1639,6 +3300,13 @@ type enphaseBatterySettingsResponse struct {
 	BatteryBackupPercentageMin    int                    `json:"batteryBackupPercentageMin"`
 	BatteryBackupPercentageMax    int                    `json:"batteryBackupPercentageMax"`
 	VeryLowSOC                    int                    `json:"veryLowSoc"`
+	DTGControl                    *enphaseControlStatus  `json:"dtgControl,omitempty"`
+	CFGControl                    *enphaseControlStatus  `json:"cfgControl,omitempty"`
+	RBDControl                    *enphaseControlStatus  `json:"rbdControl,omitempty"`
+	IsBatteryChangePending        bool                   `json:"isBatteryChangePending"`
+	IsTariffTOU                   bool                   `json:"isTariffTOU"`
+	BuybackExportPlan             string                 `json:"buybackExportPlan,omitempty"`
+	OperationModeSubType          string                 `json:"operationModeSubType,omitempty"`
 }
 
 type enphaseBatteryProfileResponse struct {
@@ -1648,6 +3316,8 @@ type enphaseBatteryProfileResponse struct {
 	BatteryBackupPercentageMin int                    `json:"batteryBackupPercentageMin"`
 	BatteryBackupPercentageMax int                    `json:"batteryBackupPercentageMax"`
 	VeryLowSOC                 int                    `json:"veryLowSoc"`
+	IsBatteryChangePending     bool                   `json:"isBatteryChangePending"`
+	OperationModeSubType       string                 `json:"operationModeSubType,omitempty"`
 }
 
 type enphaseTodayStats struct {
@@ -1682,4 +3352,68 @@ type enphaseTodayResponse struct {
 type enphaseBatteryStatusResponse struct {
 	MaxCapacity    float64 `json:"max_capacity"`
 	AvailablePower float64 `json:"available_power"`
+}
+
+type enphaseBatteryScheduleDetail struct {
+	ScheduleID     string `json:"scheduleId,omitempty"`
+	Timezone       string `json:"timezone"`
+	StartTime      string `json:"startTime"`
+	EndTime        string `json:"endTime"`
+	Limit          int    `json:"limit"`
+	ScheduleType   string `json:"scheduleType"`
+	ScheduleStatus string `json:"scheduleStatus,omitempty"`
+	Days           []int  `json:"days"`
+	IsDeleted      bool   `json:"isDeleted,omitempty"`
+	IsEnabled      bool   `json:"isEnabled,omitempty"`
+}
+
+type enphaseBatteryScheduleGroup struct {
+	ScheduleStatus string                         `json:"scheduleStatus"`
+	Count          int                            `json:"count"`
+	Details        []enphaseBatteryScheduleDetail `json:"details"`
+}
+
+type enphaseBatterySchedulesResponse struct {
+	Type               string                      `json:"type"`
+	CFG                enphaseBatteryScheduleGroup `json:"cfg"`
+	DTG                enphaseBatteryScheduleGroup `json:"dtg"`
+	RBD                enphaseBatteryScheduleGroup `json:"rbd"`
+	AnySchedulePending bool                        `json:"anySchedulePending"`
+}
+
+type enphaseTariffPeriod struct {
+	ID          string `json:"id,omitempty"`
+	StartTime   any    `json:"startTime"`
+	EndTime     any    `json:"endTime"`
+	Rate        any    `json:"rate"`
+	Type        string `json:"type"`
+	GenRateType string `json:"genRateType,omitempty"`
+}
+
+type enphaseTariffDaySchedule struct {
+	ID      string                `json:"id,omitempty"`
+	Days    []int                 `json:"days"`
+	Periods []enphaseTariffPeriod `json:"periods"`
+}
+
+type enphaseTariffSeason struct {
+	ID         string                     `json:"id,omitempty"`
+	StartMonth string                     `json:"startMonth,omitempty"`
+	EndMonth   string                     `json:"endMonth,omitempty"`
+	Days       []enphaseTariffDaySchedule `json:"days"`
+}
+
+type enphaseTariffSection struct {
+	TypeKind   string                `json:"typeKind,omitempty"`
+	TypeID     string                `json:"typeId,omitempty"`
+	Source     string                `json:"source,omitempty"`
+	ExportPlan string                `json:"exportPlan,omitempty"`
+	Seasons    []enphaseTariffSeason `json:"seasons"`
+}
+
+type enphaseTariffJSONResponse struct {
+	SiteID   int                   `json:"site_id"`
+	Currency string                `json:"currency"`
+	Purchase *enphaseTariffSection `json:"purchase"`
+	Buyback  *enphaseTariffSection `json:"buyback"`
 }

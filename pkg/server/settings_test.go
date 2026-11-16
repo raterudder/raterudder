@@ -14,6 +14,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
@@ -1137,6 +1138,147 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.GridChargeBatteries == true && s.GridExportSolar == true && s.GridExportBatteries == false && s.ManageTOUSchedules == true
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Auto-Enables ManageTOUSchedules for Enphase when feature flag enabled", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "enphase",
+				CustomGridSettings:       false,
+				ManageTOUSchedules:       false,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
+			},
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{Username: "user@example.com", Password: "pw"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		req = req.WithContext(feats.Bool("enphaseExportSchedules", false).With(req.Context(), true))
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Enphase: &types.EnphaseCredentials{Username: "user@example.com", SessionID: "sess"},
+		}, true, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+		}, nil)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.GridChargeBatteries && s.GridExportSolar && s.GridExportBatteries && s.ManageTOUSchedules
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Does not auto-enable ManageTOUSchedules for Enphase when feature flag disabled", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "enphase",
+				CustomGridSettings:       false,
+				ManageTOUSchedules:       false,
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 1.0,
+			},
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{Username: "user@example.com", Password: "pw"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Enphase: &types.EnphaseCredentials{Username: "user@example.com", SessionID: "sess"},
+		}, true, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+		}, nil)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.GridChargeBatteries && s.GridExportSolar && s.GridExportBatteries && !s.ManageTOUSchedules
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)

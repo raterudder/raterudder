@@ -1935,6 +1935,65 @@ describe('App & Settings', () => {
                 expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
             });
         });
+
+        it('shows Confirm Grid Settings modal for Enphase on initial credential save', async () => {
+            const user = userEvent.setup();
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'enphase',
+                hasCredentials: {},
+                features: { enphaseExportSchedules: true },
+            });
+            (api.fetchESSList as any).mockResolvedValue([
+                ...defaultESSProviders,
+                {
+                    id: 'enphase',
+                    name: 'Enphase',
+                    credentials: [
+                        { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                        { field: 'code', name: 'Email Code', type: 'string', required: true, stage: 1, oneTime: true },
+                    ],
+                },
+            ]);
+            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+
+            await navigateToSettings();
+
+            const emailInput = await screen.findByLabelText('Email');
+            await user.type(emailInput, 'test@example.com');
+            await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+            const codeInput = await screen.findByLabelText(/Email Code/i);
+            await user.type(codeInput, '654321');
+
+            (updateSettings as any).mockResolvedValue(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'enphase',
+                gridChargeBatteries: true,
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                manageTOUSchedules: true,
+                hasCredentials: { enphase: true },
+                features: { enphaseExportSchedules: true },
+            });
+
+            await user.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+                expect(screen.getByText(/Based on your Enphase configuration/i)).toBeInTheDocument();
+                const touSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+                expect(touSwitch).toBeChecked();
+                expect(screen.getByText(/sync your Enphase Electricity Rate/i)).toBeInTheDocument();
+            });
+
+            await user.click(screen.getByRole('button', { name: /Confirm & Finish/i }));
+
+            await waitFor(() => {
+                expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
+            });
+        });
     });
 
     describe('Site and Account Deletion', () => {
@@ -2768,6 +2827,30 @@ describe('App & Settings', () => {
             await user.click(editBtn);
 
             expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
+        });
+
+        it('renders TOU toggle and Enphase notice when enphaseExportSchedules feature flag is enabled', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'enphase',
+                hasCredentials: { enphase: true },
+                manageTOUSchedules: true,
+                release: 'production',
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                features: { enphaseExportSchedules: true },
+            });
+
+            await navigateToSettings();
+
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+            expect(exportOptSwitch).toBeInTheDocument();
+            expect(exportOptSwitch).toBeChecked();
+            expect(screen.getByText(/sync your Enphase Electricity Rate/i)).toBeInTheDocument();
         });
 
         it('is hidden when neither solar nor battery export is enabled, and appears immediately when toggled on', async () => {
