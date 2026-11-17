@@ -176,6 +176,9 @@ type FranklinCredentials struct {
 	// the other credentials so we can skip login on every update cycle and only
 	// re-login when the token has expired (backend returns 401).
 	Token string `json:"token,omitempty"`
+	// UserType stores the selected Franklin account role identity when required
+	// (e.g. "1" for Homeowner, "2" for Installer). Omitted for single-role accounts.
+	UserType string `json:"userType,omitempty"`
 }
 
 // Credentials for Enphase

@@ -38,6 +38,7 @@ type Franklin struct {
 	baseURL              string
 	username             string
 	md5Password          string
+	userType             string
 	gatewayID            string
 	tokenStr             string
 	mu                   sync.Mutex
@@ -194,21 +195,25 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	needLogin := creds.Franklin.Token == ""
 	if !needLogin && f.username != "" {
 		// We've previously authenticated; check if credentials have changed.
-		needLogin = f.username != creds.Franklin.Username || f.md5Password != currentMD5
+		needLogin = f.username != creds.Franklin.Username || f.md5Password != currentMD5 || f.userType != creds.Franklin.UserType
 	}
 
 	if needLogin {
 		log.Ctx(ctx).DebugContext(ctx, "logging in to franklin")
 		// Credentials changed or no cached token — must login fresh.
-		token, err := f.login(ctx, creds.Franklin.Username, currentMD5)
+		token, resolvedUserType, err := f.login(ctx, creds.Franklin.Username, currentMD5, creds.Franklin.UserType)
 		if err != nil {
 			return creds, false, err
 		}
 		f.username = creds.Franklin.Username
 		f.md5Password = currentMD5
+		f.userType = resolvedUserType
 		f.tokenStr = token
 		// Persist the new token so we can skip login next time.
 		creds.Franklin.Token = token
+		if creds.Franklin.UserType != resolvedUserType {
+			creds.Franklin.UserType = resolvedUserType
+		}
 
 		// fill in the default gatewayID if it wasn't sent
 		if creds.Franklin.GatewayID == "" {
@@ -225,6 +230,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		// Restore the token from credentials so we can skip login.
 		f.username = creds.Franklin.Username
 		f.md5Password = currentMD5
+		f.userType = creds.Franklin.UserType
 		f.tokenStr = creds.Franklin.Token
 	}
 
@@ -242,14 +248,18 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		if strings.Contains(err.Error(), "invalid token") {
 			log.Ctx(ctx).DebugContext(ctx, "franklin token expired", slog.Any("error", err))
 			// Credentials changed or no cached token — must login fresh.
-			var token string
-			token, err = f.login(ctx, f.username, f.md5Password)
+			var token, resolvedUserType string
+			token, resolvedUserType, err = f.login(ctx, f.username, f.md5Password, f.userType)
 			if err != nil {
 				return creds, false, err
 			}
 			f.tokenStr = token
+			f.userType = resolvedUserType
 			// Persist the new token so we can skip login next time.
 			creds.Franklin.Token = token
+			if creds.Franklin.UserType != resolvedUserType {
+				creds.Franklin.UserType = resolvedUserType
+			}
 			changed = true
 			_, err = f.getDeviceInfoWithCache(ctx, true)
 		}
@@ -268,32 +278,63 @@ type loginResult struct {
 	Version string `json:"version"`
 }
 
-func (f *Franklin) login(ctx context.Context, username, md5Password string) (string, error) {
+// FranklinAPIError represents an error returned by the FranklinWH API with a specific error code.
+type FranklinAPIError struct {
+	Code    int
+	Message string
+}
+
+func (e *FranklinAPIError) Error() string {
+	return fmt.Sprintf("franklin api error: %s", e.Message)
+}
+
+func (f *Franklin) login(ctx context.Context, username, md5Password, userType string) (string, string, error) {
 	if username == "" {
-		return "", fmt.Errorf("missing username: %w", ErrCredentialsMissing)
+		return "", "", fmt.Errorf("missing username: %w", ErrCredentialsMissing)
 	}
 	if md5Password == "" {
-		return "", fmt.Errorf("missing password: %w", ErrCredentialsMissing)
+		return "", "", fmt.Errorf("missing password: %w", ErrCredentialsMissing)
 	}
 
-	data := url.Values{}
-	data.Set("account", username)
-	data.Set("password", md5Password)
-	data.Set("type", "0")
+	attemptLogin := func(ut string) (string, error) {
+		data := url.Values{}
+		data.Set("account", username)
+		data.Set("password", md5Password)
+		data.Set("type", "0")
+		if ut != "" {
+			data.Set("userType", ut)
+		}
 
-	req, err := f.newPostFormRequest(ctx, franklinLoginPath, data)
+		req, err := f.newPostFormRequest(ctx, franklinLoginPath, data)
+		if err != nil {
+			return "", err
+		}
+
+		var res loginResult
+		if err := f.doRequest(req, &res); err != nil {
+			return "", err
+		}
+		return res.Token, nil
+	}
+
+	token, err := attemptLogin(userType)
 	if err != nil {
-		return "", err
-	}
-
-	var res loginResult
-	if err := f.doRequest(req, &res); err != nil {
+		var apiErr *FranklinAPIError
+		if userType == "" && errors.As(err, &apiErr) && apiErr.Code == 1001 {
+			log.Ctx(ctx).InfoContext(ctx, "franklin multi-role account detected; retrying login as homeowner", slog.String("username", username))
+			fallbackToken, retryErr := attemptLogin("1")
+			if retryErr == nil {
+				log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username), slog.String("userType", "1"))
+				return fallbackToken, "1", nil
+			}
+			err = retryErr
+		}
 		log.Ctx(ctx).ErrorContext(ctx, "franklin login failed", slog.Any("error", err))
-		return "", fmt.Errorf("login failed: %w", err)
+		return "", "", fmt.Errorf("login failed: %w", err)
 	}
-	log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username))
 
-	return res.Token, nil
+	log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username), slog.String("userType", userType))
+	return token, userType, nil
 }
 
 func (f *Franklin) newPostFormRequest(ctx context.Context, endpoint string, data url.Values) (*http.Request, error) {
@@ -427,7 +468,7 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 			log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api unknown error", slog.String("body", string(body)))
 			return fmt.Errorf("franklin unknown error")
 		}
-		return fmt.Errorf("franklin api error: %s", fr.Message)
+		return &FranklinAPIError{Code: fr.Code, Message: fr.Message}
 	}
 
 	// debug log the whole response which will aid in debugging but not if its a login response

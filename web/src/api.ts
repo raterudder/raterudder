@@ -371,6 +371,7 @@ export interface FranklinCredentials {
     username: string;
     md5Password: string;
     gatewayID: string;
+    userType?: string;
 }
 
 export type CredentialsPayload = Record<string, Record<string, any>>;

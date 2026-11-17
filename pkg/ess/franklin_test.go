@@ -3811,6 +3811,165 @@ func TestFranklin(t *testing.T) {
 			assert.Equal(t, "new-token", newCreds.Franklin.Token, "new token should be written back into credentials")
 			assert.Equal(t, "new-token", f.tokenStr)
 		})
+
+		t.Run("MultiRoleAccountFallbackToHomeowner", func(t *testing.T) {
+			var loginCalls int
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+					loginCalls++
+					require.NoError(t, r.ParseForm())
+					if loginCalls == 1 {
+						assert.Empty(t, r.Form.Get("userType"), "First attempt should not have userType")
+						json.NewEncoder(w).Encode(map[string]any{
+							"code":    1001,
+							"success": false,
+							"message": "请选择用户身份",
+						})
+						return
+					}
+					assert.Equal(t, "1", r.Form.Get("userType"), "Second attempt should specify homeowner role")
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"token": "token-homeowner",
+						},
+					})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"status": 1,
+						},
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:  ts.Client(),
+				baseURL: ts.URL,
+			}
+
+			creds := types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:    "user@example.com",
+					MD5Password: "pass",
+					GatewayID:   "gw1",
+				},
+			}
+
+			newCreds, changed, err := f.Authenticate(context.Background(), creds)
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Equal(t, 2, loginCalls, "Should retry login after code 1001")
+			assert.Equal(t, "1", newCreds.Franklin.UserType, "UserType should be saved to credentials as homeowner")
+			assert.Equal(t, "1", f.userType, "Internal userType state should be set")
+			assert.Equal(t, "token-homeowner", newCreds.Franklin.Token)
+		})
+
+		t.Run("ExistingUserTypeSkips1001", func(t *testing.T) {
+			var loginCalls int
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+					loginCalls++
+					require.NoError(t, r.ParseForm())
+					assert.Equal(t, "1", r.Form.Get("userType"), "Should send userType directly on first attempt")
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"token": "token-direct-homeowner",
+						},
+					})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"status": 1,
+						},
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:  ts.Client(),
+				baseURL: ts.URL,
+			}
+
+			creds := types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:    "user@example.com",
+					MD5Password: "pass",
+					GatewayID:   "gw1",
+					UserType:    "1",
+				},
+			}
+
+			newCreds, changed, err := f.Authenticate(context.Background(), creds)
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Equal(t, 1, loginCalls, "Should succeed on first attempt without retry")
+			assert.Equal(t, "1", newCreds.Franklin.UserType)
+			assert.Equal(t, "token-direct-homeowner", newCreds.Franklin.Token)
+		})
+
+		t.Run("MultiRoleAccountFallbackFails", func(t *testing.T) {
+			var loginCalls int
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+					loginCalls++
+					require.NoError(t, r.ParseForm())
+					if loginCalls == 1 {
+						assert.Empty(t, r.Form.Get("userType"))
+						json.NewEncoder(w).Encode(map[string]any{
+							"code":    1001,
+							"success": false,
+							"message": "请选择用户身份",
+						})
+						return
+					}
+					assert.Equal(t, "1", r.Form.Get("userType"))
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    400,
+						"success": false,
+						"message": "Incorrect password",
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:  ts.Client(),
+				baseURL: ts.URL,
+			}
+
+			creds := types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:    "user@example.com",
+					MD5Password: "pass",
+					GatewayID:   "gw1",
+				},
+			}
+
+			_, _, err := f.Authenticate(context.Background(), creds)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "Incorrect password")
+			assert.Equal(t, 2, loginCalls)
+		})
 	})
 
 	t.Run("Login Failure No Retry", func(t *testing.T) {
