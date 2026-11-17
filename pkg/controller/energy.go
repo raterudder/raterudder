@@ -45,18 +45,23 @@ const neighborHourWeightMultiplier = 0.5
 const neighborHourStandbyFloorMultiplier = 1.8
 
 // dayOfWeekOutlierRatioThreshold defines the minimum historical ratio of target weekday consumption
-// (morning hours 6..10, or per-hour confirmation for afternoon/evening hours) relative to preceding days
-// required to qualify as an outlier day/hour.
+// (evaluated across morning, afternoon, evening, waking, and whole-day windows) relative to preceding days
+// required to qualify as an outlier weekday period.
 // Statistical analysis across 40 production sites showed that genuine day-of-week routines (e.g. weekend chores,
 // mid-week laundry, or work-from-home days) exhibit ratios of 1.25x to 1.90x compared to preceding days.
 const dayOfWeekOutlierRatioThreshold = 1.25
 
-// dayOfWeekOutlierTStatThreshold defines the minimum Welch's t-statistic required to confirm
-// that a day-of-week load surge is statistically significant and repeatable.
-// With typical sample sizes of 4-5 target weekdays vs 8-10 preceding weekdays (effective degrees of freedom ~ 6-8),
-// a t-statistic of 1.70 corresponds to approximately 93-95% confidence (p <= 0.05-0.07 one-tailed),
-// preventing single-day appliance spikes from triggering false outlier classifications.
-const dayOfWeekOutlierTStatThreshold = 1.70
+// dayOfWeekOutlierMorningTStatThreshold defines the minimum Welch's t-statistic required to confirm
+// that a morning (06:00-10:59) day-of-week load surge is statistically significant and repeatable.
+// Sweeping t-thresholds across 118 Summer+Fall production site-windows showed that raising this from 1.70
+// to 2.30 (Bonferroni-style multiple-testing adjustment across 7 weekdays and 5 period windows) cuts
+// false-positive weekday triggers on steady households while preserving genuine weekend/weekday morning routines.
+const dayOfWeekOutlierMorningTStatThreshold = 2.30
+
+// dayOfWeekOutlierNonMorningTStatThreshold defines the minimum Welch's t-statistic required to confirm
+// that an afternoon (11:00-16:59), evening (17:00-21:59), waking (06:00-21:59), or whole-day (00:00-23:59)
+// day-of-week load surge is statistically significant when temperatures match preceding days.
+const dayOfWeekOutlierNonMorningTStatThreshold = 2.50
 
 // dayOfWeekOutlierMinTargetSamples defines the minimum number of valid historical occurrences
 // of the target weekday (e.g. at least 3 Fridays in the 4-5 week history window) required before
@@ -74,9 +79,10 @@ const dayOfWeekOutlierMinPrecedingSamples = 6
 // This allows the distinct historical distribution of that day to dominate the percentile prediction pool.
 const dayOfWeekOutlierWeightMultiplier = 3.0
 
-// dayOfWeekOutlierDownWeightMultiplier down-weights recent non-matching days (from 1.0x to 0.33x) when
-// a day of the week is identified as a historical outlier. This prevents lower-load preceding days from
-// pulling down the percentile ranking of recurring chore/weekend days.
+// dayOfWeekOutlierDownWeightMultiplier down-weights recent non-matching days (from 1.0x to 0.33x) during
+// morning hours (06:00-10:59) when a day of the week is identified as a historical outlier. This prevents
+// lower-load preceding weekday mornings from pulling down the percentile ranking of recurring morning routines
+// while keeping afternoon and evening temperature recency intact.
 const dayOfWeekOutlierDownWeightMultiplier = 0.33
 
 // tempSimilarityScale acts as the denominator in the exponential temperature similarity function:
@@ -389,9 +395,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 	}
 
-	// Detect any days of the week that historically stand out with statistically significant higher load
-	// compared to their preceding days (e.g. weekend chore mornings, work-from-home days).
-	dayOfWeekOutliers := detectDayOfWeekOutliers(ctx, loc, dayMap, validDaysMap, todayStr, ignoredOutlierHours)
+	// Detect any days of the week (and time-of-day periods) that historically stand out with statistically
+	// significant higher load compared to their preceding days (e.g. weekend chores, laundry afternoons, WFH days).
+	dayOfWeekOutliers := detectDayOfWeekOutliers(ctx, loc, dayMap, validDaysMap, todayStr, ignoredOutlierHours, weatherByHour)
 
 	// Calculate solar predictions using existing package functions.
 	// CalculateWeatherSolar handles forecasted temperatures and clear sky indices,
@@ -817,38 +823,10 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 		prevHr := (h - 1 + 24) % 24
 		nextHr := (h + 1) % 24
-		isMorning := h >= 6 && h <= 11
-		// Morning hours use the day-level morning outlier flag; non-morning hours require per-hour
-		// confirmation (ratio >= 1.25 and Welch's t >= 1.70) so weekday surges that continue into
-		// the afternoon/evening also receive the 3x same-weekday boost without penalizing recency.
-		isOutlierHour := detectedShift == "none" && isMorning && dayOfWeekOutliers[wd]
-		if detectedShift == "none" && !isMorning && dayOfWeekOutliers[wd] {
-			var sameWDHourLoads, otherWDHourLoads []float64
-			for vDateStr, ok := range validDaysMap {
-				if !ok || vDateStr == todayStr {
-					continue
-				}
-				vd := dayMap[vDateStr]
-				if vd == nil || vd.dayTime.IsZero() {
-					continue
-				}
-				for _, pt := range vd.points {
-					if pt.HomeKWH > 0.0 && pt.TSHourStart.Hour() == h && !ignoredOutlierHours[dayHourKey{date: vDateStr, hour: h}] {
-						if vd.weekday == wd {
-							sameWDHourLoads = append(sameWDHourLoads, pt.HomeKWH)
-						} else {
-							otherWDHourLoads = append(otherWDHourLoads, pt.HomeKWH)
-						}
-					}
-				}
-			}
-			if len(sameWDHourLoads) >= dayOfWeekOutlierMinTargetSamples && len(otherWDHourLoads) >= dayOfWeekOutlierMinPrecedingSamples {
-				if getMean(sameWDHourLoads) >= math.Max(0.1, getMean(otherWDHourLoads))*dayOfWeekOutlierRatioThreshold &&
-					calculateWelchT(sameWDHourLoads, otherWDHourLoads) >= dayOfWeekOutlierTStatThreshold {
-					isOutlierHour = true
-				}
-			}
-		}
+		isMorning := outlierWindows[outlierPeriodMorning].containsHour(h)
+		// Apply the 3x same-weekday outlier boost whenever hour h falls within any detected outlier period
+		// (morning, afternoon, evening, waking, or whole-day) for target weekday wd.
+		isOutlierHour := detectedShift == "none" && dayOfWeekOutliers[wd].coversHour(h)
 
 		for _, dateStr := range sortedSelectedDates {
 			if detectedShift == "none" && historicalVacationDays[dateStr] {
@@ -1164,9 +1142,85 @@ func getHomeKWHPointsStdDev(points []types.EnergyStats) float64 {
 	return math.Sqrt(varSum / float64(len(points)))
 }
 
-// detectDayOfWeekOutliers identifies which days of the week (Sunday..Saturday) historically exhibit
-// a statistically significant increase in morning (6:00 to 10:59) energy usage compared to
-// their preceding days (ratio >= dayOfWeekOutlierRatioThreshold and t-stat >= 1.70).
+type outlierPeriod string
+
+const (
+	outlierPeriodMorning   outlierPeriod = "morning"
+	outlierPeriodAfternoon outlierPeriod = "afternoon"
+	outlierPeriodEvening   outlierPeriod = "evening"
+	outlierPeriodWaking    outlierPeriod = "waking"
+	outlierPeriodWholeDay  outlierPeriod = "wholeDay"
+)
+
+type outlierWindowDef struct {
+	startHr        int
+	endHr          int
+	minHours       int
+	isMorning      bool
+	tStatThreshold float64
+}
+
+func (w outlierWindowDef) containsHour(h int) bool {
+	return h >= w.startHr && h <= w.endHr
+}
+
+var outlierPeriodOrder = []outlierPeriod{
+	outlierPeriodMorning,
+	outlierPeriodAfternoon,
+	outlierPeriodEvening,
+	outlierPeriodWaking,
+	outlierPeriodWholeDay,
+}
+
+var outlierWindows = map[outlierPeriod]outlierWindowDef{
+	outlierPeriodMorning:   {startHr: 6, endHr: 10, minHours: 3, isMorning: true, tStatThreshold: dayOfWeekOutlierMorningTStatThreshold},
+	outlierPeriodAfternoon: {startHr: 11, endHr: 16, minHours: 4, tStatThreshold: dayOfWeekOutlierNonMorningTStatThreshold},
+	outlierPeriodEvening:   {startHr: 17, endHr: 21, minHours: 3, tStatThreshold: dayOfWeekOutlierNonMorningTStatThreshold},
+	outlierPeriodWaking:    {startHr: 6, endHr: 21, minHours: 10, tStatThreshold: dayOfWeekOutlierNonMorningTStatThreshold},
+	outlierPeriodWholeDay:  {startHr: 0, endHr: 23, minHours: 16, tStatThreshold: dayOfWeekOutlierNonMorningTStatThreshold},
+}
+
+// weekdayOutlierPeriods records which time-of-day windows historically exhibit a statistically
+// significant recurring load surge on a given day of the week.
+type weekdayOutlierPeriods struct {
+	Morning   bool
+	Afternoon bool
+	Evening   bool
+	Waking    bool
+	WholeDay  bool
+}
+
+func (p weekdayOutlierPeriods) any() bool {
+	return p.Morning || p.Afternoon || p.Evening || p.Waking || p.WholeDay
+}
+
+func (p weekdayOutlierPeriods) coversHour(h int) bool {
+	if p.WholeDay && outlierWindows[outlierPeriodWholeDay].containsHour(h) {
+		return true
+	}
+	if p.Waking && outlierWindows[outlierPeriodWaking].containsHour(h) {
+		return true
+	}
+	if p.Morning && outlierWindows[outlierPeriodMorning].containsHour(h) {
+		return true
+	}
+	if p.Afternoon && outlierWindows[outlierPeriodAfternoon].containsHour(h) {
+		return true
+	}
+	if p.Evening && outlierWindows[outlierPeriodEvening].containsHour(h) {
+		return true
+	}
+	return false
+}
+
+// detectDayOfWeekOutliers identifies which days of the week (Sunday..Saturday) and time-of-day periods
+// (defined in outlierWindows) historically exhibit a statistically significant increase in energy usage
+// compared to their 2 preceding weekdays.
+// Evaluating sub-periods alongside waking/whole-day prevents a quiet afternoon from diluting a high Saturday
+// morning routine while also catching routines (such as Friday laundry/chores) whose hours shift across the
+// afternoon or span across the morning-afternoon boundary. Non-morning periods skip classification when the
+// target weekday's mean period temperature differed from preceding days by >= weatherDrivenSurgeTempDeltaC
+// so hot summer HVAC spells on specific calendar dates do not masquerade as recurring weekday chore schedules.
 func detectDayOfWeekOutliers(
 	ctx context.Context,
 	loc *time.Location,
@@ -1174,21 +1228,28 @@ func detectDayOfWeekOutliers(
 	validDaysMap map[string]bool,
 	todayStr string,
 	ignoredOutlierHours map[dayHourKey]bool,
-) map[time.Weekday]bool {
-	outliers := make(map[time.Weekday]bool)
+	weatherByHour map[time.Time]float64,
+) map[time.Weekday]weekdayOutlierPeriods {
+	outliers := make(map[time.Weekday]weekdayOutlierPeriods)
 
-	// Precompute morning (6:00 to 10:59 local) averages for each valid historical day.
-	type dayStats struct {
+	type parsedValidDay struct {
+		dateStr string
+		dTime   time.Time
+		nextDay time.Time
 		wd      time.Weekday
-		mornAvg float64
-		hasMorn bool
+		day     *dayPoints
 	}
-	statsByDate := make(map[string]*dayStats)
 
+	var sortedDateKeys []string
 	for dateStr, ok := range validDaysMap {
-		if !ok || dateStr == todayStr {
-			continue
+		if ok && dateStr != todayStr {
+			sortedDateKeys = append(sortedDateKeys, dateStr)
 		}
+	}
+	sort.Strings(sortedDateKeys)
+
+	parsedDays := make([]parsedValidDay, 0, len(sortedDateKeys))
+	for _, dateStr := range sortedDateKeys {
 		d := dayMap[dateStr]
 		if d == nil {
 			continue
@@ -1197,121 +1258,180 @@ func detectDayOfWeekOutliers(
 		if err != nil {
 			continue
 		}
-
-		mornSum := 0.0
-		mornCount := 0
-
-		for _, pt := range d.points {
-			if pt.HomeKWH <= 0.0 {
-				continue
-			}
-			hr := pt.TSHourStart.In(loc).Hour()
-			if ignoredOutlierHours[dayHourKey{date: dateStr, hour: hr}] {
-				continue
-			}
-			if hr >= 6 && hr <= 10 {
-				mornSum += pt.HomeKWH
-				mornCount++
-			}
-		}
-
-		ds := &dayStats{wd: dTime.Weekday()}
-		if mornCount >= 3 {
-			ds.mornAvg = mornSum / float64(mornCount)
-			ds.hasMorn = true
-		}
-		statsByDate[dateStr] = ds
+		parsedDays = append(parsedDays, parsedValidDay{
+			dateStr: dateStr,
+			dTime:   dTime,
+			nextDay: dTime.AddDate(0, 0, 1),
+			wd:      dTime.Weekday(),
+			day:     d,
+		})
 	}
 
-	// Test all 7 days of the week (Sunday through Saturday).
-	// Each target day wd is compared against its 2 immediately preceding calendar days (p1 = wd-1, p2 = wd-2)
-	// because those recent days carry the highest exponential recency weights (0.95^1 and 0.95^2) in the
-	// hourly prediction pool and pull down wd's forecast if wd has a much higher load profile.
-	// - For Saturday (wd = 6), p1 and p2 are already Friday and Thursday (the last 2 workdays).
-	// - For Sunday (wd = 0), p1 and p2 are Saturday and Friday. When a household is home all weekend,
-	//   both Saturday and Sunday are elevated, so comparing Sunday against Saturday + Friday mixes a high
-	//   weekend day (Saturday) into the baseline pool—inflating both the baseline mean and variance so
-	//   Welch's t-test fails. Therefore, Sunday also falls back to testing against Thursday + Friday
-	//   (the same 2 pre-weekend workdays that Saturday is tested against).
-	for wdInt := 0; wdInt < 7; wdInt++ {
-		wd := time.Weekday(wdInt)
-		p1 := time.Weekday((wdInt - 1 + 7) % 7)
-		p2 := time.Weekday((wdInt - 2 + 7) % 7)
+	type dayWindowStats struct {
+		wd      time.Weekday
+		avgKWH  float64
+		hasLoad bool
+		tempC   float64
+		hasTemp bool
+	}
 
-		var targetMorn, prevMorn []float64
+	for _, period := range outlierPeriodOrder {
+		win := outlierWindows[period]
+		winLen := win.endHr - win.startHr + 1
+		stats := make([]dayWindowStats, 0, len(parsedDays))
 
-		for _, ds := range statsByDate {
-			if ds.wd == wd {
-				if ds.hasMorn {
-					targetMorn = append(targetMorn, ds.mornAvg)
+		for _, pd := range parsedDays {
+			var loadSumKWH float64
+			var loadCount int
+			for _, pt := range pd.day.points {
+				if pt.HomeKWH <= 0.0 {
+					continue
 				}
-			} else if ds.wd == p1 || ds.wd == p2 {
-				if ds.hasMorn {
-					prevMorn = append(prevMorn, ds.mornAvg)
+				hr := pt.TSHourStart.In(loc).Hour()
+				if !win.containsHour(hr) {
+					continue
+				}
+				if ignoredOutlierHours[dayHourKey{date: pd.dateStr, hour: hr}] {
+					continue
+				}
+				loadSumKWH += pt.HomeKWH
+				loadCount++
+			}
+
+			ds := dayWindowStats{wd: pd.wd}
+			if loadCount >= win.minHours {
+				ds.avgKWH = loadSumKWH / float64(loadCount)
+				ds.hasLoad = true
+			}
+
+			if len(weatherByHour) > 0 {
+				var tempSumC float64
+				var tempCount int
+				for ts := pd.dTime; ts.Before(pd.nextDay); ts = ts.Add(time.Hour) {
+					hr := ts.In(loc).Hour()
+					if !win.containsHour(hr) {
+						continue
+					}
+					if tc, hasTC := weatherByHour[ts.UTC()]; hasTC {
+						tempSumC += tc
+						tempCount++
+					}
+				}
+				if tempCount > 0 && tempCount*2 >= winLen {
+					ds.tempC = tempSumC / float64(tempCount)
+					ds.hasTemp = true
 				}
 			}
+
+			stats = append(stats, ds)
 		}
 
-		// Sunday special case: also test against Thursday + Friday to capture weekend routines
-		// where Saturday is also high.
-		var prevMornSunTF []float64
-		if wd == time.Sunday {
-			for _, ds := range statsByDate {
-				if ds.wd == time.Thursday || ds.wd == time.Friday {
-					if ds.hasMorn {
-						prevMornSunTF = append(prevMornSunTF, ds.mornAvg)
+		// Test all 7 days of the week (Sunday through Saturday).
+		// Each target day wd is compared against its 2 immediately preceding calendar days (p1 = wd-1, p2 = wd-2)
+		// because those recent days carry the highest exponential recency weights (0.95^1 and 0.95^2) in the
+		// hourly prediction pool and pull down wd's forecast if wd has a much higher load profile.
+		// - For Saturday (wd = 6), p1 and p2 are already Friday and Thursday (the last 2 workdays).
+		// - For Sunday (wd = 0), p1 and p2 are Saturday and Friday. When a household is home all weekend,
+		//   both Saturday and Sunday are elevated, so comparing Sunday against Saturday + Friday mixes a high
+		//   weekend day (Saturday) into the baseline pool—inflating both the baseline mean and variance so
+		//   Welch's t-test fails. Therefore, Sunday also falls back to testing against Thursday + Friday
+		//   (the same 2 pre-weekend workdays that Saturday is tested against).
+		for wdInt := 0; wdInt < 7; wdInt++ {
+			wd := time.Weekday(wdInt)
+			p1 := time.Weekday((wdInt - 1 + 7) % 7)
+			p2 := time.Weekday((wdInt - 2 + 7) % 7)
+
+			var targetLoadsKWH, prevLoadsKWH, sunTFLoadsKWH []float64
+			var targetTempsC, prevTempsC, sunTFTempsC []float64
+
+			for _, ds := range stats {
+				if !ds.hasLoad {
+					continue
+				}
+				if ds.wd == wd {
+					targetLoadsKWH = append(targetLoadsKWH, ds.avgKWH)
+					if ds.hasTemp {
+						targetTempsC = append(targetTempsC, ds.tempC)
+					}
+				} else {
+					if ds.wd == p1 || ds.wd == p2 {
+						prevLoadsKWH = append(prevLoadsKWH, ds.avgKWH)
+						if ds.hasTemp {
+							prevTempsC = append(prevTempsC, ds.tempC)
+						}
+					}
+					// Sunday special case: also test against Thursday + Friday to capture weekend routines
+					// where Saturday is also high.
+					if wd == time.Sunday && (ds.wd == time.Thursday || ds.wd == time.Friday) {
+						sunTFLoadsKWH = append(sunTFLoadsKWH, ds.avgKWH)
+						if ds.hasTemp {
+							sunTFTempsC = append(sunTFTempsC, ds.tempC)
+						}
 					}
 				}
 			}
-		}
 
-		isOutlier := false
-		var ratio, tStat float64
-		var detectedBy string
-		prevSamples := len(prevMorn)
-
-		// Check morning hours (6:00 - 11:00) vs previous 2 days
-		if len(targetMorn) >= dayOfWeekOutlierMinTargetSamples && len(prevMorn) >= dayOfWeekOutlierMinPrecedingSamples {
-			meanTarget := getMean(targetMorn)
-			meanPrev := getMean(prevMorn)
-			r := meanTarget / math.Max(0.1, meanPrev)
-			t := calculateWelchT(targetMorn, prevMorn)
-			if r >= dayOfWeekOutlierRatioThreshold && t >= dayOfWeekOutlierTStatThreshold {
-				isOutlier = true
-				ratio = r
-				tStat = t
-				detectedBy = "morning"
-				prevSamples = len(prevMorn)
+			evalCandidate := func(pLoadsKWH, pTempsC []float64) (bool, float64, float64) {
+				if len(targetLoadsKWH) < dayOfWeekOutlierMinTargetSamples || len(pLoadsKWH) < dayOfWeekOutlierMinPrecedingSamples {
+					return false, 0, 0
+				}
+				meanTargetKWH := getMean(targetLoadsKWH)
+				meanPrevKWH := getMean(pLoadsKWH)
+				r := meanTargetKWH / math.Max(0.1, meanPrevKWH)
+				t := calculateWelchT(targetLoadsKWH, pLoadsKWH)
+				if r < dayOfWeekOutlierRatioThreshold || t < win.tStatThreshold {
+					return false, r, t
+				}
+				if !win.isMorning && len(targetTempsC) >= 2 && len(pTempsC) >= 3 {
+					if math.Abs(getMean(targetTempsC)-getMean(pTempsC)) >= weatherDrivenSurgeTempDeltaC {
+						return false, r, t
+					}
+				}
+				return true, r, t
 			}
-		}
 
-		// Sunday morning fallback vs Thursday/Friday
-		if !isOutlier && wd == time.Sunday && len(targetMorn) >= dayOfWeekOutlierMinTargetSamples && len(prevMornSunTF) >= dayOfWeekOutlierMinPrecedingSamples {
-			meanTarget := getMean(targetMorn)
-			meanPrec := getMean(prevMornSunTF)
-			r := meanTarget / math.Max(0.1, meanPrec)
-			t := calculateWelchT(targetMorn, prevMornSunTF)
-			if r >= dayOfWeekOutlierRatioThreshold && t >= dayOfWeekOutlierTStatThreshold {
-				isOutlier = true
-				ratio = r
-				tStat = t
-				detectedBy = "morningVsThuFri"
-				prevSamples = len(prevMornSunTF)
+			isOutlier, ratio, tStat := evalCandidate(prevLoadsKWH, prevTempsC)
+			detectedBy := string(period)
+			prevSamples := len(prevLoadsKWH)
+
+			if !isOutlier && wd == time.Sunday {
+				if ok, rTF, tTF := evalCandidate(sunTFLoadsKWH, sunTFTempsC); ok {
+					isOutlier = true
+					ratio = rTF
+					tStat = tTF
+					detectedBy = string(period) + "VsThuFri"
+					prevSamples = len(sunTFLoadsKWH)
+				}
 			}
-		}
 
-		if isOutlier {
-			outliers[wd] = true
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"detected day-of-week outlier load surge",
-				slog.String("weekday", wd.String()),
-				slog.String("detectedBy", detectedBy),
-				slog.Float64("surgeRatio", ratio),
-				slog.Float64("tStat", tStat),
-				slog.Int("targetSamples", len(targetMorn)),
-				slog.Int("precedingSamples", prevSamples),
-			)
+			if isOutlier {
+				flags := outliers[wd]
+				switch period {
+				case outlierPeriodMorning:
+					flags.Morning = true
+				case outlierPeriodAfternoon:
+					flags.Afternoon = true
+				case outlierPeriodEvening:
+					flags.Evening = true
+				case outlierPeriodWaking:
+					flags.Waking = true
+				case outlierPeriodWholeDay:
+					flags.WholeDay = true
+				}
+				outliers[wd] = flags
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"detected day-of-week outlier load surge",
+					slog.String("weekday", wd.String()),
+					slog.String("period", string(period)),
+					slog.String("detectedBy", detectedBy),
+					slog.Float64("surgeRatio", ratio),
+					slog.Float64("tStat", tStat),
+					slog.Int("targetSamples", len(targetLoadsKWH)),
+					slog.Int("precedingSamples", prevSamples),
+					slog.Any("flags", flags),
+				)
+			}
 		}
 	}
 
@@ -1341,8 +1461,9 @@ func getMean(vals []float64) float64 {
 //     against 8-10 preceding weekday occurrences (e.g. comparing Saturdays to Thursdays and Fridays). Welch's t-test
 //     handles differing sample counts without bias.
 //  3. Noise Filter vs Simple Ratio: Checking only a ratio (e.g. mean_a / mean_b >= 1.25) is susceptible to false positives
-//     when sample sizes are small or when a single high-power appliance cycle skews a small sample. Requiring t >= 1.70
-//     (approx. p <= 0.05 one-tailed significance) ensures the surge represents a statistically genuine, repeatable routine.
+//     when sample sizes are small or when a single high-power appliance cycle skews a small sample. Requiring t >= 2.30-2.50
+//     (multiple-testing-adjusted one-tailed significance across weekdays and time periods) ensures the surge represents a
+//     statistically genuine, repeatable routine.
 func calculateWelchT(a, b []float64) float64 {
 	if len(a) < 2 || len(b) < 2 {
 		return 0.0
@@ -2157,7 +2278,7 @@ func applyOutlierDayCalmMorningDampening(
 	dayMap map[string]*dayPoints,
 	validDaysMap map[string]bool,
 	historicalVacationDays map[string]bool,
-	dayOfWeekOutliers map[time.Weekday]bool,
+	dayOfWeekOutliers map[time.Weekday]weekdayOutlierPeriods,
 	ignoredOutlierHours map[dayHourKey]bool,
 	weatherByHour map[time.Time]float64,
 	standbyLoad float64,
@@ -2166,7 +2287,7 @@ func applyOutlierDayCalmMorningDampening(
 	// Only evaluate from 09:00 onward (ensuring at least 2 completed hours in [07:00, 09:00))
 	// and only on weekdays where historical loads qualified for a same-weekday boost.
 	nowLocal := now.In(loc)
-	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()] {
+	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()].any() {
 		return
 	}
 	todayPts := dayMap[todayStr]
@@ -2182,7 +2303,7 @@ func applyOutlierDayCalmMorningDampening(
 		if pt.HomeKWH <= 0.0 {
 			continue
 		}
-		hr := pt.TSHourStart.Hour()
+		hr := pt.TSHourStart.In(loc).Hour()
 		if hr >= 7 && hr < endMornHr && !ignoredOutlierHours[dayHourKey{date: todayStr, hour: hr}] {
 			obsByHr[hr] = pt.HomeKWH
 		}
@@ -2261,7 +2382,7 @@ func applyOutlierDayCalmMorningDampening(
 				if pt.HomeKWH <= 0.0 {
 					continue
 				}
-				hpLocalHour := pt.TSHourStart.Hour()
+				hpLocalHour := pt.TSHourStart.In(loc).Hour()
 				if hpLocalHour == h {
 					addPt(pt, d.date, hpLocalHour, 1.0)
 				} else if hpLocalHour == prevHr && h > 0 {
@@ -2277,7 +2398,7 @@ func applyOutlierDayCalmMorningDampening(
 				if !historicalVacationDays[prevDateStr] {
 					if prevDay := dayMap[prevDateStr]; prevDay != nil {
 						for _, pt := range prevDay.points {
-							if pt.HomeKWH > 0.0 && pt.TSHourStart.Hour() == 23 {
+							if pt.HomeKWH > 0.0 && pt.TSHourStart.In(loc).Hour() == 23 {
 								addPt(pt, prevDay.date, 23, neighborMult(23, pt.HomeKWH))
 							}
 						}
@@ -2289,7 +2410,7 @@ func applyOutlierDayCalmMorningDampening(
 				if nextDateStr != todayStr && !historicalVacationDays[nextDateStr] {
 					if nextDay := dayMap[nextDateStr]; nextDay != nil {
 						for _, pt := range nextDay.points {
-							if pt.HomeKWH > 0.0 && pt.TSHourStart.Hour() == 0 {
+							if pt.HomeKWH > 0.0 && pt.TSHourStart.In(loc).Hour() == 0 {
 								addPt(pt, nextDay.date, 0, neighborMult(0, pt.HomeKWH))
 							}
 						}
