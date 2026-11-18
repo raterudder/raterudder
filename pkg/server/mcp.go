@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -189,6 +192,70 @@ func mcpSiteID(ctx context.Context) string {
 	return siteID
 }
 
+func isMCPBrowserNavigation(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	// Requests carrying explicit API/MCP credentials or protocol headers are programmatic MCP calls.
+	if r.Header.Get("Authorization") != "" ||
+		r.Header.Get("MCP-Protocol-Version") != "" ||
+		r.Header.Get("Mcp-Method") != "" ||
+		r.Header.Get("Mcp-Name") != "" ||
+		r.Header.Get("MCP-Session-Id") != "" {
+		return false
+	}
+
+	secFetchMode := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Mode")))
+	secFetchDest := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
+	return secFetchMode == "navigate" || secFetchDest == "document"
+}
+
+func (s *Server) mcpRouteHandler() http.Handler {
+	authedMCP := s.authMiddleware(http.HandlerFunc(s.handleMCP))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isMCPBrowserNavigation(r) {
+			s.handleMCPHelpPage(w, r)
+			return
+		}
+		authedMCP.ServeHTTP(w, r)
+	})
+}
+
+//go:embed mcp_help.html
+var mcpHelpHTML string
+
+var mcpHelpTemplate = template.Must(template.New("mcp_help").Parse(mcpHelpHTML))
+
+func (s *Server) handleMCPHelpPage(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	if err := mcpHelpTemplate.Execute(&buf, struct {
+		EndpointURL string
+		Tools       []*mcp.Tool
+	}{
+		EndpointURL: requestBaseURL(r) + "/mcp",
+		Tools:       s.getMCPTools(),
+	}); err != nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to render mcp help page", slog.Any("error", err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Add("Vary", "Sec-Fetch-Mode")
+	w.Header().Add("Vary", "Sec-Fetch-Dest")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
 // handleMCP implements the Remote MCP Streamable HTTP endpoint (primary spec version 2026-07-28,
 // with a stateless 2025-11-25 backwards-compatibility shim) by delegating to the go-sdk
 // stateless JSON streamable HTTP handler.
@@ -242,11 +309,59 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) getMCPServer() *mcp.Server {
+	s.mcpServerOnce.Do(func() {
+		s.mcpServer = s.newMCPServer()
+	})
+	return s.mcpServer
+}
+
+func (s *Server) getMCPTools() []*mcp.Tool {
+	s.mcpToolsOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		tools, err := s.listMCPTools(ctx)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to list mcp tools for help page", slog.Any("error", err))
+			return
+		}
+		s.mcpTools = tools
+	})
+	return s.mcpTools
+}
+
+func (s *Server) listMCPTools(ctx context.Context) ([]*mcp.Tool, error) {
+	srv := s.getMCPServer()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer serverSession.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "raterudder-help",
+		Version: common.Version(),
+	}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer clientSession.Close()
+
+	res, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return res.Tools, nil
+}
+
 // getMCPHTTPHandler builds the SDK server and stateless streamable HTTP handler once so tool
 // registration and JSON schema reflection don't happen per request.
 func (s *Server) getMCPHTTPHandler() http.Handler {
 	s.mcpHandlerOnce.Do(func() {
-		srv := s.newMCPServer()
+		srv := s.getMCPServer()
 		s.mcpHandler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
 			Stateless:                    true,
 			JSONResponse:                 true,

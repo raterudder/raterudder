@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<title>RateRudder MCP Server</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    padding: 1.5rem;
+    background: #0f131a;
+    color: #f1f5f9;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  main {
+    max-width: 680px;
+  }
+  h1 {
+    margin: 0 0 0.75rem;
+    font-size: 1.5rem;
+  }
+  h2 {
+    margin: 1.5rem 0 0.5rem;
+    font-size: 1.1rem;
+  }
+  p, li { color: #cbd5e1; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.9em;
+    color: #38bdf8;
+  }
+  .endpoint {
+    display: inline-block;
+    padding: 0.35rem 0.6rem;
+    background: #161b26;
+    border: 1px solid #334155;
+    word-break: break-all;
+  }
+  ul, ol { padding-left: 1.35rem; }
+  li { margin-bottom: 0.6rem; }
+  .links {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 1.25rem;
+  }
+  a {
+    color: #38bdf8;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>RateRudder MCP Server</h1>
+  <p>This address is an <strong>MCP (Model Context Protocol)</strong> endpoint for AI assistants, not a web page to open directly in your browser.</p>
+  <p><code class="endpoint">{{.EndpointURL}}</code></p>
+
+  <h2>How to Connect</h2>
+  <ol>
+    <li>Copy the MCP server URL above.</li>
+    <li>Add it as a custom connector or remote MCP server in an MCP-compatible AI assistant (such as Claude or ChatGPT).</li>
+    <li>Sign in to RateRudder and approve read-only access to your site when prompted.</li>
+  </ol>
+  <p>If your assistant requires a static Bearer API key instead of OAuth, you can create one under <strong>Settings &rarr; Connected Apps</strong>.</p>
+
+  {{if .Tools}}
+  <h2>Available Tools</h2>
+  <ul>
+    {{range .Tools}}
+    <li>
+      <code>{{.Name}}</code>{{if .Title}} (<strong>{{.Title}}</strong>){{end}}{{if .Description}} &mdash; {{.Description}}{{end}}
+    </li>
+    {{end}}
+  </ul>
+  {{end}}
+
+  <p class="links">
+    <a href="/settings">Open Settings</a>
+    <a href="/">Back to RateRudder</a>
+  </p>
+</main>
+</body>
+</html>

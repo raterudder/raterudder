@@ -20,6 +20,7 @@ import (
 	"github.com/NYTimes/gziphandler"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/levenlabs/go-lflag"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
@@ -106,8 +107,14 @@ type Server struct {
 	featsUpdatedAt time.Time
 	featsFetchedAt time.Time
 
+	mcpServerOnce sync.Once
+	mcpServer     *mcp.Server
+
 	mcpHandlerOnce sync.Once
 	mcpHandler     http.Handler
+
+	mcpToolsOnce sync.Once
+	mcpTools     []*mcp.Tool
 }
 
 // Configured initializes the Server with dependencies.
@@ -391,7 +398,7 @@ func (s *Server) setupHandler() http.Handler {
 	mux.Handle("/mcp", http.MaxBytesHandler(
 		s.rateLimitMiddleware(
 			common.CtxFromRequestMiddleware(
-				s.publicOAuthAndMCPCORSMiddleware("POST, OPTIONS", s.authMiddleware(http.HandlerFunc(s.handleMCP))),
+				s.publicOAuthAndMCPCORSMiddleware("POST, OPTIONS", s.mcpRouteHandler()),
 			),
 		),
 		1048576,

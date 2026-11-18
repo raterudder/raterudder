@@ -1225,4 +1225,87 @@ func TestHandleMCP(t *testing.T) {
 		assert.NotContains(t, rawLegacyCall.Result, "resultType")
 		assert.Equal(t, true, rawLegacyCall.Result["isError"])
 	})
+
+	t.Run("BrowserHelpPage", func(t *testing.T) {
+		_, handler, rawToken, _ := setupMCPTestServer(t)
+
+		t.Run("SecFetchNavigate", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Sec-Fetch-Dest", "document")
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
+			assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+			assert.Equal(t, "noindex, nofollow, noarchive, nosnippet", w.Header().Get("X-Robots-Tag"))
+			body := w.Body.String()
+			assert.Contains(t, body, "RateRudder MCP Server")
+			assert.Contains(t, body, "https://raterudder.example.com/mcp")
+			assert.Contains(t, body, "get_energy_summary")
+			assert.Contains(t, body, "Get Energy Summary")
+			assert.Contains(t, body, "get_recent_savings")
+			assert.Contains(t, body, "Get Recent Savings")
+			assert.Contains(t, body, "get_daily_history")
+			assert.Contains(t, body, "Get Daily History")
+			assert.Contains(t, body, `href="/settings"`)
+		})
+
+		t.Run("AcceptHTMLWithoutSecFetchGets401", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+		})
+
+		t.Run("HeadRequest", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodHead, "https://raterudder.example.com/mcp", nil)
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Sec-Fetch-Dest", "document")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
+			assert.Empty(t, w.Body.String())
+		})
+
+		t.Run("CORSFetchClientGets401", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req.Header.Set("Origin", "https://claude.ai")
+			req.Header.Set("Sec-Fetch-Mode", "cors")
+			req.Header.Set("Sec-Fetch-Dest", "empty")
+			req.Header.Set("Accept", "*/*")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+		})
+
+		t.Run("AuthenticatedGetStillReturns405", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req.Header.Set("Authorization", "Bearer "+rawToken)
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+		})
+
+		t.Run("PostWithSecFetchNavigateStillReturns401", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://raterudder.example.com/mcp", strings.NewReader(`{}`))
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Accept", "text/html")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+	})
 }
