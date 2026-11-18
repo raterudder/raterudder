@@ -19,8 +19,20 @@ interface ChangelogMonth {
 const changelogMonths: ChangelogMonth[] = [
     {
         month: "November 2026",
-        badge: "Multi-Model Ensemble Solar Forecasting",
+        badge: "Connected Apps, MCP & Multi-Model Forecasting",
         entries: [
+            {
+                category: "integrations",
+                categoryLabel: "Connected Apps & MCP",
+                title: "Remote MCP Server, OAuth Connections & Agent Summary API",
+                description: "You can connect MCP-compatible AI assistants (such as Claude or ChatGPT) via OAuth or manage revocable read-only API keys. Assistants can query live site telemetry, solar forecasts, 24-hour plans, recent savings, and daily history through the /mcp endpoint or the read-only summary URL."
+            },
+            {
+                category: "forecasting",
+                categoryLabel: "Load Forecasting",
+                title: "Multi-Window Day-of-Week Outlier Improvements",
+                description: "Expanded day-of-week usage detection to look at afternoons, evenings, waking hours, and full days separately, so recurring routines like afternoon laundry or busy evenings aren't pulled down by quieter weekdays."
+            },
             {
                 category: "forecasting",
                 categoryLabel: "Solar Forecasting",
