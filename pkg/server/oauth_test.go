@@ -448,6 +448,107 @@ func TestHandleOAuthClientInfo(t *testing.T) {
 		assert.Equal(t, 2, fetchCount)
 	})
 
+	t.Run("CIMDAllowsEphemeralLoopbackPort", func(t *testing.T) {
+		cimdURL := "https://claude.ai/oauth/claude-code-client-metadata"
+		srv.cimdHTTPClient = newMockCIMDHTTPClient(func(r *http.Request) (*http.Response, error) {
+			assert.Equal(t, cimdURL, r.URL.String())
+			body := `{
+				"client_id": "https://claude.ai/oauth/claude-code-client-metadata",
+				"client_name": "Claude Code",
+				"redirect_uris": ["http://localhost/callback", "http://127.0.0.1/callback"],
+				"grant_types": ["authorization_code", "refresh_token"],
+				"response_types": ["code"],
+				"token_endpoint_auth_method": "none"
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})
+
+		doClientReq := func(redirect string) *httptest.ResponseRecorder {
+			q := url.Values{
+				"client_id":             {cimdURL},
+				"redirect_uri":          {redirect},
+				"response_type":         {"code"},
+				"code_challenge":        {codeChallenge},
+				"code_challenge_method": {"S256"},
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+q.Encode(), nil)
+			req.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			return w
+		}
+
+		wLocalhost := doClientReq("http://localhost:56498/callback")
+		require.Equal(t, http.StatusOK, wLocalhost.Code)
+		var info struct {
+			ClientName   string `json:"clientName"`
+			RedirectURI  string `json:"redirectURI"`
+			ClientDomain string `json:"clientDomain"`
+			Verified     bool   `json:"verified"`
+		}
+		require.NoError(t, json.NewDecoder(wLocalhost.Body).Decode(&info))
+		assert.Equal(t, "Claude Code", info.ClientName)
+		assert.Equal(t, "http://localhost:56498/callback", info.RedirectURI)
+		assert.Equal(t, "claude.ai", info.ClientDomain)
+		assert.True(t, info.Verified)
+
+		wIPv4 := doClientReq("http://127.0.0.1:49152/callback")
+		assert.Equal(t, http.StatusOK, wIPv4.Code)
+
+		wIPv6 := doClientReq("http://[::1]:56498/callback")
+		assert.Equal(t, http.StatusBadRequest, wIPv6.Code)
+
+		wBadPath := doClientReq("http://localhost:56498/other")
+		assert.Equal(t, http.StatusBadRequest, wBadPath.Code)
+
+		wBadQuery := doClientReq("http://localhost:56498/callback?extra=1")
+		assert.Equal(t, http.StatusBadRequest, wBadQuery.Code)
+
+		wBadPort := doClientReq("http://localhost:0/callback")
+		assert.Equal(t, http.StatusBadRequest, wBadPort.Code)
+	})
+
+	t.Run("CIMDLoopbackPortRulesRespectIPv6AndHTTPS", func(t *testing.T) {
+		cimdURL := "https://loopback-test.example.com/oauth/client.json"
+		srv.cimdHTTPClient = newMockCIMDHTTPClient(func(r *http.Request) (*http.Response, error) {
+			body := `{
+				"client_id": "https://loopback-test.example.com/oauth/client.json",
+				"client_name": "Loopback Test",
+				"redirect_uris": ["http://[::1]/callback", "https://localhost/callback"]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})
+
+		doClientReq := func(redirect string) *httptest.ResponseRecorder {
+			q := url.Values{
+				"client_id":             {cimdURL},
+				"redirect_uri":          {redirect},
+				"response_type":         {"code"},
+				"code_challenge":        {codeChallenge},
+				"code_challenge_method": {"S256"},
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+q.Encode(), nil)
+			req.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			return w
+		}
+
+		wIPv6 := doClientReq("http://[::1]:54321/callback")
+		assert.Equal(t, http.StatusOK, wIPv6.Code)
+
+		wHTTPSPort := doClientReq("https://localhost:8443/callback")
+		assert.Equal(t, http.StatusBadRequest, wHTTPSPort.Code)
+	})
+
 	t.Run("CIMDRejectsInvalidMetadata", func(t *testing.T) {
 		makeQuery := func(cid string) string {
 			return url.Values{
@@ -755,6 +856,79 @@ func TestHandleOAuthApprove(t *testing.T) {
 		handler.ServeHTTP(wApprove, reqApprove)
 		require.Equal(t, http.StatusOK, wApprove.Code)
 		assert.Equal(t, 1, fetchCount)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("ApprovesCIMDClientWithEphemeralLoopbackPort", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		handler := srv.setupHandler()
+
+		cimdURL := "https://claude.ai/oauth/claude-code-approve-test"
+		srv.cimdHTTPClient = newMockCIMDHTTPClient(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`{
+					"client_id": "https://claude.ai/oauth/claude-code-approve-test",
+					"client_name": "Claude Code",
+					"redirect_uris": ["http://localhost/callback", "http://127.0.0.1/callback"]
+				}`)),
+				Header: http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})
+
+		sessionToken, err := srv.createSessionToken("user-1", "user1@example.com", "sec-1", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:            "user-1",
+			Email:         "user1@example.com",
+			SessionSecret: "sec-1",
+			Sites:         []types.UserSite{{ID: "site-1", Name: "Home"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "user-1"}},
+		}, nil).Once()
+
+		codeChallenge := computePKCES256Challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk-valid-pkce-verifier")
+		mockS.On("AddUserApp", mock.Anything, "user-1", mock.MatchedBy(func(app types.UserApp) bool {
+			return app.Name == "Claude Code" &&
+				app.ClientDomain == "claude.ai" &&
+				app.Type == types.AppTypeOAuth &&
+				app.SiteID == "site-1" &&
+				app.PendingCodeHash != "" &&
+				app.CodeChallenge == codeChallenge &&
+				app.RedirectURI == "http://localhost:56498/callback"
+		})).Return(nil).Once()
+
+		approvePayload, err := json.Marshal(map[string]string{
+			"siteID":              "site-1",
+			"clientID":            cimdURL,
+			"redirectURI":         "http://localhost:56498/callback",
+			"responseType":        "code",
+			"codeChallenge":       codeChallenge,
+			"codeChallengeMethod": "S256",
+			"state":               "loopback-state",
+		})
+		require.NoError(t, err)
+
+		reqApprove := httptest.NewRequest(http.MethodPost, "/api/oauth/approve", bytes.NewReader(approvePayload))
+		reqApprove.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wApprove := httptest.NewRecorder()
+		handler.ServeHTTP(wApprove, reqApprove)
+		require.Equal(t, http.StatusOK, wApprove.Code)
+
+		var approveRes struct {
+			RedirectURL string `json:"redirectURL"`
+		}
+		require.NoError(t, json.NewDecoder(wApprove.Body).Decode(&approveRes))
+		parsedRedirect, err := url.Parse(approveRes.RedirectURL)
+		require.NoError(t, err)
+		assert.Equal(t, "http", parsedRedirect.Scheme)
+		assert.Equal(t, "localhost:56498", parsedRedirect.Host)
+		assert.Equal(t, "/callback", parsedRedirect.Path)
+		assert.Equal(t, "loopback-state", parsedRedirect.Query().Get("state"))
 		mockS.AssertExpectations(t)
 	})
 
@@ -1201,6 +1375,88 @@ func TestHandleOAuthToken(t *testing.T) {
 		wReplay := httptest.NewRecorder()
 		handler.ServeHTTP(wReplay, reqReplay)
 		assert.Equal(t, http.StatusBadRequest, wReplay.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("ExchangesDCRCodeWithEphemeralLoopbackPortAndRejectsPortMismatch", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		handler := srv.setupHandler()
+
+		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
+			Name:         "CLI App",
+			RedirectURIs: []string{"http://localhost/callback"},
+			CreatedAt:    now.Unix(),
+		})
+		require.NoError(t, err)
+
+		rawSecret := "secret-loopback-1"
+		authCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
+			UserID:    "user-1",
+			SiteID:    "site-1",
+			AppID:     "app-loopback-1",
+			Secret:    rawSecret,
+			ExpiresAt: now.Add(oauthCodeDuration).Unix(),
+		})
+		require.NoError(t, err)
+
+		pendingApp := types.UserApp{
+			ID:               "app-loopback-1",
+			Name:             "CLI App",
+			Type:             types.AppTypeOAuth,
+			SiteID:           "site-1",
+			TSCreated:        now,
+			PendingCodeHash:  computePendingCodeHash(rawSecret, clientID),
+			PendingExpiresAt: now.Add(oauthCodeDuration),
+			CodeChallenge:    codeChallenge,
+			RedirectURI:      "http://localhost:56498/callback",
+		}
+		storedUser := types.User{
+			ID:    "user-1",
+			Email: "user1@example.com",
+			Sites: []types.UserSite{{ID: "site-1", Name: "Home"}},
+			Apps:  []types.UserApp{pendingApp},
+		}
+
+		// Token request with wrong loopback port must fail even though DCR allows any loopback port
+		mockS.On("GetUser", mock.Anything, "user-1").Return(storedUser, nil).Once()
+		mockS.On("RemoveUserApp", mock.Anything, "user-1", "site-1", "app-loopback-1").Return(nil).Once()
+
+		mismatchForm := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {authCode},
+			"code_verifier": {codeVerifier},
+			"redirect_uri":  {"http://localhost:12345/callback"},
+			"client_id":     {clientID},
+		}
+		reqMismatch := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(mismatchForm.Encode()))
+		reqMismatch.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		wMismatch := httptest.NewRecorder()
+		handler.ServeHTTP(wMismatch, reqMismatch)
+		assert.Equal(t, http.StatusBadRequest, wMismatch.Code)
+		mockS.AssertExpectations(t)
+
+		// Token request with the exact authorized loopback port succeeds
+		expectedHash := pendingApp.PendingCodeHash
+		mockS.On("GetUser", mock.Anything, "user-1").Return(storedUser, nil).Once()
+		mockS.On("ReplaceUserApp", mock.Anything, "user-1", mock.MatchedBy(func(app types.UserApp) bool {
+			return app.ID == "app-loopback-1" && app.TokenHash != "" && app.PendingCodeHash == ""
+		}), storage.ReplaceUserAppOptions{
+			ExpectedPendingCodeHash: &expectedHash,
+		}).Return(nil).Once()
+
+		validForm := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {authCode},
+			"code_verifier": {codeVerifier},
+			"redirect_uri":  {"http://localhost:56498/callback"},
+			"client_id":     {clientID},
+		}
+		reqValid := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(validForm.Encode()))
+		reqValid.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		wValid := httptest.NewRecorder()
+		handler.ServeHTTP(wValid, reqValid)
+		require.Equal(t, http.StatusOK, wValid.Code)
 		mockS.AssertExpectations(t)
 	})
 

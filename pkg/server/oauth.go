@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -325,6 +326,15 @@ func validateRedirectURI(rawURI string) (string, error) {
 	hostname := strings.ToLower(u.Hostname())
 	if hostname == "" {
 		return "", errors.New("redirect_uri must include a valid host")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("redirect_uri has invalid port")
+	}
+	if portStr := u.Port(); portStr != "" {
+		portNum, err := strconv.Atoi(portStr)
+		if err != nil || portNum < 1 || portNum > 65535 {
+			return "", errors.New("redirect_uri has invalid port")
+		}
 	}
 
 	switch u.Scheme {
@@ -761,6 +771,51 @@ func normalizedOrigin(rawURI string) string {
 	return scheme + "://" + host
 }
 
+// singleRedirectURIMatches checks exact equality first, and per RFC 8252 § 7.3
+// allows any port for http loopback redirect URIs (localhost, 127.0.0.1, ::1) while
+// requiring scheme, host, path, and query to match.
+func singleRedirectURIMatches(registeredURI, requestedURI string) bool {
+	if registeredURI == requestedURI {
+		return true
+	}
+	regURL, err := url.Parse(registeredURI)
+	if err != nil {
+		return false
+	}
+	reqURL, err := url.Parse(requestedURI)
+	if err != nil {
+		return false
+	}
+	if regURL.Scheme != "http" || reqURL.Scheme != "http" {
+		return false
+	}
+	regHost := strings.ToLower(regURL.Hostname())
+	reqHost := strings.ToLower(reqURL.Hostname())
+	if regHost != reqHost {
+		return false
+	}
+	if regHost != "localhost" && regHost != "127.0.0.1" && regHost != "::1" {
+		return false
+	}
+	if strings.Contains(regHost, ":") {
+		regURL.Host = "[" + regHost + "]"
+	} else {
+		regURL.Host = regHost
+	}
+	reqURL.Host = regURL.Host
+	return regURL.String() == reqURL.String()
+}
+
+func redirectURIMatches(ctx context.Context, registeredURIs []string, requestedURI string) bool {
+	for _, registeredURI := range registeredURIs {
+		if singleRedirectURIMatches(registeredURI, requestedURI) {
+			return true
+		}
+	}
+	log.Ctx(ctx).DebugContext(ctx, "oauth redirect_uri did not match registered client", slog.String("redirectURI", truncateLogString(requestedURI, 256)), slog.Any("registeredRedirectURIs", registeredURIs))
+	return false
+}
+
 func (s *Server) validateOAuthAuthorizeParams(ctx context.Context, clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod string) (*resolvedOAuthClient, error) {
 	if clientID == "" {
 		return nil, errors.New("client_id is required")
@@ -789,7 +844,7 @@ func (s *Server) validateOAuthAuthorizeParams(ctx context.Context, clientID, red
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(client.RedirectURIs, redirectURI) {
+	if !redirectURIMatches(ctx, client.RedirectURIs, redirectURI) {
 		return nil, errors.New("redirect_uri does not match registered client")
 	}
 	if client.Verified && client.ClientDomain != "" {
@@ -1188,7 +1243,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_client", "invalid client_id")
 			return
 		}
-		if !slices.Contains(clientData.RedirectURIs, redirectURI) {
+		if !redirectURIMatches(ctx, clientData.RedirectURIs, redirectURI) {
 			cleanupEarly()
 			log.Ctx(ctx).WarnContext(ctx, "oauth token rejected: redirect_uri does not match dcr client_id", slog.String("userID", codeData.UserID), slog.String("appID", codeData.AppID), slog.String("redirectURI", truncateLogString(redirectURI, 256)))
 			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match client_id")
