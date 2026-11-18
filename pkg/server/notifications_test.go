@@ -4059,6 +4059,85 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("SuppressedForWeekdayTOULastPeakHourAfterWeekend", func(t *testing.T) {
+		eastLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		// Tuesday 2026-11-17 at 7:03 PM EST (the final hour of 12 PM - 8 PM weekday On-Peak)
+		nowTueEvening := time.Date(2026, 11, 17, 19, 3, 0, 0, eastLoc)
+		curHourStart := time.Date(2026, 11, 17, 19, 0, 0, 0, eastLoc)
+		nextHourStart := curHourStart.Add(time.Hour) // 8:00 PM Off-Peak
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowTueEvening)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+
+		// Build 8 days of TOU history:
+		// Weekdays 12:00-20:00 = $0.30/kWh, other hours & all weekend (Sat/Sun) = $0.21/kWh.
+		todayStart := time.Date(2026, 11, 17, 0, 0, 0, 0, eastLoc)
+		var allStoredPrices []types.Price
+		for d := 8; d >= 0; d-- {
+			dayStart := todayStart.AddDate(0, 0, -d)
+			isWeekend := dayStart.Weekday() == time.Saturday || dayStart.Weekday() == time.Sunday
+			for hr := 0; hr < 24; hr++ {
+				st := dayStart.Add(time.Duration(hr) * time.Hour)
+				rate := 0.20754
+				if !isWeekend && hr >= 12 && hr < 20 {
+					rate = 0.29982
+				}
+				allStoredPrices = append(allStoredPrices, types.Price{
+					Provider:      "tou",
+					TSStart:       st,
+					TSEnd:         st.Add(time.Hour),
+					DollarsPerKWH: rate,
+				})
+			}
+		}
+
+		expectedStartHist := todayStart.AddDate(0, 0, -7).UTC()
+		expectedEndHist := nowTueEvening.UTC()
+
+		var filteredPrices []types.Price
+		for _, p := range allStoredPrices {
+			if !p.TSStart.Before(expectedStartHist) && p.TSStart.Before(expectedEndHist) {
+				filteredPrices = append(filteredPrices, p)
+			}
+		}
+		mockS.On("GetPriceHistory", mock.Anything, siteID, expectedStartHist, expectedEndHist).Return(filteredPrices, nil).Once()
+
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:    nowTueEvening,
+				TimeLocation: "America/New_York",
+				BatterySOC:   35.0,
+			},
+			currentPrice: types.Price{
+				Provider:      "tou",
+				TSStart:       curHourStart,
+				TSEnd:         nextHourStart,
+				DollarsPerKWH: 0.29982,
+			},
+			futurePrices: []types.Price{
+				{
+					Provider:      "tou",
+					TSStart:       nextHourStart,
+					TSEnd:         nextHourStart.Add(time.Hour),
+					DollarsPerKWH: 0.20754,
+				},
+			},
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowTueEvening)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowTueEvening, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleSolarUnderproductionNotifications(t *testing.T) {

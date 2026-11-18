@@ -1076,8 +1076,9 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 	}
 
 	now := s.now()
-	fiveDaysAgo := now.AddDate(0, 0, -5)
-	syncStart := truncateDay(fiveDaysAgo)
+	// Backfill 8 days (7 full local days plus 1-day buffer for UTC vs. local timezone offsets)
+	eightDaysAgo := now.AddDate(0, 0, -8)
+	syncStart := truncateDay(eightDaysAgo)
 
 	if !lastPriceTime.IsZero() && lastVersion >= types.CurrentPriceHistoryVersion && lastPriceTime.After(syncStart) {
 		syncStart = lastPriceTime.Truncate(time.Hour)

@@ -2217,7 +2217,7 @@ func (m *RecordingMockStorage) InsertAction(ctx context.Context, action types.Ac
 func TestUpdateSitePrices(t *testing.T) {
 	t.Run("Backfill - No History", func(t *testing.T) {
 		mockU := &mockUtility{}
-		// Expect GetConfirmedPrices to be called for ~5 days
+		// Expect GetConfirmedPrices to be called for ~8 days
 		var startTime time.Time
 		var endTime time.Time
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -2243,10 +2243,10 @@ func TestUpdateSitePrices(t *testing.T) {
 		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
-		// Verify that it started from 5 days ago
+		// Verify that it started from 8 days ago
 		now := time.Now()
-		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		eightDaysAgo := now.AddDate(0, 0, -8)
+		expectedStart := time.Date(eightDaysAgo.Year(), eightDaysAgo.Month(), eightDaysAgo.Day(), 0, 0, 0, 0, eightDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
 
 		expectedEnd := now.Add(12 * time.Hour)
@@ -2344,10 +2344,10 @@ func TestUpdateSitePrices(t *testing.T) {
 		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
-		// Should have triggered backfill from 5 days ago, not 1 hour ago
+		// Should have triggered backfill from 8 days ago, not 1 hour ago
 		now := time.Now()
-		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		eightDaysAgo := now.AddDate(0, 0, -8)
+		expectedStart := time.Date(eightDaysAgo.Year(), eightDaysAgo.Month(), eightDaysAgo.Day(), 0, 0, 0, 0, eightDaysAgo.Location())
 
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
 		expectedEnd := now.Add(12 * time.Hour)

@@ -978,8 +978,8 @@ func computeTimeOfDayWindowRefPrice(histPrices []types.Price, targetTime time.Ti
 
 	medianExtreme := computePricePercentile(dailyExtremes, 0.50)
 	// Only cap at yesterday's extreme for dips: if prices are negative/low for multiple days in a row,
-	// we don't want to nag on Day 2 before the 5-day median catches up. For spikes, we intentionally use
-	// the 5-day median so a single spike yesterday (e.g. Day 1 of a heatwave) doesn't mask a real spike today.
+	// we don't want to nag on Day 2 before the 7-day median catches up. For spikes, we intentionally use
+	// the 7-day median so a single spike yesterday (e.g. Day 1 of a heatwave) doesn't mask a real spike today.
 	if isDip && hasYesterday && yesterdayExtreme < medianExtreme {
 		return yesterdayExtreme
 	}
@@ -2133,18 +2133,33 @@ func (s *Server) handlePriceSpikeNotifications(
 
 	// Determine site location / timezone for day-of-week and hour-of-day evaluations
 	var siteLoc *time.Location
-	if !data.currentPrice.TSStart.IsZero() {
-		siteLoc = data.currentPrice.TSStart.Location()
-	} else if len(data.futurePrices) > 0 && !data.futurePrices[0].TSStart.IsZero() {
-		siteLoc = data.futurePrices[0].TSStart.Location()
-	} else if !nowLocal.IsZero() {
-		siteLoc = nowLocal.Location()
+	if data.status.TimeLocation != "" {
+		if loc, err := time.LoadLocation(data.status.TimeLocation); err == nil {
+			siteLoc = loc
+		}
+	}
+	if siteLoc == nil {
+		if !data.currentPrice.TSStart.IsZero() {
+			siteLoc = data.currentPrice.TSStart.Location()
+		} else if len(data.futurePrices) > 0 && !data.futurePrices[0].TSStart.IsZero() {
+			siteLoc = data.futurePrices[0].TSStart.Location()
+		} else if !nowLocal.IsZero() {
+			siteLoc = nowLocal.Location()
+		}
+	}
+	if (siteLoc == nil || siteLoc == time.UTC || siteLoc.String() == "" || siteLoc.String() == "UTC") &&
+		data.settings.Location != nil && data.settings.Location.TimeZone != "" {
+		if loc, err := time.LoadLocation(data.settings.Location.TimeZone); err == nil {
+			siteLoc = loc
+		}
 	}
 	if siteLoc == nil {
 		siteLoc = time.UTC
 	}
 	if nowLocal.IsZero() {
 		nowLocal = s.now().In(siteLoc)
+	} else {
+		nowLocal = nowLocal.In(siteLoc)
 	}
 
 	// Filter users configured to receive price spike alerts for this site who are not in a quiet period.
@@ -2171,8 +2186,10 @@ func (s *Server) handlePriceSpikeNotifications(
 		return
 	}
 
-	// Fetch up to 5 days of recent price history to establish the baseline percentile distributions
-	startHist := nowLocal.AddDate(0, 0, -5).UTC()
+	// Fetch 7 full prior local days (starting at local midnight) plus today's elapsed hours
+	// so the baseline always spans a complete week (5 weekdays + 2 weekend days) without slicing
+	// the oldest day mid-window.
+	startHist := truncateDay(nowLocal).AddDate(0, 0, -7).UTC()
 	endHist := nowLocal.UTC()
 	histPrices, err := s.storage.GetPriceHistory(ctx, siteID, startHist, endHist)
 	if err != nil {
