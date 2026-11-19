@@ -8,8 +8,10 @@ import { Switch } from '@base-ui/react/switch';
 import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
 import { Dialog } from '@base-ui/react/dialog';
+import { Collapsible } from '@base-ui/react/collapsible';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
+import { ConnectAIDialog } from '../components/ConnectAIDialog';
 import { isESSEnabled } from '../utils/enabledProviders';
 import { useFeatureFlag } from '../utils/features';
 import { areSettingsEqual } from '../utils/settingsUtils';
@@ -1092,6 +1094,8 @@ const Settings = ({
     const [copiedToken, setCopiedToken] = useState(false);
     const [copiedSummaryUrl, setCopiedSummaryUrl] = useState(false);
     const [copiedMcpUrl, setCopiedMcpUrl] = useState(false);
+    const [isConnectAIDialogOpen, setIsConnectAIDialogOpen] = useState(false);
+    const [isManualAppsOpen, setIsManualAppsOpen] = useState(false);
 
     const isAppsFeatureEnabled = useFeatureFlag('connectedApps');
     const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
@@ -1462,6 +1466,8 @@ const Settings = ({
         setCopiedSummaryUrl(false);
         setAppError(null);
         setNewAppName('');
+        setIsConnectAIDialogOpen(false);
+        setIsManualAppsOpen(false);
 
         return () => {
             active = false;
@@ -1488,14 +1494,26 @@ const Settings = ({
         };
     }, [siteID, isAppsFeatureEnabled]);
 
+    const handleCreateAppWithName = async (name: string): Promise<{ token: string; app: UserApp }> => {
+        if (!siteID) {
+            throw new Error('No site selected');
+        }
+        const trimmed = name.trim();
+        if (!trimmed) {
+            throw new Error('App name is required');
+        }
+        const res = await createApp(siteID, trimmed);
+        setApps(prev => [...prev, res.app]);
+        return res;
+    };
+
     const handleCreateApp = async () => {
         if (!siteID || !newAppName.trim()) return;
         setIsCreatingApp(true);
         setAppError(null);
         setCreatedToken(null);
         try {
-            const res = await createApp(siteID, newAppName.trim());
-            setApps(prev => [...prev, res.app]);
+            const res = await handleCreateAppWithName(newAppName);
             setCreatedToken(res.token);
             setNewAppName('');
             setCopiedToken(false);
@@ -3270,172 +3288,183 @@ const Settings = ({
                         <h3>Connected Apps</h3>
                     </div>
                     <p className="section-description" style={{ marginBottom: '1rem' }}>
-                        Manage API keys and OAuth connections that have read-only access to this site.
+                        Give AI assistants read-only access to your battery, solar, rates, and savings.
                     </p>
 
-                    <div className="mcp-endpoint-box">
-                        <div className="mcp-endpoint-label">Remote MCP Server URL</div>
-                        <div className="mcp-endpoint-hint">
-                            Paste this URL into MCP-compatible AI assistants (such as Claude or ChatGPT) to connect via OAuth.
+                    <div className="connect-ai-cta-card">
+                        <div className="connect-ai-cta-copy">
+                            <div className="connect-ai-cta-title">Connect an AI Assistant</div>
+                            <div className="connect-ai-cta-hint">
+                                Get a ready-to-paste setup prompt for Claude, ChatGPT, Antigravity, Muse, Gemini, or other agents.
+                            </div>
                         </div>
-                        <div className="mcp-endpoint-row">
-                            <code data-testid="mcp-server-url" className="mcp-endpoint-code">
-                                {`${window.location.origin}/mcp`}
-                            </code>
-                            <Button
-                                type="button"
-                                className="btn btn-secondary"
-                                onClick={() => {
-                                    void handleCopyText(`${window.location.origin}/mcp`, setCopiedMcpUrl);
-                                }}
-                            >
-                                {copiedMcpUrl ? 'Copied!' : 'Copy MCP URL'}
-                            </Button>
-                        </div>
+                        <Button
+                            type="button"
+                            className="btn btn-primary"
+                            data-testid="open-connect-ai-btn"
+                            onClick={() => setIsConnectAIDialogOpen(true)}
+                        >
+                            Connect AI &rarr;
+                        </Button>
                     </div>
 
                     {appError && <div className="error-message" style={{ marginBottom: '1rem' }}>{appError}</div>}
 
-                    {createdToken && (
-                        <div className="warning-notice" data-testid="created-app-token-banner" style={{ marginBottom: '1.25rem' }}>
-                            <div style={{ marginBottom: '0.75rem' }}>
-                                <strong>Save your new API key or summary URL now.</strong> You will only see them once and RateRudder cannot show them again. If you lose them, you will need to revoke this key and create a new one.
-                            </div>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>API Key (Bearer token):</div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                                <code
-                                    data-testid="created-app-token"
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        background: 'rgba(0,0,0,0.2)',
-                                        borderRadius: 'var(--radius-sm, 6px)',
-                                        wordBreak: 'break-all',
-                                        fontFamily: 'monospace',
-                                        fontSize: '0.85rem'
-                                    }}
-                                >
-                                    {createdToken}
-                                </code>
-                                <Button
-                                    type="button"
-                                    className="btn btn-secondary"
-                                    onClick={() => {
-                                        void handleCopyText(createdToken, setCopiedToken);
-                                    }}
-                                >
-                                    {copiedToken ? 'Copied!' : 'Copy'}
-                                </Button>
-                            </div>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>Read-Only Summary URL (for web-fetch agents):</div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <code
-                                    data-testid="created-app-summary-url"
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        background: 'rgba(0,0,0,0.2)',
-                                        borderRadius: 'var(--radius-sm, 6px)',
-                                        wordBreak: 'break-all',
-                                        fontFamily: 'monospace',
-                                        fontSize: '0.85rem'
-                                    }}
-                                >
-                                    {`${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`}
-                                </code>
-                                <Button
-                                    type="button"
-                                    className="btn btn-secondary"
-                                    onClick={() => {
-                                        const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`;
-                                        void handleCopyText(summaryUrl, setCopiedSummaryUrl);
-                                    }}
-                                >
-                                    {copiedSummaryUrl ? 'Copied!' : 'Copy URL'}
-                                </Button>
-                            </div>
-                        </div>
-                    )}
-
                     {apps.length > 0 && (
-                        <div className="connected-apps-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                            {apps.map(app => (
-                                <div
-                                    key={app.id}
-                                    data-testid={`app-row-${app.id}`}
-                                    style={{
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                        padding: '0.875rem 1rem',
-                                        background: 'var(--surface-container, rgba(255,255,255,0.03))',
-                                        border: '1px solid var(--outline-variant)',
-                                        borderRadius: 'var(--radius-md)',
-                                        gap: '1rem'
-                                    }}
-                                >
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', minWidth: 0 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                            <span style={{ fontWeight: 700, color: 'var(--on-surface)' }}>{app.name}</span>
-                                            <span
-                                                style={{
-                                                    fontSize: '0.7rem',
-                                                    fontWeight: 700,
-                                                    textTransform: 'uppercase',
-                                                    padding: '0.15rem 0.45rem',
-                                                    borderRadius: '4px',
-                                                    background: 'rgba(2, 132, 199, 0.15)',
-                                                    color: 'var(--primary)'
-                                                }}
-                                            >
-                                                {app.type === AppType.OAuth ? 'OAuth' : 'API Key'}
-                                            </span>
-                                            {app.clientDomain && (
-                                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                                    {app.clientDomain}
+                        <div className="connected-apps-group">
+                            <div className="connected-apps-group-label">Active Connections</div>
+                            <div className="connected-apps-list">
+                                {apps.map(app => (
+                                    <div
+                                        key={app.id}
+                                        data-testid={`app-row-${app.id}`}
+                                        className="connected-app-row"
+                                    >
+                                        <div className="connected-app-meta">
+                                            <div className="connected-app-header">
+                                                <span className="connected-app-name">{app.name}</span>
+                                                <span className="connected-app-badge">
+                                                    {app.type === AppType.OAuth ? 'OAuth' : 'API Key'}
+                                                </span>
+                                                {app.clientDomain && (
+                                                    <span className="connected-app-subtext">
+                                                        {app.clientDomain}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {app.tsCreated && (
+                                                <span className="connected-app-subtext">
+                                                    Added {new Date(app.tsCreated).toLocaleDateString()}
                                                 </span>
                                             )}
                                         </div>
-                                        {app.tsCreated && (
-                                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                                Added {new Date(app.tsCreated).toLocaleDateString()}
-                                            </span>
-                                        )}
+                                        <Button
+                                            type="button"
+                                            className="text-button danger"
+                                            onClick={() => handleRevokeApp(app.id)}
+                                            aria-label={`Revoke ${app.name}`}
+                                        >
+                                            Revoke
+                                        </Button>
                                     </div>
-                                    <Button
-                                        type="button"
-                                        className="text-button danger"
-                                        onClick={() => handleRevokeApp(app.id)}
-                                        aria-label={`Revoke ${app.name}`}
-                                    >
-                                        Revoke
-                                    </Button>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                        <Field.Root className="form-group compact" style={{ flex: 1, minWidth: '200px' }}>
-                            <Field.Label htmlFor="newAppName">New API Key Name</Field.Label>
-                            <Input
-                                id="newAppName"
-                                type="text"
-                                placeholder="e.g. Claude Desktop"
-                                maxLength={50}
-                                value={newAppName}
-                                onChange={(e) => setNewAppName(e.target.value)}
-                            />
-                        </Field.Root>
-                        <Button
+                    <Collapsible.Root
+                        open={isManualAppsOpen}
+                        onOpenChange={setIsManualAppsOpen}
+                        className="manual-apps-collapsible"
+                        data-testid="manual-apps-collapsible"
+                    >
+                        <Collapsible.Trigger
                             type="button"
-                            className="btn btn-secondary"
-                            disabled={isCreatingApp || !newAppName.trim()}
-                            onClick={handleCreateApp}
+                            className="manual-apps-trigger"
+                            data-testid="manual-apps-trigger"
                         >
-                            {isCreatingApp ? 'Creating...' : 'Create API Key'}
-                        </Button>
-                    </div>
+                            <span className="manual-apps-chevron" aria-hidden="true">
+                                {isManualAppsOpen ? '▾' : '▸'}
+                            </span>
+                            <span>Manual MCP URL &amp; API Keys</span>
+                        </Collapsible.Trigger>
+                        <Collapsible.Panel className="manual-apps-panel">
+                            <div className="mcp-endpoint-box">
+                                <div className="mcp-endpoint-label">Remote MCP Server URL</div>
+                                <div className="mcp-endpoint-hint">
+                                    Paste this URL into MCP-compatible AI assistants (such as Claude or ChatGPT) to connect via OAuth.
+                                </div>
+                                <div className="mcp-endpoint-row">
+                                    <code data-testid="mcp-server-url" className="mcp-endpoint-code">
+                                        {`${window.location.origin}/mcp`}
+                                    </code>
+                                    <Button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => {
+                                            void handleCopyText(`${window.location.origin}/mcp`, setCopiedMcpUrl);
+                                        }}
+                                    >
+                                        {copiedMcpUrl ? 'Copied!' : 'Copy MCP URL'}
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {createdToken && (
+                                <div className="warning-notice" data-testid="created-app-token-banner" style={{ marginBottom: '1.25rem' }}>
+                                    <div style={{ marginBottom: '0.75rem' }}>
+                                        <strong>Save your new API key or summary URL now.</strong> You will only see them once and RateRudder cannot show them again. If you lose them, you will need to revoke this key and create a new one.
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>API Key (Bearer token):</div>
+                                    <div className="mcp-endpoint-row" style={{ marginBottom: '0.75rem' }}>
+                                        <code
+                                            data-testid="created-app-token"
+                                            className="mcp-endpoint-code"
+                                        >
+                                            {createdToken}
+                                        </code>
+                                        <Button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => {
+                                                void handleCopyText(createdToken, setCopiedToken);
+                                            }}
+                                        >
+                                            {copiedToken ? 'Copied!' : 'Copy'}
+                                        </Button>
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>Read-Only Summary URL (for web-fetch agents):</div>
+                                    <div className="mcp-endpoint-row">
+                                        <code
+                                            data-testid="created-app-summary-url"
+                                            className="mcp-endpoint-code"
+                                        >
+                                            {`${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`}
+                                        </code>
+                                        <Button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => {
+                                                const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`;
+                                                void handleCopyText(summaryUrl, setCopiedSummaryUrl);
+                                            }}
+                                        >
+                                            {copiedSummaryUrl ? 'Copied!' : 'Copy URL'}
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="manual-app-create-row">
+                                <Field.Root className="form-group compact manual-app-name-field">
+                                    <Field.Label htmlFor="newAppName">New API Key Name</Field.Label>
+                                    <Input
+                                        id="newAppName"
+                                        type="text"
+                                        placeholder="e.g. Custom Script"
+                                        maxLength={50}
+                                        value={newAppName}
+                                        onChange={(e) => setNewAppName(e.target.value)}
+                                    />
+                                </Field.Root>
+                                <Button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    disabled={isCreatingApp || !newAppName.trim()}
+                                    onClick={handleCreateApp}
+                                >
+                                    {isCreatingApp ? 'Creating...' : 'Create API Key'}
+                                </Button>
+                            </div>
+                        </Collapsible.Panel>
+                    </Collapsible.Root>
+
+                    <ConnectAIDialog
+                        open={isConnectAIDialogOpen}
+                        onOpenChange={setIsConnectAIDialogOpen}
+                        apps={apps}
+                        onCreateApp={handleCreateAppWithName}
+                    />
                 </div>
             )}
 

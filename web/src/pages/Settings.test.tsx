@@ -3016,6 +3016,7 @@ describe('App & Settings', () => {
         });
 
         it('is visible when connectedApps feature flag is enabled and displays existing apps', async () => {
+            const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
@@ -3026,14 +3027,45 @@ describe('App & Settings', () => {
             ]);
 
             await navigateToSettings();
-            expect(await screen.findByTestId('connected-apps-section')).toBeInTheDocument();
-            expect(screen.getByTestId('mcp-server-url')).toHaveTextContent('/mcp');
+            const section = await screen.findByTestId('connected-apps-section');
+            expect(section).toBeInTheDocument();
+            expect(within(section).getByTestId('open-connect-ai-btn')).toBeInTheDocument();
             expect(screen.getByText('Claude')).toBeInTheDocument();
             expect(screen.getByText('claude.ai')).toBeInTheDocument();
             expect(screen.getByText('OAuth')).toBeInTheDocument();
+
+            await user.click(within(section).getByTestId('manual-apps-trigger'));
+            expect(screen.getByTestId('mcp-server-url')).toHaveTextContent('/mcp');
         });
 
-        it('supports creating an API key and revoking an app when connectedApps feature flag is enabled', async () => {
+        it('opens Connect AI dialog and adds a newly created Gemini key to connected apps', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                features: { connectedApps: true },
+            });
+            (api.fetchApps as any).mockResolvedValue([]);
+            (api.createApp as any).mockResolvedValue({
+                token: 'rr_gemini_token_456',
+                app: { id: 'app-gem', siteID: 'site1', type: 1, name: 'Gemini', tsCreated: '2026-01-02T00:00:00Z' },
+            });
+
+            await navigateToSettings();
+            const section = await screen.findByTestId('connected-apps-section');
+            await user.click(within(section).getByTestId('open-connect-ai-btn'));
+
+            const dialog = await screen.findByTestId('connect-ai-dialog');
+            await user.click(within(dialog).getByTestId('connect-ai-option-gemini'));
+            await user.click(within(dialog).getByTestId('create-gemini-key-btn'));
+
+            await waitFor(() => {
+                expect(api.createApp).toHaveBeenCalledWith('site1', 'Gemini');
+                expect(within(dialog).getByTestId('connect-ai-gemini-prompt')).toHaveTextContent('/api/agent/summary?token=rr_gemini_token_456');
+                expect(within(section).getByTestId('app-row-app-gem')).toBeInTheDocument();
+            });
+        });
+
+        it('supports creating an API key manually and revoking an app when connectedApps feature flag is enabled', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
@@ -3050,6 +3082,8 @@ describe('App & Settings', () => {
 
             const section = await screen.findByTestId('connected-apps-section');
             expect(section).toBeInTheDocument();
+
+            await user.click(within(section).getByTestId('manual-apps-trigger'));
 
             const nameInput = within(section).getByLabelText(/New API Key Name/i);
             await user.type(nameInput, 'My Agent');
