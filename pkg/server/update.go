@@ -1579,12 +1579,16 @@ func (s *Server) getCombinedHistory(
 	return combinedEnergy, combinedWeather, nil
 }
 
-// getSummaryLatestDate returns the latest TSDayStart from the slice of HistorySummary.
+// getSummaryLatestDate returns the latest energy TSDayStart from the slice of HistorySummary.
+// Weather entries are intentionally ignored: weather can be stored and summarized for a day
+// (e.g. after the 6-hour threshold) before delayed ESS energy telemetry arrives, and advancing
+// the latest summary date based on weather would cause updateHistorySummary to skip backfilling
+// that day's late-arriving energy data.
 func getSummaryLatestDate(summaries []types.HistorySummary) time.Time {
 	var latest time.Time
 	for _, s := range summaries {
 		for _, day := range s.Energy {
-			if latest.IsZero() || day.TSDayStart.After(latest) {
+			if !day.TSDayStart.IsZero() && (latest.IsZero() || day.TSDayStart.After(latest)) {
 				latest = day.TSDayStart
 			}
 		}
