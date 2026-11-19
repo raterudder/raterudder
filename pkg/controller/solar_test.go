@@ -2,12 +2,18 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"math"
+	"sort"
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalculateWeatherSolar(t *testing.T) {
@@ -920,6 +926,195 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		assert.Equal(t, 25.0, params.PanelTilt)
 		assert.Equal(t, 180.0, params.PanelAzimuth)
 		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
+	})
+
+	t.Run("duplicate weather timestamps keep latest entry", func(t *testing.T) {
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		var cleanHours []types.HourlyWeather
+		var dupHours []types.HourlyWeather
+		var history []types.EnergyStats
+
+		for d := 0; d < 6; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 13; h <= 20; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				gti := calcTestHourlyGTI(ts, 750.0, 110.0, 25.0, 180.0)
+				tCell := 24.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+
+				latestHW := types.HourlyWeather{
+					TSHourStart:       ts,
+					DNI:               750.0,
+					DHI:               110.0,
+					GTI:               gti,
+					TemperatureC:      24.0,
+					CloudCoverPercent: 15.0,
+				}
+				// Prepend stale duplicate weather entry that must be overwritten by latestHW
+				dupHours = append(dupHours, types.HourlyWeather{
+					TSHourStart:       ts,
+					DNI:               200.0,
+					DHI:               50.0,
+					GTI:               150.0,
+					TemperatureC:      38.0,
+					SnowDepthCM:       3.0,
+					CloudCoverPercent: 90.0,
+				}, latestHW)
+				cleanHours = append(cleanHours, latestHW)
+
+				if d < 5 {
+					history = append(history, types.EnergyStats{
+						TSHourStart:   ts,
+						SolarKWH:      gti * 0.0080 * tempFactor,
+						GridExportKWH: 2.0,
+					})
+				}
+			}
+		}
+
+		now := base.AddDate(0, 0, 5).Add(12 * time.Hour)
+		wantRes, wantParams := CalculateWeatherSolar(ctx, now, history, []types.Weather{{ForecastHours: cleanHours}}, loc, 5.0)
+		gotRes, gotParams := CalculateWeatherSolar(ctx, now, history, []types.Weather{{ForecastHours: dupHours}}, loc, 5.0)
+
+		assert.Equal(t, wantParams, gotParams)
+		assert.Equal(t, wantRes, gotRes)
+	})
+
+	t.Run("unsorted and duplicate history timestamps match deduplicated history", func(t *testing.T) {
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		var weatherHours []types.HourlyWeather
+		var cleanHistory []types.EnergyStats
+		var messyHistory []types.EnergyStats
+
+		for d := 0; d < 6; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 13; h <= 20; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				gti := calcTestHourlyGTI(ts, 800.0, 100.0, 25.0, 225.0)
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				if d < 5 {
+					st := types.EnergyStats{
+						TSHourStart:   ts,
+						SolarKWH:      gti * 0.0075 * tempFactor,
+						GridExportKWH: 2.5,
+					}
+					cleanHistory = append(cleanHistory, st)
+					// Insert an earlier duplicate with lower SolarKWH<=0.5 so evalHours is unaffected
+					// while statsByHour must keep the later entry `st`.
+					messyHistory = append(messyHistory, types.EnergyStats{
+						TSHourStart:   ts,
+						SolarKWH:      0.20,
+						GridExportKWH: 0.20,
+					}, st)
+				}
+			}
+		}
+		// Swap two days in messyHistory so timestamps are non-monotonic while keeping equal-ts order intact
+		mid := len(messyHistory) / 2
+		reordered := append([]types.EnergyStats{}, messyHistory[mid:]...)
+		reordered = append(reordered, messyHistory[:mid]...)
+
+		now := base.AddDate(0, 0, 5).Add(12 * time.Hour)
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		wantRes, wantParams := CalculateWeatherSolar(ctx, now, cleanHistory, weather, loc, 0.0)
+		gotRes, gotParams := CalculateWeatherSolar(ctx, now, reordered, weather, loc, 0.0)
+
+		assert.Equal(t, wantParams.PanelAzimuth, gotParams.PanelAzimuth)
+		assert.Equal(t, wantParams.PanelTilt, gotParams.PanelTilt)
+		assert.InDelta(t, wantParams.AverageSolarEfficiency, gotParams.AverageSolarEfficiency, 1e-12)
+		if assert.Len(t, gotRes, len(wantRes)) {
+			for ts, wantWS := range wantRes {
+				assert.InDelta(t, wantWS.SolarKWH, gotRes[ts].SolarKWH, 1e-12)
+				assert.Equal(t, wantWS.Irradiance, gotRes[ts].Irradiance)
+			}
+		}
+	})
+
+	t.Run("intraday recalibration with prior-day orientation lock and current-hour exclusion", func(t *testing.T) {
+		timeLoc, err := time.LoadLocation(loc.TimeZone)
+		require.NoError(t, err)
+
+		baseLocal := time.Date(2024, 6, 10, 0, 0, 0, 0, timeLoc)
+		var weatherHours []types.HourlyWeather
+		var history []types.EnergyStats
+
+		// 5 prior days (40 daylight hours >= 10) clearly matching South (180°) with eff 0.0080
+		for d := 0; d < 5; d++ {
+			day := baseLocal.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				gti := calcTestHourlyGTI(ts, 800.0, 100.0, 25.0, 180.0)
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0080 * tempFactor,
+					GridExportKWH: 3.0,
+				})
+			}
+		}
+
+		// Today (day 5) at 14:00 local time: morning hours 8..13 had higher actual solar (eff 0.0095),
+		// and current hour 14:00 has bogus partial/spike telemetry that must be excluded.
+		today := baseLocal.AddDate(0, 0, 5)
+		now := today.Add(14 * time.Hour)
+		for h := 8; h <= 16; h++ {
+			ts := today.Add(time.Duration(h) * time.Hour)
+			gti := calcTestHourlyGTI(ts, 800.0, 100.0, 25.0, 180.0)
+			tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+			tempFactor := 1.0 - (tCell-25.0)*0.0035
+
+			weatherHours = append(weatherHours, types.HourlyWeather{
+				TSHourStart:  ts,
+				DNI:          800.0,
+				DHI:          100.0,
+				TemperatureC: 25.0,
+			})
+			if h < 14 {
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0095 * tempFactor,
+					GridExportKWH: 3.0,
+				})
+			} else if h == 14 {
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      99.0,
+					GridExportKWH: 50.0,
+				})
+			}
+		}
+
+		priorOnlyHistory := history[:5*9]
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		resPriorOnly, paramsPriorOnly := CalculateWeatherSolar(ctx, now, priorOnlyHistory, weather, loc, 0.0)
+		resWithToday, paramsWithToday := CalculateWeatherSolar(ctx, now, history, weather, loc, 0.0)
+
+		// Orientation stays locked on prior completed days (180° South), while intraday recalibration
+		// incorporates today's completed morning hours (raising efficiency above prior-only) and ignores 14:00.
+		assert.Equal(t, 180.0, paramsPriorOnly.PanelAzimuth)
+		assert.Equal(t, 180.0, paramsWithToday.PanelAzimuth)
+		assert.Greater(t, paramsWithToday.AverageSolarEfficiency, paramsPriorOnly.AverageSolarEfficiency)
+		ts11 := today.Add(11 * time.Hour).Unix()
+		ts14 := today.Add(14 * time.Hour).Unix()
+		assert.Greater(t, resWithToday[ts11].SolarKWH, resPriorOnly[ts11].SolarKWH)
+		assert.Less(t, resWithToday[ts14].SolarKWH, 20.0)
 	})
 }
 
@@ -2247,7 +2442,8 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
 		fallbackEff := 0.0080
-		eff := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour, localHour, 0.0080, fallbackEff)
+		assert.Equal(t, fallbackEff, calculateSimilarityEfficiency(400.0, 0.0, nil, localHour, 0.0080, fallbackEff))
+		eff := calculateSimilarityEfficiency(400.0, 0.0, &cacheByHour, localHour, 0.0080, fallbackEff)
 		// Should fall back because count = 2 < 3
 		assert.Equal(t, fallbackEff, eff)
 
@@ -2257,7 +2453,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		statsByTs[ts3] = types.EnergyStats{TSHourStart: time.Unix(ts3, 0), SolarKWH: 3.0, GridExportKWH: 3.0}
 
 		cacheByHour3, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
-		eff3 := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour3, localHour, 0.0080, fallbackEff)
+		eff3 := calculateSimilarityEfficiency(400.0, 0.0, &cacheByHour3, localHour, 0.0080, fallbackEff)
 		// Should calculate weighted efficiency (not fallback)
 		assert.NotEqual(t, fallbackEff, eff3)
 		assert.InDelta(t, 0.00784, eff3, 0.0005)
@@ -2284,7 +2480,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
-		eff := calculateSimilarityEfficiency(forecastIrr, 0.0, cacheByHour, localHour, 0.0050, 0.0050)
+		eff := calculateSimilarityEfficiency(forecastIrr, 0.0, &cacheByHour, localHour, 0.0050, 0.0050)
 		// Should be dominated by the 200 W/m² points (eff ~ 0.0025), isolating clear sky (0.0098)
 		assert.Less(t, eff, 0.0040)
 	})
@@ -2309,10 +2505,10 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
 
 		// When forecasting a clear hour (Cloud = 0%), it should selectively match clear historical days (higher eff)
-		effClear := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.010, 0.010)
+		effClear := calculateSimilarityEfficiency(500.0, 0.0, &cacheByHour, localHour, 0.010, 0.010)
 
 		// When forecasting an overcast hour (Cloud = 90%), it should selectively match overcast historical days (lower eff)
-		effOvercast := calculateSimilarityEfficiency(500.0, 90.0, cacheByHour, localHour, 0.010, 0.010)
+		effOvercast := calculateSimilarityEfficiency(500.0, 90.0, &cacheByHour, localHour, 0.010, 0.010)
 
 		assert.Greater(t, effClear, effOvercast)
 		assert.InDelta(t, 0.013, effClear, 0.002)
@@ -2337,7 +2533,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
-		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.0070, 0.0070)
+		eff := calculateSimilarityEfficiency(500.0, 0.0, &cacheByHour, localHour, 0.0070, 0.0070)
 		// Because recent points have weight 0.95^1..3 vs older points 0.95^12..14 (~0.50),
 		// eff should be closer to recent efficiency (2.0 / (500*0.8906) ≈ 0.00449) than older (0.0112)
 		assert.Less(t, eff, 0.0070)
@@ -2360,7 +2556,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		statsByTs[tsOutlier] = types.EnergyStats{TSHourStart: time.Unix(tsOutlier, 0), SolarKWH: 30.0, GridExportKWH: 30.0}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
-		eff := calculateSimilarityEfficiency(150.0, 0.0, cacheByHour, localHour, staticEff, staticEff)
+		eff := calculateSimilarityEfficiency(150.0, 0.0, &cacheByHour, localHour, staticEff, staticEff)
 		// The 30.0 kWh outlier must be rejected, keeping eff near low-irradiance value (~0.00112)
 		assert.Less(t, eff, 0.0030)
 	})
@@ -2383,7 +2579,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 0.0, getIrr)
 		fallbackEff := 0.0080
-		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.0080, fallbackEff)
+		eff := calculateSimilarityEfficiency(500.0, 0.0, &cacheByHour, localHour, 0.0080, fallbackEff)
 		// Since all 3 points were curtailed and skipped, count = 0 < 3 -> returns fallbackEff
 		assert.Equal(t, fallbackEff, eff)
 	})
@@ -2427,7 +2623,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 			assert.False(t, pt.isValid, "DC-throttled hour matching home load with low efficiency should be marked invalid")
 		}
 		fallbackEff := 0.0084
-		eff := calculateSimilarityEfficiency(600.0, 0.0, cacheByHour, localHour, 0.0084, fallbackEff)
+		eff := calculateSimilarityEfficiency(600.0, 0.0, &cacheByHour, localHour, 0.0084, fallbackEff)
 		assert.Equal(t, fallbackEff, eff)
 	})
 
@@ -2448,7 +2644,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, 5.0, getIrr)
 		fallbackEff := 0.0090
-		eff := calculateSimilarityEfficiency(1000.0, 0.0, cacheByHour, localHour, 0.0090, fallbackEff)
+		eff := calculateSimilarityEfficiency(1000.0, 0.0, &cacheByHour, localHour, 0.0090, fallbackEff)
 		// Since all 3 points were clipped (eff < staticEff) and skipped, returns fallbackEff
 		assert.Equal(t, fallbackEff, eff)
 	})
@@ -2485,7 +2681,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		eff2, count2 := computeSimilarityEfficiency(500.0, 90.0, cacheByHour[9], 0.0070, cacheByHour[10], cacheByHour[11])
 		assert.Equal(t, 3, count2)
 
-		eff := calculateSimilarityEfficiency(500.0, 90.0, cacheByHour, 9, 0.0070, 0.0080)
+		eff := calculateSimilarityEfficiency(500.0, 90.0, &cacheByHour, 9, 0.0070, 0.0080)
 		assert.Equal(t, eff2, eff)
 		assert.Less(t, eff, 0.0048)
 	})
@@ -2511,12 +2707,77 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		staticEff := 0.0050
 
 		// Target hour 9 alone has only 1 sample, but calculateSimilarityEfficiency automatically falls back to adjacent hour 10
-		effWithFallback := calculateSimilarityEfficiency(200.0, 85.0, cacheByHour, 9, staticEff, clearSkyFallbackEff)
+		effWithFallback := calculateSimilarityEfficiency(200.0, 85.0, &cacheByHour, 9, staticEff, clearSkyFallbackEff)
 		assert.NotEqual(t, clearSkyFallbackEff, effWithFallback)
 		assert.InDelta(t, 0.0025, effWithFallback, 0.0005)
 
 		// When neither target hour nor adjacent hours have enough samples (e.g. hour 15 where ±1, ±2 have 0 samples), falls back to clearSkyFallbackEff
-		effNoAdjacent := calculateSimilarityEfficiency(200.0, 85.0, cacheByHour, 15, staticEff, clearSkyFallbackEff)
+		effNoAdjacent := calculateSimilarityEfficiency(200.0, 85.0, &cacheByHour, 15, staticEff, clearSkyFallbackEff)
 		assert.Equal(t, clearSkyFallbackEff, effNoAdjacent)
 	})
+}
+
+func BenchmarkCalculateWeatherSolar(b *testing.B) {
+	silentLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := log.With(context.Background(), silentLogger)
+
+	fileBytes, err := energyHistoryFS.ReadFile("testdata/energy_history/site2_mid-summer.json")
+	if err != nil {
+		b.Fatalf("failed to read energy history fixture: %v", err)
+	}
+	var dataset EnergyHistoryDataset
+	if err := json.Unmarshal(fileBytes, &dataset); err != nil {
+		b.Fatalf("failed to unmarshal energy history fixture: %v", err)
+	}
+
+	fileLoc, err := time.LoadLocation(dataset.TimeZone)
+	if err != nil {
+		b.Fatalf("failed to load timezone: %v", err)
+	}
+
+	var allHours []types.EnergyStats
+	for _, day := range dataset.EnergyHistory {
+		for _, h := range day.Hourly {
+			if !h.TSHourStart.IsZero() {
+				allHours = append(allHours, h)
+			}
+		}
+	}
+	sort.Slice(allHours, func(i, j int) bool {
+		return allHours[i].TSHourStart.Before(allHours[j].TSHourStart)
+	})
+
+	simEndLocal := dataset.SimEnd.In(fileLoc)
+	dayStart := time.Date(simEndLocal.Year(), simEndLocal.Month(), simEndLocal.Day(), 0, 0, 0, 0, fileLoc).AddDate(0, 0, -1)
+	now := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 14, 0, 0, 0, fileLoc)
+	histWindowStart := dayStart.AddDate(0, 0, -35)
+	weatherWindowEnd := dayStart.AddDate(0, 0, 2)
+
+	var histSlice []types.EnergyStats
+	for _, h := range allHours {
+		if !h.TSHourStart.Before(histWindowStart) && h.TSHourStart.Before(now) {
+			histSlice = append(histSlice, h)
+		}
+	}
+	var weatherSlice []types.Weather
+	for _, w := range dataset.WeatherHistory {
+		if !w.TSDayStart.Before(histWindowStart) && w.TSDayStart.Before(weatherWindowEnd) {
+			weatherSlice = append(weatherSlice, w)
+		}
+	}
+	if len(weatherSlice) == 0 || len(histSlice) == 0 {
+		b.Fatalf("unexpected empty benchmark slice: hist=%d weather=%d", len(histSlice), len(weatherSlice))
+	}
+
+	locInfo := types.SiteLocation{
+		Latitude:  weatherSlice[0].Latitude,
+		Longitude: weatherSlice[0].Longitude,
+		TimeZone:  weatherSlice[0].TimeLocation,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = CalculateWeatherSolar(ctx, now, histSlice, weatherSlice, locInfo, 0.0)
+	}
 }
