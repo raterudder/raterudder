@@ -1388,6 +1388,145 @@ func TestERCOT(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
+	t.Run("Multi-Day Lookup Stops At Unfinished Prior Day Preserving History Sync Cursor Across Midnight", func(t *testing.T) {
+		ctx := context.Background()
+		mockDB := &storagemock.MockDatabase{}
+
+		yesterday := time.Date(2026, time.October, 6, 0, 0, 0, 0, ctLocation)
+		today := yesterday.AddDate(0, 0, 1)
+		tomorrow := today.AddDate(0, 0, 1)
+		yesterdayStr := yesterday.Format("2006-01-02")
+		todayStr := today.Format("2006-01-02")
+		currentNow := today.Add(2*time.Hour + 10*time.Minute) // today 02:10 CT
+
+		var yesterdayGapFilled atomic.Bool
+		var yesterdayRTMCalls, todayRTMCalls atomic.Int32
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "np6-905-cd") {
+				http.NotFound(w, r)
+				return
+			}
+			dateFrom := r.URL.Query().Get("deliveryDateFrom")
+			w.Header().Set("Content-Type", "application/json")
+			switch dateFrom {
+			case yesterdayStr:
+				yesterdayRTMCalls.Add(1)
+				var entries []ercotSPPEntry
+				for dh := 1; dh <= 24; dh++ {
+					if dh == 5 && !yesterdayGapFilled.Load() {
+						continue // Missing HE 5 (0 intervals)
+					}
+					priceMWh := 40.0
+					switch dh {
+					case 1, 2, 3:
+						priceMWh = 30.0
+					case 4:
+						priceMWh = 500.0
+					case 5:
+						priceMWh = 70.0
+					}
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         yesterdayStr,
+							DeliveryHour:         dh,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: priceMWh,
+						})
+					}
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+			case todayStr:
+				todayRTMCalls.Add(1)
+				var entries []ercotSPPEntry
+				for dh := 1; dh <= 2; dh++ {
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         todayStr,
+							DeliveryHour:         dh,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: 55.0,
+						})
+					}
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer apiServer.Close()
+
+		base := configuredERCOT(mockDB)
+		base.apiURL = apiServer.URL
+		base.client = apiServer.Client()
+		base.token = "mock-token"
+		base.nowFunc = func() time.Time { return currentNow }
+
+		// Poll 1: [yesterday 00:00 CT, currentNow + 12h) when yesterday's HE 5 is missing (0 intervals)
+		// and today's HE 1..2 are complete. Must return ONLY yesterday's contiguous prefix (HE 1..4)
+		// and NOT request or include today's HE 1..2.
+		var yesterdayUpsert1 []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				yesterdayUpsert1 = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		poll1, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", yesterday, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), yesterdayRTMCalls.Load())
+		assert.Equal(t, int32(0), todayRTMCalls.Load(), "must not request today's RTM data once yesterday stops short of dayEnd")
+		require.Len(t, poll1, 4, "must return only yesterday's contiguous HE 1..4 prefix and exclude today's HE 1..2")
+		assert.True(t, poll1[0].TSStart.Equal(yesterday))
+		cursor := poll1[len(poll1)-1].TSEnd
+		assert.True(t, cursor.Equal(yesterday.Add(4*time.Hour)), "saved history sync cursor must stop at yesterday 04:00 CT")
+
+		// Poll 2: [yesterday 04:00 CT, currentNow + 12h) while yesterday's HE 5 is still missing.
+		// Must return 0 prices (preserving the yesterday 04:00 CT cursor) both within and after TTL.
+		currentNow = currentNow.Add(6 * time.Minute) // 02:16 CT (after 5-minute TTL, HE 5 still missing)
+		var yesterdayUpsert2 []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return(yesterdayUpsert1, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				yesterdayUpsert2 = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		poll2, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", cursor, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, poll2, "must return 0 prices while yesterday's HE 5 is still missing, preserving cursor")
+		assert.Equal(t, int32(2), yesterdayRTMCalls.Load())
+		assert.Equal(t, int32(0), todayRTMCalls.Load(), "must still not request today's RTM data while yesterday is incomplete")
+
+		// Poll 3: [yesterday 04:00 CT, currentNow + 12h) after the 5-minute TTL once ERCOT backfills yesterday's HE 5.
+		// Must return all remaining hours of yesterday (HE 5..24) followed contiguously by today's completed hours (HE 1..2).
+		yesterdayGapFilled.Store(true)
+		currentNow = currentNow.Add(6 * time.Minute) // 02:22 CT (after 5-minute TTL)
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return(yesterdayUpsert2, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", today, tomorrow).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+
+		poll3, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", cursor, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(3), yesterdayRTMCalls.Load())
+		assert.Equal(t, int32(1), todayRTMCalls.Load())
+		if assert.Len(t, poll3, 22, "expected 20 remaining hours of yesterday (HE 5..24) + 2 completed hours of today (HE 1..2)") {
+			for i, p := range poll3 {
+				expectedStart := cursor.Add(time.Duration(i) * time.Hour)
+				expectedEnd := expectedStart.Add(time.Hour)
+				assert.True(t, p.TSStart.Equal(expectedStart), "hour %d TSStart mismatch: got %v want %v", i, p.TSStart, expectedStart)
+				assert.True(t, p.TSEnd.Equal(expectedEnd), "hour %d TSEnd mismatch: got %v want %v", i, p.TSEnd, expectedEnd)
+			}
+			assert.InDelta(t, 0.070, poll3[0].DollarsPerKWH, 1e-6, "first resumed hour must be backfilled yesterday HE 5")
+			assert.InDelta(t, 0.055, poll3[20].DollarsPerKWH, 1e-6, "hour 20 must be today HE 1")
+			assert.InDelta(t, 0.055, poll3[21].DollarsPerKWH, 1e-6, "hour 21 must be today HE 2")
+		}
+
+		mockDB.AssertExpectations(t)
+	})
+
 	t.Run("Partial Earlier Hour Within Grace Window Holds Back Later Complete Hour Until Settled", func(t *testing.T) {
 		ctx := context.Background()
 		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)

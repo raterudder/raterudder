@@ -1363,7 +1363,8 @@ func (c *baseERCOT) GetFuturePrices(ctx context.Context, loadZone string) ([]typ
 
 // GetConfirmedPrices returns confirmed wholesale prices for the given date range.
 // It retrieves Real-Time Market (RTM) prices, clamping end to the start of the current hour
-// in Central Time and returning only completed RTM intervals (excluding carry-forward future hours).
+// in Central Time, returning only completed RTM intervals (excluding carry-forward future hours),
+// and stopping at the first day whose confirmed window has not yet reached the end of that day.
 func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, start, end time.Time) ([]types.Price, error) {
 	if loadZone == "" {
 		return nil, fmt.Errorf("ercot load zone is required")
@@ -1384,6 +1385,7 @@ func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, sta
 	confirmed := make([]types.Price, 0)
 	for curr.Before(endCT) {
 		dayDate := truncateDay(curr)
+		dayEnd := dayDate.AddDate(0, 0, 1)
 		prices, confirmedEnd, err := c.getPricesForDate(ctx, dayDate, loadZone)
 		if err != nil {
 			return nil, err
@@ -1394,7 +1396,10 @@ func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, sta
 				confirmed = append(confirmed, p)
 			}
 		}
-		curr = dayDate.AddDate(0, 0, 1)
+		if !confirmedEnd.IsZero() && confirmedEnd.Before(dayEnd) {
+			break
+		}
+		curr = dayEnd
 	}
 
 	return confirmed, nil
