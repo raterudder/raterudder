@@ -505,9 +505,10 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 					if c.cachedPricesTime != nil {
 						c.cachedPricesTime[key] = c.now()
 					}
-					if c.cachedConfirmedEnd != nil {
-						c.cachedConfirmedEnd[key] = end
+					if c.cachedConfirmedEnd == nil {
+						c.cachedConfirmedEnd = make(map[string]time.Time)
 					}
+					c.cachedConfirmedEnd[key] = end
 					c.mu.Unlock()
 					return prices, nil
 				}
@@ -517,7 +518,7 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		// 2. Fetch all load zones in a single request from ERCOT RTM API using inner singleflight
 		fetchKey := "fetch_rtm_" + dateStr
 		fetchRes, err, _ := c.sfGroup.Do(fetchKey, func() (any, error) {
-			byZone, confirmedEndByZone, fetchErr := c.fetchERCOTRTMWithBounds(ctx, dateCT)
+			byZone, confirmedEndByZone, fetchErr := c.fetchERCOTRTM(ctx, dateCT)
 			if fetchErr != nil {
 				return nil, fetchErr
 			}
@@ -590,6 +591,11 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 	return copyPrices(prices), nil
 }
 
+type rtmFetchResult struct {
+	byZone             map[string][]types.Price
+	confirmedEndByZone map[string]time.Time
+}
+
 // fetchERCOTRTM fetches 15-minute Real-Time Market (RTM) Settlement Point Prices from ERCOT for all load zones in a single request.
 //
 // What is "np6-905-cd" and why it was chosen:
@@ -603,17 +609,7 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 // for electrical load zones (LZ_HOUSTON, LZ_NORTH, LZ_SOUTH, LZ_WEST). Retail electric providers with
 // wholesale-indexed buyback plans (such as Tesla Electric, Almika Solar, etc.) settle residential export
 // credits against these exact 15-minute settlement point prices for the customer's load zone.
-type rtmFetchResult struct {
-	byZone             map[string][]types.Price
-	confirmedEndByZone map[string]time.Time
-}
-
-func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[string][]types.Price, error) {
-	byZone, _, err := c.fetchERCOTRTMWithBounds(ctx, date)
-	return byZone, err
-}
-
-func (c *baseERCOT) fetchERCOTRTMWithBounds(ctx context.Context, date time.Time) (map[string][]types.Price, map[string]time.Time, error) {
+func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[string][]types.Price, map[string]time.Time, error) {
 	dateCT := date.In(ctLocation)
 	dateFormatted := dateCT.Format("2006-01-02")
 	endpoint := fmt.Sprintf("%s/np6-905-cd/spp_node_zone_hub?deliveryDateFrom=%s&deliveryDateTo=%s&settlementPointType=LZ",
@@ -672,8 +668,30 @@ func (c *baseERCOT) fetchERCOTRTMWithBounds(ctx context.Context, date time.Time)
 
 	// Group 15-minute intervals into hourly averages per settlement point
 	type hourlyAccumulator struct {
-		sum   float64
-		count int
+		intervals    [4]float64
+		intervalMask uint8
+		fallbackSum  float64
+		fallbackCnt  int
+	}
+	avgMWh := func(acc *hourlyAccumulator) (float64, bool) {
+		if acc == nil {
+			return 0, false
+		}
+		var sum float64
+		var count int
+		for i := 0; i < 4; i++ {
+			if acc.intervalMask&(1<<i) != 0 {
+				sum += acc.intervals[i]
+				count++
+			}
+		}
+		if count > 0 {
+			return sum / float64(count), true
+		}
+		if acc.fallbackCnt > 0 {
+			return acc.fallbackSum / float64(acc.fallbackCnt), true
+		}
+		return 0, false
 	}
 	hourlyByZone := make(map[string]map[int]*hourlyAccumulator)
 
@@ -690,11 +708,19 @@ func (c *baseERCOT) fetchERCOTRTMWithBounds(ctx context.Context, date time.Time)
 		if _, ok := hourlyByZone[zone]; !ok {
 			hourlyByZone[zone] = make(map[int]*hourlyAccumulator)
 		}
-		if _, ok := hourlyByZone[zone][h]; !ok {
-			hourlyByZone[zone][h] = &hourlyAccumulator{}
+		acc, ok := hourlyByZone[zone][h]
+		if !ok {
+			acc = &hourlyAccumulator{}
+			hourlyByZone[zone][h] = acc
 		}
-		hourlyByZone[zone][h].sum += entry.SettlementPointPrice
-		hourlyByZone[zone][h].count++
+		idx := entry.DeliveryInterval - 1
+		if idx >= 0 && idx < 4 {
+			acc.intervals[idx] = entry.SettlementPointPrice
+			acc.intervalMask |= 1 << idx
+		} else {
+			acc.fallbackSum += entry.SettlementPointPrice
+			acc.fallbackCnt++
+		}
 	}
 
 	if len(hourlyByZone) == 0 {
@@ -709,21 +735,25 @@ func (c *baseERCOT) fetchERCOTRTMWithBounds(ctx context.Context, date time.Time)
 	for zone, hourlyMap := range hourlyByZone {
 		var lastWholesaleDollarsPerKWH float64
 		for h := 0; h < numHours; h++ {
-			if acc, ok := hourlyMap[h]; ok && acc.count > 0 {
-				lastWholesaleDollarsPerKWH = (acc.sum / float64(acc.count)) / 1000.0
+			if avg, ok := avgMWh(hourlyMap[h]); ok {
+				lastWholesaleDollarsPerKWH = avg / 1000.0
 				break
 			}
 		}
 
-		var latestPublishedEnd time.Time
+		latestPublishedEnd := dayStart
 		var prices []types.Price
 		for h := 0; h < numHours; h++ {
 			start := dayStart.Add(time.Duration(h) * time.Hour)
 			end := start.Add(time.Hour)
 
-			if acc, ok := hourlyMap[h]; ok && acc.count > 0 {
-				lastWholesaleDollarsPerKWH = (acc.sum / float64(acc.count)) / 1000.0
-				latestPublishedEnd = end
+			if acc, ok := hourlyMap[h]; ok {
+				if avg, hasAvg := avgMWh(acc); hasAvg {
+					lastWholesaleDollarsPerKWH = avg / 1000.0
+				}
+				if acc.intervalMask == 0x0f && latestPublishedEnd.Equal(start) {
+					latestPublishedEnd = end
+				}
 			}
 
 			prices = append(prices, types.Price{

@@ -395,7 +395,7 @@ func TestERCOT(t *testing.T) {
 			client: apiServer.Client(),
 		}
 
-		_, _ = base.fetchERCOTRTM(context.Background(), time.Now())
+		_, _, _ = base.fetchERCOTRTM(context.Background(), time.Now())
 		assert.Equal(t, "my-secret-ercot-key", headersReceived["Ocp-Apim-Subscription-Key"])
 		assert.Equal(t, "application/json", headersReceived["Accept"])
 	})
@@ -437,7 +437,7 @@ func TestERCOT(t *testing.T) {
 		}
 
 		// First call should exchange username/password for token
-		_, _ = base.fetchERCOTRTM(context.Background(), time.Now())
+		_, _, _ = base.fetchERCOTRTM(context.Background(), time.Now())
 		assert.Equal(t, 1, tokenRequests)
 		assert.Equal(t, "testuser@example.com", receivedUser)
 		assert.Equal(t, "secretpassword123", receivedPass)
@@ -446,7 +446,7 @@ func TestERCOT(t *testing.T) {
 		assert.Equal(t, "Bearer jwt-test-id-token", headersReceived["Authorization"])
 
 		// Second call should reuse cached token without hitting authServer again
-		_, _ = base.fetchERCOTRTM(context.Background(), time.Now())
+		_, _, _ = base.fetchERCOTRTM(context.Background(), time.Now())
 		assert.Equal(t, 1, tokenRequests, "expected token to be reused from in-memory cache")
 	})
 
@@ -646,13 +646,15 @@ func TestERCOT(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			var entries []ercotSPPEntry
 			for h := 1; h <= 24; h++ {
-				entries = append(entries, ercotSPPEntry{
-					DeliveryDate:         dateFrom,
-					DeliveryHour:         h,
-					DeliveryInterval:     1,
-					SettlementPoint:      "LZ_HOUSTON",
-					SettlementPointPrice: 40.0,
-				})
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dateFrom,
+						DeliveryHour:         h,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 40.0,
+					})
+				}
 			}
 			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
 		}))
@@ -813,15 +815,17 @@ func TestERCOT(t *testing.T) {
 		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			var entries []ercotSPPEntry
-			// Supply data for HE 1..10 (hours 00:00 to 10:00)
+			// Supply all 4 15-minute intervals for HE 1..10 (hours 00:00 to 10:00)
 			for h := 1; h <= 10; h++ {
-				entries = append(entries, ercotSPPEntry{
-					DeliveryDate:         dateStr,
-					DeliveryHour:         h,
-					DeliveryInterval:     1,
-					SettlementPoint:      "LZ_HOUSTON",
-					SettlementPointPrice: 40.0 + float64(h),
-				})
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dateStr,
+						DeliveryHour:         h,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 40.0 + float64(h),
+					})
+				}
 			}
 			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
 		}))
@@ -856,6 +860,141 @@ func TestERCOT(t *testing.T) {
 				assert.False(t, ps.Confirmed, "future/in-progress interval must not be confirmed")
 			}
 		}
+	})
+
+	t.Run("Delayed Final Sample Excludes Partial Hour Until All Four Intervals Arrive", func(t *testing.T) {
+		ctx := context.Background()
+		mockDB := &storagemock.MockDatabase{}
+
+		// Poll just after midnight (Oct 8 00:02 CT) when Oct 7 HE 24 (23:00-24:00) is missing interval 4
+		yesterday := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)
+		yesterdayEnd := yesterday.AddDate(0, 0, 1)
+		yesterdayStr := yesterday.Format("2006-01-02")
+		todayStr := yesterdayEnd.Format("2006-01-02")
+		currentNow := yesterdayEnd.Add(2 * time.Minute) // Oct 8 00:02 CT
+
+		var finalSamplePublished atomic.Bool
+		var yesterdayAPICalls atomic.Int32
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			dateFrom := r.URL.Query().Get("deliveryDateFrom")
+			if dateFrom == todayStr {
+				// Oct 8 HE 1 (00:00-01:00) has only intervals 1..3 published
+				entries := []ercotSPPEntry{
+					{DeliveryDate: todayStr, DeliveryHour: 1, DeliveryInterval: 1, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 20.0},
+					{DeliveryDate: todayStr, DeliveryHour: 1, DeliveryInterval: 2, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 20.0},
+					{DeliveryDate: todayStr, DeliveryHour: 1, DeliveryInterval: 3, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 20.0},
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+				return
+			}
+			if dateFrom != yesterdayStr {
+				http.NotFound(w, r)
+				return
+			}
+
+			yesterdayAPICalls.Add(1)
+			var entries []ercotSPPEntry
+			for h := 1; h <= 23; h++ {
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         yesterdayStr,
+						DeliveryHour:         h,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 30.0,
+					})
+				}
+			}
+			// HE 24: intervals 1, 2, 3 at $40/MWh, plus duplicate interval 3 so raw row count is 4 without interval 4
+			entries = append(entries,
+				ercotSPPEntry{DeliveryDate: yesterdayStr, DeliveryHour: 24, DeliveryInterval: 1, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 40.0},
+				ercotSPPEntry{DeliveryDate: yesterdayStr, DeliveryHour: 24, DeliveryInterval: 2, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 40.0},
+				ercotSPPEntry{DeliveryDate: yesterdayStr, DeliveryHour: 24, DeliveryInterval: 3, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 40.0},
+				ercotSPPEntry{DeliveryDate: yesterdayStr, DeliveryHour: 24, DeliveryInterval: 3, SettlementPoint: "LZ_HOUSTON", SettlementPointPrice: 40.0},
+			)
+			if finalSamplePublished.Load() {
+				// Delayed 4th sample arrives at $200/MWh -> full 4-interval mean is (40+40+40+200)/4 = $80/MWh ($0.080/kWh)
+				entries = append(entries, ercotSPPEntry{
+					DeliveryDate:         yesterdayStr,
+					DeliveryHour:         24,
+					DeliveryInterval:     4,
+					SettlementPoint:      "LZ_HOUSTON",
+					SettlementPointPrice: 200.0,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer apiServer.Close()
+
+		base := configuredERCOT(mockDB)
+		base.apiURL = apiServer.URL
+		base.client = apiServer.Client()
+		base.token = "mock-token"
+		base.nowFunc = func() time.Time { return currentNow }
+
+		// 1. At 00:02 CT, HE 24 is missing interval 4: only 23 hours are confirmed, and DB marks HE 24 Confirmed=false
+		var firstUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, yesterdayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				firstUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmed1, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", yesterday, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), yesterdayAPICalls.Load())
+		if assert.Len(t, confirmed1, 23, "partial HE 24 must not be returned before interval 4 arrives") {
+			assert.Equal(t, yesterday.Add(23*time.Hour), confirmed1[len(confirmed1)-1].TSEnd)
+		}
+		if assert.Len(t, firstUpsert, 24) {
+			for i := 0; i < 23; i++ {
+				assert.True(t, firstUpsert[i].Confirmed, "completed hour %d must be confirmed", i)
+			}
+			assert.False(t, firstUpsert[23].Confirmed, "partial HE 24 missing interval 4 must not be marked confirmed in DB")
+		}
+
+		// 2. After 5-minute TTL (00:08 CT) once interval 4 is published, yesterday's incomplete cache refreshes
+		finalSamplePublished.Store(true)
+		currentNow = yesterdayEnd.Add(8 * time.Minute)
+
+		var secondUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, yesterdayEnd).Return(firstUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				secondUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmed2, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", yesterday, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), yesterdayAPICalls.Load(), "incomplete prior-day cache must refresh after TTL")
+		if assert.Len(t, confirmed2, 24, "HE 24 must be confirmed once all 4 distinct intervals arrive") {
+			assert.InDelta(t, 0.080, confirmed2[23].DollarsPerKWH, 1e-6)
+		}
+		if assert.Len(t, secondUpsert, 24) {
+			assert.True(t, secondUpsert[23].Confirmed, "completed HE 24 must now be marked confirmed in DB")
+			assert.InDelta(t, 0.080, secondUpsert[23].DollarsPerKWH, 1e-6)
+		}
+
+		// 3. When Hour Ending 1 itself only has intervals 1..3 (01:10 CT on Oct 8), 0 hours are confirmed
+		currentNow = yesterdayEnd.Add(70 * time.Minute) // Oct 8 01:10 CT
+		todayEnd := yesterdayEnd.AddDate(0, 0, 1)
+		var todayUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterdayEnd, todayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				todayUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmedToday, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", yesterdayEnd, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, confirmedToday, "partial HE 1 must not be confirmed when confirmedEnd equals dayStart")
+		if assert.Len(t, todayUpsert, 24) {
+			assert.False(t, todayUpsert[0].Confirmed, "partial HE 1 must not be marked confirmed in DB")
+		}
+
+		mockDB.AssertExpectations(t)
 	})
 
 	t.Run("Integration Real API", func(t *testing.T) {
