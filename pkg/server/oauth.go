@@ -816,6 +816,15 @@ func redirectURIMatches(ctx context.Context, registeredURIs []string, requestedU
 	return false
 }
 
+func isLoopbackRedirectURI(rawURI string) bool {
+	u, err := url.Parse(rawURI)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 func (s *Server) validateOAuthAuthorizeParams(ctx context.Context, clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod string) (*resolvedOAuthClient, error) {
 	if clientID == "" {
 		return nil, errors.New("client_id is required")
@@ -849,7 +858,7 @@ func (s *Server) validateOAuthAuthorizeParams(ctx context.Context, clientID, red
 	}
 	if client.Verified && client.ClientDomain != "" {
 		expectedOrigin := "https://" + client.ClientDomain
-		if normalizedOrigin(redirectURI) != expectedOrigin {
+		if !isLoopbackRedirectURI(redirectURI) && normalizedOrigin(redirectURI) != expectedOrigin {
 			log.Ctx(ctx).WarnContext(
 				ctx,
 				"oauth cimd redirect_uri origin differs from client domain",
