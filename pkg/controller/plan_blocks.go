@@ -2051,6 +2051,20 @@ func critiqueBlockPlan(
 			if blocks[b].startIdx < len(currentStates) {
 				blockStartState = currentStates[blocks[b].startIdx]
 			}
+			// Allow Pass 1 to discover partial-Load Standby (discharge down to a coarse floor, then hold
+			// the remainder of the block in Standby) when a multi-interval net-load block starts well above
+			// its reserve floor (e.g., 100% SOC entering a pre-peak Off-Peak block that is too large to
+			// cover in full without depleting energy needed for the upcoming peak or a reserve step-up).
+			if blocks[b].netSolarKWH < 0 && blocks[b].endIdx > blocks[b].startIdx && blockStartState.soc > minSOC+10.0 {
+				for _, coarseFloor := range []float64{20, 40, 60, 80} {
+					if coarseFloor > minSOC+5.0 && coarseFloor < blockStartState.soc-5.0 {
+						candidateTypes = append(candidateTypes, blockActionChoice{
+							actionType: blockActionStandby,
+							targetSOC:  coarseFloor,
+						})
+					}
+				}
+			}
 			for _, cand := range candidateTypes {
 				// skip any candidates that are equal to the existing block
 				if sameBlockChoice(cand, currentChoices[b]) {
@@ -2249,6 +2263,22 @@ func critiqueBlockPlan(
 						{actionType: blockActionCharge, targetSOC: minSOCB},
 					},
 				)
+				// Charge at a + partial-Load Standby at b: when block b is a pricier multi-interval net-load
+				// block (e.g., Off-Peak between Super Off-Peak and On-Peak) that is too large to cover in full
+				// without depleting energy needed for a downstream peak or minSOC step-up, allow Pass 1 to pair
+				// charging to 100% at a with discharging down to a coarse floor in b and holding the rest.
+				if blocks[b].avgImportRate > blocks[a].avgImportRate+priceEpsilonForEquality &&
+					blocks[b].netSolarKWH < 0 &&
+					blocks[b].endIdx > blocks[b].startIdx {
+					for _, coarseFloor := range []float64{20, 40, 60, 80} {
+						if coarseFloor > minSOCB+5.0 {
+							pairedTrials = append(pairedTrials, [2]blockActionChoice{
+								{actionType: blockActionCharge, targetSOC: 100},
+								{actionType: blockActionStandby, targetSOC: coarseFloor},
+							})
+						}
+					}
+				}
 				// Try exporting down to the midpoint between minSOCB and 100% after charging or holding at a
 				// so a mid-peak export at b can preserve half the battery for later peak load. (Export at a +
 				// Charge at b does not need a midpoint trial here because block a already has its starting SOC
@@ -2676,38 +2706,38 @@ func optimizeBlockTargets(
 					if startSOC <= minE+socTargetTolerancePct {
 						continue
 					}
-					var solarGainSOC float64
-					hitFullSolar := false
-					for k := blocks[b].endIdx + 1; k < len(initActs) && k+1 < len(initStates); k++ {
-						if initActs[k].batteryMode != types.BatteryModeChargeAny && initStates[k+1].soc > initStates[k].soc {
-							solarGainSOC += initStates[k+1].soc - initStates[k].soc
-							if initStates[k+1].soc >= almostFullSOC {
-								hitFullSolar = true
-							}
-						}
-					}
-					if solarGainSOC <= socTargetTolerancePct {
-						continue
-					}
-					// Do not liquidate multi-day battery cushion sitting in Tier 2 of terminal valuation
-					// (above the 4-hour postHorizonSlices Tier 1 window, where terminalSurplusDiscountFactor = 0.70
-					// applies a 30% haircut meant to discourage grid overcharging) unless downstream solar caps at 100%.
-					oneWayEff := math.Sqrt(roundTripEff)
-					var tier1LoadKWH float64
-					for _, slice := range postHorizon.postHorizonSlices {
-						tier1LoadKWH += slice.loadKWH / oneWayEff
-					}
-					tier1CeilingSOC := timeline[len(timeline)-1].minSOC + (tier1LoadKWH/initial.capacityKWH)*100.0
-					initEndSOC := initStates[len(initStates)-1].soc
-					if !hitFullSolar && initEndSOC > tier1CeilingSOC+socTargetTolerancePct {
-						continue
-					}
-					minE = max(minE, math.Floor(startSOC-solarGainSOC))
-					if startSOC <= minE+socTargetTolerancePct {
-						continue
-					}
 					maxE = min(100.0, math.Ceil(startSOC))
 					if initialE <= 0 {
+						var solarGainSOC float64
+						hitFullSolar := false
+						for k := blocks[b].endIdx + 1; k < len(initActs) && k+1 < len(initStates); k++ {
+							if initActs[k].batteryMode != types.BatteryModeChargeAny && initStates[k+1].soc > initStates[k].soc {
+								solarGainSOC += initStates[k+1].soc - initStates[k].soc
+								if initStates[k+1].soc >= almostFullSOC {
+									hitFullSolar = true
+								}
+							}
+						}
+						if solarGainSOC <= socTargetTolerancePct {
+							continue
+						}
+						// Do not liquidate multi-day battery cushion sitting in Tier 2 of terminal valuation
+						// (above the 4-hour postHorizonSlices Tier 1 window, where terminalSurplusDiscountFactor = 0.70
+						// applies a 30% haircut meant to discourage grid overcharging) unless downstream solar caps at 100%.
+						oneWayEff := math.Sqrt(roundTripEff)
+						var tier1LoadKWH float64
+						for _, slice := range postHorizon.postHorizonSlices {
+							tier1LoadKWH += slice.loadKWH / oneWayEff
+						}
+						tier1CeilingSOC := timeline[len(timeline)-1].minSOC + (tier1LoadKWH/initial.capacityKWH)*100.0
+						initEndSOC := initStates[len(initStates)-1].soc
+						if !hitFullSolar && initEndSOC > tier1CeilingSOC+socTargetTolerancePct {
+							continue
+						}
+						minE = max(minE, math.Floor(startSOC-solarGainSOC))
+						if startSOC <= minE+socTargetTolerancePct {
+							continue
+						}
 						initialE = maxE
 					}
 				}
@@ -2724,6 +2754,7 @@ func optimizeBlockTargets(
 
 				isBetterExportFloor := func(score, E float64, states []planState) (bool, float64) {
 					if choices[b].actionType == blockActionStandby &&
+						choices[b].targetSOC <= 0 &&
 						len(states) == len(initStates) && len(states) > blocks[b].endIdx+1 {
 						// Use maxImportRate() rather than knownPostHorizonRate (a 4-hour average) so partial
 						// Standby discharge does not drain SOC needed for a 1-hour post-horizon price spike.

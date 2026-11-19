@@ -2866,6 +2866,122 @@ func TestOptimizeBlockTargets(t *testing.T) {
 			"Pass 2 optimizeBlockTargets must not shed Standby SOC into Load to make room for solar on BuyAllSellAll")
 		assert.InDelta(t, 60.0, path.states[1].soc, 0.01)
 	})
+
+	t.Run("ChargeAndPartialStandby_PrePeakOffPeakExceedsFullCapacity", func(t *testing.T) {
+		t.Parallel()
+		c := NewController()
+
+		// 3-tier TOU tariff where Super Off-Peak ($0.055) -> Off-Peak ($0.1048) arbitrage is profitable,
+		// but the 2h Off-Peak block (05:00-07:00, ~66% SOC load) + 2h On-Peak block (07:00-09:00, ~24% SOC load)
+		// + post-peak 20% Off-Peak reserve floor exceeds 100% battery capacity (~110% > 100%).
+		// The solver must NOT fall back to charging only ~44% and holding the entire 05:00-07:00 block in Standby;
+		// instead it must pair Charge(~98-100%) in Super Off-Peak with partial-Load Standby in 05:00-07:00
+		// (discharging down to ~44%, then holding Standby until 07:00 On-Peak).
+		t0 := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+		var tl []planInterval
+		addIntervals := func(startHr, count int, imp, exp, loadKWH, solarKWH, minSOC float64) {
+			base := t0.Add(time.Duration(startHr) * time.Hour)
+			for i := 0; i < count; i++ {
+				s := base.Add(time.Duration(i*20) * time.Minute)
+				tl = append(tl, planInterval{
+					startTime:         s,
+					endTime:           s.Add(20 * time.Minute),
+					durationHours:     20.0 / 60.0,
+					importRate:        imp,
+					exportRate:        exp,
+					batteryExportRate: exp,
+					loadKWH:           loadKWH,
+					solarKWH:          solarKWH,
+					minSOC:            minSOC,
+				})
+			}
+		}
+		// 00:00-05:00 Super Off-Peak (15 intervals, minSOC 40%)
+		addIntervals(0, 15, 0.0550, 0.0238, 0.70, 0.0, 40.0)
+		// 05:00-07:00 Off-Peak (6 intervals, minSOC 20%, 1.60 kWh/20m = 9.6 kWh ~ 67% SOC on 15 kWh battery)
+		addIntervals(5, 6, 0.1048, 0.0238, 1.60, 0.0, 20.0)
+		// 07:00-09:00 On-Peak (6 intervals, minSOC 5%, 0.60 kWh/20m = 3.6 kWh ~ 25% SOC)
+		addIntervals(7, 6, 0.3144, 0.0940, 0.60, 0.0, 5.0)
+		// 09:00-12:00 Post-Peak Off-Peak (9 intervals, minSOC 20%, sunny refill)
+		addIntervals(9, 9, 0.1048, 0.0238, 0.60, 2.00, 20.0)
+
+		sett := types.Settings{
+			GridChargeBatteries:                 true,
+			GridExportBatteries:                 false,
+			GridExportSolar:                     true,
+			MinBatterySOC:                       5.0,
+			MinArbitrageDifferenceDollarsPerKWH: 0.02,
+			OptimizationProfile:                 "balanced",
+			ManageTOUSchedules:                  true,
+		}
+		status := types.SystemStatus{
+			Timestamp:             t0,
+			BatterySOC:            45.0,
+			BatteryCapacityKWH:    15.0,
+			MaxBatteryChargeKW:    8.0,
+			MaxBatteryDischargeKW: 10.0,
+		}
+		initSt := planState{
+			time:           t0,
+			soc:            45.0,
+			energyKWH:      15.0 * 0.45,
+			capacityKWH:    15.0,
+			maxChargeKW:    8.0,
+			maxDischargeKW: 10.0,
+		}
+		postH := postHorizonValuation{knownPostHorizonRate: 0.1048}
+
+		path := c.searchOptimalPlanBlocks(ctx, tl, initSt, nil, postH, sett, status, nil, nil)
+		require.NotNil(t, path)
+		require.Len(t, path.actions, len(tl))
+
+		// Must charge nearly full during Super Off-Peak (00:00-05:00) so battery enters 05:00 at >= 95% SOC.
+		assert.GreaterOrEqual(t, path.states[15].soc, 95.0,
+			"Must charge nearly full during Super Off-Peak to cover as much of 05:00-07:00 Off-Peak as possible")
+		// Must discharge in BatteryModeLoad at the start of 05:00-07:00 Off-Peak and switch to Standby before 07:00.
+		assert.Equal(t, types.BatteryModeLoad, path.actions[15].batteryMode,
+			"05:00 Off-Peak start must discharge in BatteryModeLoad")
+		assert.Equal(t, types.BatteryModeStandby, path.actions[20].batteryMode,
+			"06:40 Off-Peak tail must hold in Standby to preserve energy for 07:00-09:00 On-Peak")
+		// Must preserve enough SOC at 07:00 to cover On-Peak without grid import and meet the 20% 09:00 reserve.
+		assert.GreaterOrEqual(t, path.states[21].soc, 40.0,
+			"Must enter 07:00 On-Peak with enough SOC to cover peak load")
+		for idx := 21; idx < 27; idx++ {
+			assert.InDelta(t, 0.0, path.metrics[idx].gridImportKWH, 0.01,
+				"On-Peak interval %d must have zero grid import", idx)
+		}
+		assert.GreaterOrEqual(t, path.states[28].soc, 20.0,
+			"Must meet the 20%% Off-Peak reserve floor once 09:00 solar starts")
+
+		// Cloudy-day 05:00 rolling poll (zero solar anywhere in the horizon, starting at 98% SOC):
+		// Single-block partial-Load Standby must still discharge early 05:00-07:00 intervals and hold the tail.
+		tlCloudy := make([]planInterval, len(tl)-15)
+		copy(tlCloudy, tl[15:])
+		for i := range tlCloudy {
+			tlCloudy[i].solarKWH = 0.0
+		}
+		status05 := status
+		status05.Timestamp = tlCloudy[0].startTime
+		status05.BatterySOC = 98.0
+		init05 := initSt
+		init05.time = tlCloudy[0].startTime
+		init05.soc = 98.0
+		init05.energyKWH = 15.0 * 0.98
+
+		pathCloudy := c.searchOptimalPlanBlocks(ctx, tlCloudy, init05, nil, postH, sett, status05, nil, nil)
+		require.NotNil(t, pathCloudy)
+		require.Len(t, pathCloudy.actions, len(tlCloudy))
+		assert.Equal(t, types.BatteryModeLoad, pathCloudy.actions[0].batteryMode,
+			"Cloudy 05:00 poll at 98%% SOC must discharge early Off-Peak intervals in BatteryModeLoad")
+		assert.Equal(t, types.BatteryModeStandby, pathCloudy.actions[5].batteryMode,
+			"Cloudy 05:00 poll must hold late 06:40 Off-Peak interval in Standby to protect On-Peak")
+		assert.GreaterOrEqual(t, pathCloudy.states[6].soc, 40.0,
+			"Cloudy 05:00 poll must preserve enough SOC entering 07:00 On-Peak")
+		for idx := 6; idx < 12; idx++ {
+			assert.InDelta(t, 0.0, pathCloudy.metrics[idx].gridImportKWH, 0.01,
+				"Cloudy On-Peak interval %d must have zero grid import", idx)
+		}
+	})
 }
 
 // TestPlanConstraintMechanisms evaluates the elimination of arbitrary penalties in favor of

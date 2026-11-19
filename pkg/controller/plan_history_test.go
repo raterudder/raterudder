@@ -67,14 +67,14 @@ func calculateMinFuturePrice(priceHistory []types.Price, start time.Time) float6
 }
 
 var planBaselines = map[string]float64{
-	"site1_march.json":           -3.910,
+	"site1_march.json":           -3.914,
 	"site1_may.json":             -15.595,
-	"site1_september.json":       38.091,
-	"site2_april.json":           0.676,
+	"site1_september.json":       38.070,
+	"site2_april.json":           0.666,
 	"site2_march.json":           9.766,
 	"site2_may.json":             1.491,
-	"site2_september.json":       1.565,
-	"site3_march.json":           -1.683,
+	"site2_september.json":       1.556,
+	"site3_march.json":           -1.701,
 	"site3_may.json":             -6.903,
 	"site4_late-may.json":        1.048,
 	"site4_may.json":             2.383,
