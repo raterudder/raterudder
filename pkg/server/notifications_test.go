@@ -492,6 +492,25 @@ func TestValidatePushSubscriptionEndpoint(t *testing.T) {
 		_, errMDNS := validatePushSubscriptionEndpoint("https://printer.local/push/1")
 		assert.ErrorContains(t, errMDNS, "public domain")
 	})
+
+	t.Run("RejectsMalformedDNSHostnames", func(t *testing.T) {
+		_, errUnderscore := validatePushSubscriptionEndpoint("https://bad_host.example.com/push/1")
+		assert.ErrorContains(t, errUnderscore, "valid host")
+
+		_, errLeadingHyphen := validatePushSubscriptionEndpoint("https://-bad.example.com/push/1")
+		assert.ErrorContains(t, errLeadingHyphen, "valid host")
+
+		_, errTrailingHyphen := validatePushSubscriptionEndpoint("https://bad-.example.com/push/1")
+		assert.ErrorContains(t, errTrailingHyphen, "valid host")
+
+		longLabel := strings.Repeat("a", 64)
+		_, errLongLabel := validatePushSubscriptionEndpoint("https://" + longLabel + ".example.com/push/1")
+		assert.ErrorContains(t, errLongLabel, "valid host")
+
+		longHost := strings.Repeat("a.", 126) + "com" // 255 chars (> 253)
+		_, errLongHost := validatePushSubscriptionEndpoint("https://" + longHost + "/push/1")
+		assert.ErrorContains(t, errLongHost, "valid host")
+	})
 }
 
 func TestSendWebPush(t *testing.T) {

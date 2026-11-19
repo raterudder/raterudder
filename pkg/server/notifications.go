@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -668,9 +669,19 @@ func webPushTopic(tag string) string {
 const (
 	webPushTimeout        = 10 * time.Second
 	maxPushEndpointLength = 2048
+	maxDNSNameLength      = 253
 )
 
-var defaultPushHTTPClient = common.SSRFSafeHTTPClient(webPushTimeout)
+var (
+	defaultPushHTTPClient = common.SSRFSafeHTTPClient(webPushTimeout)
+
+	// pushEndpointURLPattern enforces RFC 8030 HTTPS Web Push endpoint structure with an
+	// RFC 1123 multi-label public DNS hostname, optional default HTTPS port (:443), and a
+	// non-root path containing only printable ASCII URL characters (excluding '#' and '\').
+	pushEndpointURLPattern = regexp.MustCompile(
+		`^https://([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(:443)?/[\x21-\x22\x24-\x5b\x5d-\x7e]+$`,
+	)
+)
 
 func (s *Server) getPushHTTPClient() *http.Client {
 	if s.pushHTTPClient != nil {
@@ -762,7 +773,10 @@ func validatePushSubscriptionEndpoint(rawEndpoint string) (*url.URL, error) {
 			return nil, errors.New("push subscription endpoint must not contain dot path segments")
 		}
 	}
-	return u, nil
+	if len(hostname) > maxDNSNameLength || !pushEndpointURLPattern.MatchString(rawEndpoint) {
+		return nil, errors.New("push subscription endpoint must include a valid host")
+	}
+	return url.Parse(rawEndpoint)
 }
 
 // sendWebPush sends an encrypted Web Push notification using RFC 8291 and RFC 8292.
@@ -801,7 +815,7 @@ func (s *Server) sendWebPush(
 		return 0, fmt.Errorf("failed to generate VAPID token: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.Endpoint, bytes.NewReader(encryptedBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsedEndpoint.String(), bytes.NewReader(encryptedBody))
 	if err != nil {
 		return 0, fmt.Errorf("failed to create push request: %w", err)
 	}
