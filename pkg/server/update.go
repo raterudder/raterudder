@@ -1584,8 +1584,13 @@ func getSummaryLatestDate(summaries []types.HistorySummary) time.Time {
 	var latest time.Time
 	for _, s := range summaries {
 		for _, day := range s.Energy {
-			if latest.IsZero() || day.TSDayStart.After(latest) {
+			if !day.TSDayStart.IsZero() && (latest.IsZero() || day.TSDayStart.After(latest)) {
 				latest = day.TSDayStart
+			}
+		}
+		for _, w := range s.Weather {
+			if !w.TSDayStart.IsZero() && (latest.IsZero() || w.TSDayStart.After(latest)) {
+				latest = w.TSDayStart
 			}
 		}
 	}

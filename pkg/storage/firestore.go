@@ -429,10 +429,10 @@ func (f *FirestoreProvider) upsertActions(ctx context.Context, siteID string, ac
 
 			actionMap := make(map[int64]types.Action, len(existing.Actions)+len(incoming))
 			for _, a := range existing.Actions {
-				actionMap[a.Timestamp.UTC().Unix()] = a
+				actionMap[a.Timestamp.UTC().UnixNano()] = a
 			}
 			for _, a := range incoming {
-				actionMap[a.Timestamp.UTC().Unix()] = a.CompactForStorage()
+				actionMap[a.Timestamp.UTC().UnixNano()] = a.CompactForStorage()
 			}
 
 			merged := make([]types.Action, 0, len(actionMap))
@@ -1570,14 +1570,13 @@ func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) err
 		return errors.New("userID cannot be empty")
 	}
 
-	subIDs := make([]string, 0, len(user.Subscriptions))
 	for i := range user.Subscriptions {
 		if user.Subscriptions[i].ID == "" {
 			h := sha256.Sum256([]byte(user.Subscriptions[i].Endpoint))
 			user.Subscriptions[i].ID = hex.EncodeToString(h[:])
 		}
-		subIDs = append(subIDs, user.Subscriptions[i].ID)
 	}
+	subIDs := buildSubscriptionIDs(user.Subscriptions)
 
 	userJSON, err := json.Marshal(user)
 	if err != nil {
@@ -2032,16 +2031,19 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 
 		val, err := doc.DataAt("json")
 		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "utility price doc missing json", slog.String("docID", doc.Ref.ID), slog.String("utilityID", utilityID), slog.Any("err", err))
 			continue
 		}
 
 		jsonStr, ok := val.(string)
 		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "utility price doc json not string", slog.String("docID", doc.Ref.ID), slog.String("utilityID", utilityID))
 			continue
 		}
 
 		var monthly types.UtilityMonthlyPrices
 		if err := json.Unmarshal([]byte(jsonStr), &monthly); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal utility prices", slog.String("docID", doc.Ref.ID), slog.String("utilityID", utilityID), slog.Any("err", err))
 			continue
 		}
 
@@ -2285,19 +2287,24 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 			Weather:      mergedWeather,
 		}
 
-		// Determine latestDate and earliestDate.
+		// Determine latestDate and earliestDate across both Energy and Weather.
 		var latestDate, earliestDate time.Time
-		if len(mergedSummary.Energy) > 0 {
-			earliestDate = mergedSummary.Energy[0].TSDayStart
-			latestDate = mergedSummary.Energy[0].TSDayStart
-			for _, day := range mergedSummary.Energy {
-				if day.TSDayStart.Before(earliestDate) {
-					earliestDate = day.TSDayStart
-				}
-				if day.TSDayStart.After(latestDate) {
-					latestDate = day.TSDayStart
-				}
+		updateBounds := func(ts time.Time) {
+			if ts.IsZero() {
+				return
 			}
+			if earliestDate.IsZero() || ts.Before(earliestDate) {
+				earliestDate = ts
+			}
+			if latestDate.IsZero() || ts.After(latestDate) {
+				latestDate = ts
+			}
+		}
+		for _, day := range mergedSummary.Energy {
+			updateBounds(day.TSDayStart)
+		}
+		for _, w := range mergedSummary.Weather {
+			updateBounds(w.TSDayStart)
 		}
 
 		jsonBytes, err := json.Marshal(mergedSummary)
@@ -2429,6 +2436,23 @@ func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestor
 	return nil
 }
 
+func buildSubscriptionIDs(subs []types.PushSubscription) []string {
+	subIDs := make([]string, 0, len(subs)*2)
+	for _, s := range subs {
+		if s.ID != "" {
+			subIDs = append(subIDs, s.ID)
+		}
+		if s.Endpoint != "" {
+			h := sha256.Sum256([]byte(s.Endpoint))
+			hHex := hex.EncodeToString(h[:])
+			if hHex != s.ID {
+				subIDs = append(subIDs, hHex)
+			}
+		}
+	}
+	return subIDs
+}
+
 // AddUserPushSubscription adds or updates a push subscription on a user with optimistic concurrency.
 func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID string, sub types.PushSubscription) error {
 	ctx, cancel := withDefaultTimeout(ctx)
@@ -2476,19 +2500,7 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 			user.Subscriptions = append(user.Subscriptions, sub)
 		}
 
-		subIDs := make([]string, 0, len(user.Subscriptions)*2)
-		for _, s := range user.Subscriptions {
-			if s.ID != "" {
-				subIDs = append(subIDs, s.ID)
-			}
-			if s.Endpoint != "" {
-				h := sha256.Sum256([]byte(s.Endpoint))
-				hHex := hex.EncodeToString(h[:])
-				if hHex != s.ID {
-					subIDs = append(subIDs, hHex)
-				}
-			}
-		}
+		subIDs := buildSubscriptionIDs(user.Subscriptions)
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
@@ -2548,19 +2560,7 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 			userSites = nil
 		}
 
-		subIDs := make([]string, 0, len(user.Subscriptions)*2)
-		for _, s := range user.Subscriptions {
-			if s.ID != "" {
-				subIDs = append(subIDs, s.ID)
-			}
-			if s.Endpoint != "" {
-				h := sha256.Sum256([]byte(s.Endpoint))
-				hHex := hex.EncodeToString(h[:])
-				if hHex != s.ID {
-					subIDs = append(subIDs, hHex)
-				}
-			}
-		}
+		subIDs := buildSubscriptionIDs(user.Subscriptions)
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
@@ -2576,23 +2576,31 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 		return err
 	}
 
-	if noRemainingSubscriptions && len(userSites) > 0 {
-		for _, s := range userSites {
-			if s.ID != "" {
-				err := f.UpdateSiteNotificationSettings(ctx, s.ID, userID, types.UserNotificationSettings{})
-				if err != nil {
-					log.Ctx(ctx).Error(
-						"failed to cleanup user from site notifications",
-						slog.String("siteID", s.ID),
-						slog.String("userID", userID),
-						slog.Any("error", err),
-					)
-				}
-			}
-		}
+	if noRemainingSubscriptions {
+		f.cleanupUserSiteNotifications(ctx, userID, userSites)
 	}
 
 	return nil
+}
+
+func (f *FirestoreProvider) cleanupUserSiteNotifications(ctx context.Context, userID string, sites []types.UserSite) {
+	if userID == "" {
+		return
+	}
+	for _, s := range sites {
+		if s.ID == "" {
+			continue
+		}
+		if err := f.UpdateSiteNotificationSettings(ctx, s.ID, userID, types.UserNotificationSettings{}); err != nil {
+			log.Ctx(ctx).ErrorContext(
+				ctx,
+				"failed to cleanup user from site notifications",
+				slog.String("siteID", s.ID),
+				slog.String("userID", userID),
+				slog.Any("error", err),
+			)
+		}
+	}
 }
 
 // ReplaceUserPushSubscription replaces a push subscription or removes it (if newSub is nil or has empty endpoint)
@@ -2629,6 +2637,10 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 	}
 
 	docRef := doc.Ref
+
+	var cleanupUserID string
+	var userSites []types.UserSite
+	noRemainingSubscriptions := false
 
 	_, err = f.readModifyWriteDoc(ctx, docRef, func(docSnap *firestore.DocumentSnapshot) (map[string]any, error) {
 		if docSnap == nil {
@@ -2673,19 +2685,19 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 			user.Subscriptions = append(user.Subscriptions[:targetIndex], user.Subscriptions[targetIndex+1:]...)
 		}
 
-		subIDs := make([]string, 0, len(user.Subscriptions)*2)
-		for _, s := range user.Subscriptions {
-			if s.ID != "" {
-				subIDs = append(subIDs, s.ID)
+		noRemainingSubscriptions = len(user.Subscriptions) == 0
+		if noRemainingSubscriptions {
+			cleanupUserID = user.ID
+			if cleanupUserID == "" {
+				cleanupUserID = docSnap.Ref.ID
 			}
-			if s.Endpoint != "" {
-				h := sha256.Sum256([]byte(s.Endpoint))
-				hHex := hex.EncodeToString(h[:])
-				if hHex != s.ID {
-					subIDs = append(subIDs, hHex)
-				}
-			}
+			userSites = slices.Clone(user.Sites)
+		} else {
+			cleanupUserID = ""
+			userSites = nil
 		}
+
+		subIDs := buildSubscriptionIDs(user.Subscriptions)
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
@@ -2697,7 +2709,15 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 			"subscriptionIDs": subIDs,
 		}, nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	if noRemainingSubscriptions {
+		f.cleanupUserSiteNotifications(ctx, cleanupUserID, userSites)
+	}
+
+	return nil
 }
 
 // AddUserApp adds or updates a UserApp on a user with optimistic concurrency.
@@ -3067,14 +3087,17 @@ func (f *FirestoreProvider) GetNotificationLogs(ctx context.Context, siteID stri
 		}
 		val, err := doc.DataAt("json")
 		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "notification logs doc missing json", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
 			continue
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "notification logs doc json not string", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID))
 			continue
 		}
 		var monthlyLogs types.MonthlyNotificationLogs
 		if err := json.Unmarshal([]byte(jsonStr), &monthlyLogs); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal notification logs", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
 			continue
 		}
 		for _, l := range monthlyLogs.Logs {
@@ -3293,53 +3316,8 @@ func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts Prici
 	}
 
 	for _, uID := range utilityIDs {
-		legacyColl := f.client.Collection("utilities").Doc(uID).Collection("hourly_prices")
-		iter := legacyColl.Documents(ctx)
-
-		var prices []types.PriceState
-		for {
-			doc, err := iter.Next()
-			if errors.Is(err, iterator.Done) {
-				break
-			}
-			if err != nil {
-				iter.Stop()
-				return nil, fmt.Errorf("failed to iterate legacy utility prices for %s: %w", uID, err)
-			}
-
-			var p types.PriceState
-			if val, err := doc.DataAt("json"); err == nil {
-				if jsonStr, ok := val.(string); ok {
-					if err := json.Unmarshal([]byte(jsonStr), &p); err == nil && !p.TSStart.IsZero() {
-						prices = append(prices, p)
-					}
-				}
-			}
-		}
-		iter.Stop()
-
-		if len(prices) == 0 {
-			continue
-		}
-
-		stats.UtilitiesInspected++
-		stats.UtilityHoursMigrated += len(prices)
-
-		monthSet := make(map[string]struct{})
-		for _, p := range prices {
-			monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
-		}
-		stats.UtilityMonthsCreated += len(monthSet)
-
-		if !opts.DryRun {
-			if err := f.UpsertUtilityPrices(ctx, uID, prices, 0); err != nil {
-				return nil, fmt.Errorf("failed to upsert migrated utility prices for %s: %w", uID, err)
-			}
-			if opts.PurgeLegacy {
-				if err := f.deleteCollection(ctx, legacyColl); err != nil {
-					return nil, fmt.Errorf("failed to purge legacy utility prices for %s: %w", uID, err)
-				}
-			}
+		if err := f.migrateLegacyUtilityPricing(ctx, uID, opts, stats); err != nil {
+			return nil, err
 		}
 	}
 
@@ -3358,61 +3336,202 @@ func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts Prici
 	}
 
 	for _, sID := range siteIDs {
-		legacyColl, err := f.getCollection(sID, "price_history")
-		if err != nil {
+		if err := f.migrateLegacySitePricing(ctx, sID, opts, stats); err != nil {
 			return nil, err
-		}
-
-		iter := legacyColl.Documents(ctx)
-
-		var prices []types.Price
-		for {
-			doc, err := iter.Next()
-			if errors.Is(err, iterator.Done) {
-				break
-			}
-			if err != nil {
-				iter.Stop()
-				return nil, fmt.Errorf("failed to iterate legacy site prices for %s: %w", sID, err)
-			}
-
-			var p types.Price
-			if val, err := doc.DataAt("json"); err == nil {
-				if jsonStr, ok := val.(string); ok {
-					if err := json.Unmarshal([]byte(jsonStr), &p); err == nil && !p.TSStart.IsZero() {
-						prices = append(prices, p)
-					}
-				}
-			}
-		}
-		iter.Stop()
-
-		if len(prices) == 0 {
-			continue
-		}
-
-		stats.SitesInspected++
-		stats.SiteHoursMigrated += len(prices)
-
-		monthSet := make(map[string]struct{})
-		for _, p := range prices {
-			monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
-		}
-		stats.SiteMonthsCreated += len(monthSet)
-
-		if !opts.DryRun {
-			if err := f.UpsertPrices(ctx, sID, prices, types.CurrentPriceHistoryVersion); err != nil {
-				return nil, fmt.Errorf("failed to upsert migrated site prices for %s: %w", sID, err)
-			}
-			if opts.PurgeLegacy {
-				if err := f.deleteCollection(ctx, legacyColl); err != nil {
-					return nil, fmt.Errorf("failed to purge legacy site prices for %s: %w", sID, err)
-				}
-			}
 		}
 	}
 
 	return stats, nil
+}
+
+func (f *FirestoreProvider) migrateLegacyUtilityPricing(ctx context.Context, uID string, opts PricingMigrationOptions, stats *PricingMigrationStats) error {
+	legacyColl := f.client.Collection("utilities").Doc(uID).Collection("hourly_prices")
+	iter := legacyColl.Documents(ctx)
+
+	var prices []types.PriceState
+	var hadParseErrors bool
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			iter.Stop()
+			return fmt.Errorf("failed to iterate legacy utility prices for %s: %w", uID, err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy utility price doc missing json",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("utilityID", uID),
+				slog.Any("err", err),
+			)
+			continue
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy utility price doc json not string",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("utilityID", uID),
+			)
+			continue
+		}
+		var p types.PriceState
+		if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal legacy utility price",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("utilityID", uID),
+				slog.Any("err", err),
+			)
+			continue
+		}
+		if p.TSStart.IsZero() {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy utility price doc missing tsStart",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("utilityID", uID),
+			)
+			continue
+		}
+		prices = append(prices, p)
+	}
+	iter.Stop()
+
+	if len(prices) == 0 {
+		if !opts.DryRun && opts.PurgeLegacy && hadParseErrors {
+			log.Ctx(ctx).WarnContext(ctx, "skipping legacy utility price purge due to unparsed records",
+				slog.String("utilityID", uID),
+			)
+		}
+		return nil
+	}
+
+	stats.UtilitiesInspected++
+	stats.UtilityHoursMigrated += len(prices)
+
+	monthSet := make(map[string]struct{})
+	for _, p := range prices {
+		monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
+	}
+	stats.UtilityMonthsCreated += len(monthSet)
+
+	if !opts.DryRun {
+		if err := f.UpsertUtilityPrices(ctx, uID, prices, 0); err != nil {
+			return fmt.Errorf("failed to upsert migrated utility prices for %s: %w", uID, err)
+		}
+		if opts.PurgeLegacy {
+			if hadParseErrors {
+				log.Ctx(ctx).WarnContext(ctx, "skipping legacy utility price purge due to unparsed records",
+					slog.String("utilityID", uID),
+				)
+			} else if err := f.deleteCollection(ctx, legacyColl); err != nil {
+				return fmt.Errorf("failed to purge legacy utility prices for %s: %w", uID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (f *FirestoreProvider) migrateLegacySitePricing(ctx context.Context, sID string, opts PricingMigrationOptions, stats *PricingMigrationStats) error {
+	legacyColl, err := f.getCollection(sID, "price_history")
+	if err != nil {
+		return err
+	}
+
+	iter := legacyColl.Documents(ctx)
+
+	var prices []types.Price
+	var hadParseErrors bool
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			iter.Stop()
+			return fmt.Errorf("failed to iterate legacy site prices for %s: %w", sID, err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy site price doc missing json",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("siteID", sID),
+				slog.Any("err", err),
+			)
+			continue
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy site price doc json not string",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("siteID", sID),
+			)
+			continue
+		}
+		var p types.Price
+		if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal legacy site price",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("siteID", sID),
+				slog.Any("err", err),
+			)
+			continue
+		}
+		if p.TSStart.IsZero() {
+			hadParseErrors = true
+			log.Ctx(ctx).WarnContext(ctx, "legacy site price doc missing tsStart",
+				slog.String("docID", doc.Ref.ID),
+				slog.String("siteID", sID),
+			)
+			continue
+		}
+		prices = append(prices, p)
+	}
+	iter.Stop()
+
+	if len(prices) == 0 {
+		if !opts.DryRun && opts.PurgeLegacy && hadParseErrors {
+			log.Ctx(ctx).WarnContext(ctx, "skipping legacy site price purge due to unparsed records",
+				slog.String("siteID", sID),
+			)
+		}
+		return nil
+	}
+
+	stats.SitesInspected++
+	stats.SiteHoursMigrated += len(prices)
+
+	monthSet := make(map[string]struct{})
+	for _, p := range prices {
+		monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
+	}
+	stats.SiteMonthsCreated += len(monthSet)
+
+	if !opts.DryRun {
+		if err := f.UpsertPrices(ctx, sID, prices, types.CurrentPriceHistoryVersion); err != nil {
+			return fmt.Errorf("failed to upsert migrated site prices for %s: %w", sID, err)
+		}
+		if opts.PurgeLegacy {
+			if hadParseErrors {
+				log.Ctx(ctx).WarnContext(ctx, "skipping legacy site price purge due to unparsed records",
+					slog.String("siteID", sID),
+				)
+			} else if err := f.deleteCollection(ctx, legacyColl); err != nil {
+				return fmt.Errorf("failed to purge legacy site prices for %s: %w", sID, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 type legacyStoredPlanPeriod struct {
@@ -3582,21 +3701,26 @@ func (f *FirestoreProvider) MigrateLegacyActions(ctx context.Context, opts Actio
 
 			val, err := doc.DataAt("json")
 			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "legacy action doc missing json", slog.String("docID", doc.Ref.ID), slog.String("siteID", sID), slog.Any("err", err))
 				continue
 			}
 			jsonStr, ok := val.(string)
 			if !ok {
+				log.Ctx(ctx).WarnContext(ctx, "legacy action doc json not string", slog.String("docID", doc.Ref.ID), slog.String("siteID", sID))
 				continue
 			}
 
 			act, err := parseLegacyActionJSON([]byte(jsonStr))
 			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to parse legacy action json", slog.String("docID", doc.Ref.ID), slog.String("siteID", sID), slog.Any("err", err))
 				iter.Stop()
 				return nil, fmt.Errorf("failed to parse legacy action %s for %s: %w", doc.Ref.ID, sID, err)
 			}
-			if !act.Timestamp.IsZero() {
-				actions = append(actions, act)
+			if act.Timestamp.IsZero() {
+				log.Ctx(ctx).WarnContext(ctx, "legacy action doc missing timestamp", slog.String("docID", doc.Ref.ID), slog.String("siteID", sID))
+				continue
 			}
+			actions = append(actions, act)
 		}
 		iter.Stop()
 

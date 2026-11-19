@@ -1,22 +1,32 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func ctxWithCapturedWarnLogger(buf *bytes.Buffer) context.Context {
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	return log.With(context.Background(), logger)
+}
 
 func TestFirestoreProvider(t *testing.T) {
 	// Check if emulator is running or configured
@@ -530,6 +540,98 @@ func TestFirestoreProvider(t *testing.T) {
 			_, err = dailyColl.Doc("2026-02-06-00").Get(ctx)
 			assert.Equal(t, codes.NotFound, status.Code(err))
 		})
+
+		t.Run("SubSecondActions", func(t *testing.T) {
+			siteID := "test-site-subsecond-actions"
+			tBase := time.Date(2026, 8, 15, 14, 20, 5, 0, time.UTC)
+			tSub1 := tBase.Add(150 * time.Millisecond)
+			tSub2 := tBase.Add(750 * time.Millisecond)
+
+			act1 := types.Action{
+				Timestamp:   tSub1,
+				BatteryMode: types.BatteryModeChargeAny,
+				SolarMode:   types.SolarModeAny,
+				Description: "First sub-second action",
+			}
+			act2 := types.Action{
+				Timestamp:   tSub2,
+				BatteryMode: types.BatteryModeLoad,
+				SolarMode:   types.SolarModeAny,
+				Description: "Second sub-second action",
+			}
+
+			require.NoError(t, f.InsertAction(ctx, siteID, act1))
+			require.NoError(t, f.InsertAction(ctx, siteID, act2))
+
+			got, err := f.GetActionHistory(ctx, siteID, tBase, tBase.Add(time.Second))
+			require.NoError(t, err)
+			if assert.Len(t, got, 2) {
+				assert.Equal(t, "First sub-second action", got[0].Description)
+				assert.True(t, got[0].Timestamp.Equal(tSub1))
+				assert.Equal(t, "Second sub-second action", got[1].Description)
+				assert.True(t, got[1].Timestamp.Equal(tSub2))
+			}
+
+			latest, err := f.GetLatestAction(ctx, siteID)
+			require.NoError(t, err)
+			if assert.NotNil(t, latest) {
+				assert.Equal(t, "Second sub-second action", latest.Description)
+			}
+
+			// Same exact nanosecond timestamp overwrites act1 without clobbering act2
+			act1Updated := types.Action{
+				Timestamp:   tSub1,
+				BatteryMode: types.BatteryModeStandby,
+				SolarMode:   types.SolarModeAny,
+				Description: "First sub-second action updated",
+			}
+			require.NoError(t, f.InsertAction(ctx, siteID, act1Updated))
+
+			gotAfterUpdate, err := f.GetActionHistory(ctx, siteID, tBase, tBase.Add(time.Second))
+			require.NoError(t, err)
+			if assert.Len(t, gotAfterUpdate, 2) {
+				assert.Equal(t, "First sub-second action updated", gotAfterUpdate[0].Description)
+				assert.Equal(t, types.BatteryModeStandby, gotAfterUpdate[0].BatteryMode)
+				assert.Equal(t, "Second sub-second action", gotAfterUpdate[1].Description)
+			}
+		})
+
+		t.Run("MigrateLegacyActionsLogsMalformedDocs", func(t *testing.T) {
+			siteID := "test-site-migrate-actions-malformed"
+			require.NoError(t, f.CreateSite(ctx, siteID, types.Site{ID: siteID}))
+
+			legacyColl, err := f.getCollection(siteID, "action_history")
+			require.NoError(t, err)
+
+			t1 := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+			t2 := time.Date(2026, 3, 1, 10, 20, 0, 0, time.UTC)
+			t3 := time.Date(2026, 3, 1, 10, 40, 0, 0, time.UTC)
+
+			_, err = legacyColl.Doc("missing-json").Set(ctx, map[string]any{"timestamp": t1})
+			require.NoError(t, err)
+			_, err = legacyColl.Doc("non-string-json").Set(ctx, map[string]any{"json": 12345, "timestamp": t2})
+			require.NoError(t, err)
+			validJSON := `{"timestamp":"2026-03-01T10:40:00Z","batteryMode":1,"solarMode":2,"description":"Valid legacy action"}`
+			_, err = legacyColl.Doc("valid-json").Set(ctx, map[string]any{"json": validJSON, "timestamp": t3})
+			require.NoError(t, err)
+
+			var logBuf bytes.Buffer
+			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
+
+			stats, err := f.MigrateLegacyActions(warnCtx, ActionMigrationOptions{SiteID: siteID})
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.SiteActionsMigrated)
+
+			hist, err := f.GetActionHistory(ctx, siteID, t1.Add(-time.Hour), t3.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, hist, 1) {
+				assert.Equal(t, "Valid legacy action", hist[0].Description)
+			}
+
+			logs := logBuf.String()
+			assert.Contains(t, logs, "legacy action doc missing json")
+			assert.Contains(t, logs, "legacy action doc json not string")
+		})
 	})
 
 	t.Run("EnergyHistory", func(t *testing.T) {
@@ -689,6 +791,39 @@ func TestFirestoreProvider(t *testing.T) {
 	})
 
 	t.Run("Sites", func(t *testing.T) {
+		t.Run("CreateSite", func(t *testing.T) {
+			assert.ErrorContains(t, f.CreateSite(ctx, "", types.Site{}), "siteID cannot be empty")
+
+			newSiteID := "create-site-conflict-test"
+			initialSite := types.Site{
+				ID:         newSiteID,
+				InviteCode: "invite-initial",
+				Permissions: []types.SitePermissions{
+					{UserID: "creator@test.com"},
+				},
+			}
+			require.NoError(t, f.CreateSite(ctx, newSiteID, initialSite))
+
+			gotSite, err := f.GetSite(ctx, newSiteID)
+			require.NoError(t, err)
+			assert.Equal(t, "invite-initial", gotSite.InviteCode)
+			if assert.Len(t, gotSite.Permissions, 1) {
+				assert.Equal(t, "creator@test.com", gotSite.Permissions[0].UserID)
+			}
+
+			// Creating with an existing siteID must fail with AlreadyExists and preserve original data
+			err = f.CreateSite(ctx, newSiteID, types.Site{
+				ID:         newSiteID,
+				InviteCode: "invite-overwrite",
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.AlreadyExists, status.Code(errors.Unwrap(err)))
+
+			gotAfterConflict, err := f.GetSite(ctx, newSiteID)
+			require.NoError(t, err)
+			assert.Equal(t, "invite-initial", gotAfterConflict.InviteCode)
+		})
+
 		// First, manually create a site via SetSettings so it exists
 		site := types.Site{
 			ID:         "test-site-crud",
@@ -819,6 +954,49 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 0, ver)
 		})
+	})
+
+	t.Run("ESSMockState", func(t *testing.T) {
+		assert.ErrorContains(t, f.UpdateESSMockState(ctx, "", types.ESSMockState{}), "siteID cannot be empty")
+		_, err := f.GetESSMockState(ctx, "")
+		assert.ErrorContains(t, err, "siteID cannot be empty")
+
+		missingState, err := f.GetESSMockState(ctx, "mock-ess-nonexistent")
+		require.NoError(t, err)
+		assert.Equal(t, types.ESSMockState{}, missingState)
+
+		siteID := "mock-ess-site"
+		ts := time.Date(2026, 8, 12, 14, 0, 0, 0, time.UTC)
+		initialState := types.ESSMockState{
+			Timestamp:   ts,
+			BatterySOC:  67.5,
+			BatteryMode: types.BatteryModeChargeAny,
+			SolarMode:   types.SolarModeAny,
+			ChargeToSOC: 90,
+			MinimumSOC:  20,
+			DailyHistory: map[string]types.EnergyStats{
+				"2026-08-12": {
+					TSHourStart: ts,
+					SolarKWH:    4.5,
+					HomeKWH:     1.2,
+				},
+			},
+		}
+		require.NoError(t, f.UpdateESSMockState(ctx, siteID, initialState))
+
+		gotState, err := f.GetESSMockState(ctx, siteID)
+		require.NoError(t, err)
+		assert.Equal(t, initialState, gotState)
+
+		updatedState := initialState
+		updatedState.BatterySOC = 82.0
+		updatedState.BatteryMode = types.BatteryModeLoad
+		require.NoError(t, f.UpdateESSMockState(ctx, siteID, updatedState))
+
+		gotUpdated, err := f.GetESSMockState(ctx, siteID)
+		require.NoError(t, err)
+		assert.Equal(t, 82.0, gotUpdated.BatterySOC)
+		assert.Equal(t, types.BatteryModeLoad, gotUpdated.BatteryMode)
 	})
 
 	t.Run("Users", func(t *testing.T) {
@@ -1402,6 +1580,39 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, 0.045, res[0].DollarsPerKWH)
 			assert.True(t, res[0].Confirmed)
 		})
+
+		t.Run("MalformedJSONSkippedWithWarning", func(t *testing.T) {
+			uID := "malformed-util"
+			tValid := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+			require.NoError(t, f.UpsertUtilityPrices(ctx, uID, []types.PriceState{
+				{
+					Price:     types.Price{TSStart: tValid, DollarsPerKWH: 0.14, Provider: "util"},
+					Confirmed: true,
+				},
+			}, 0))
+
+			coll := f.client.Collection("utilities").Doc(uID).Collection("monthly_prices")
+			_, err := coll.Doc("2026-06-missing").Set(ctx, map[string]any{"earliestDate": tValid.Add(time.Minute)})
+			require.NoError(t, err)
+			_, err = coll.Doc("2026-06-not-str").Set(ctx, map[string]any{"earliestDate": tValid.Add(2 * time.Minute), "json": 42})
+			require.NoError(t, err)
+			_, err = coll.Doc("2026-06-bad-json").Set(ctx, map[string]any{"earliestDate": tValid.Add(3 * time.Minute), "json": "{corrupt"})
+			require.NoError(t, err)
+
+			var logBuf bytes.Buffer
+			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
+
+			res, err := f.GetUtilityPrices(warnCtx, uID, tValid, tValid.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, res, 1) {
+				assert.Equal(t, 0.14, res[0].DollarsPerKWH)
+			}
+
+			logs := logBuf.String()
+			assert.Contains(t, logs, "utility price doc missing json")
+			assert.Contains(t, logs, "utility price doc json not string")
+			assert.Contains(t, logs, "failed to unmarshal utility prices")
+		})
 	})
 
 	t.Run("MigrateLegacyPricing", func(t *testing.T) {
@@ -1522,6 +1733,62 @@ func TestFirestoreProvider(t *testing.T) {
 		resUAfter, err := f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
 		require.NoError(t, err)
 		require.Len(t, resUAfter, 2)
+
+		t.Run("CorruptRecordsBlockPurgeLegacy", func(t *testing.T) {
+			uCorruptID := fmt.Sprintf("legacy-util-corrupt-%d", time.Now().UnixNano())
+			sCorruptID := fmt.Sprintf("legacy-site-corrupt-%d", time.Now().UnixNano())
+			require.NoError(t, f.CreateSite(ctx, sCorruptID, types.Site{ID: sCorruptID}))
+
+			uCorruptColl := f.client.Collection("utilities").Doc(uCorruptID).Collection("hourly_prices")
+			_, err := uCorruptColl.Doc("valid").Set(ctx, map[string]any{"json": string(b1), "timestamp": t1})
+			require.NoError(t, err)
+			_, err = uCorruptColl.Doc("corrupt").Set(ctx, map[string]any{"json": "{invalid-json", "timestamp": t2})
+			require.NoError(t, err)
+
+			sCorruptColl, err := f.getCollection(sCorruptID, "price_history")
+			require.NoError(t, err)
+			_, err = sCorruptColl.Doc("valid").Set(ctx, map[string]any{"json": string(sb1), "timestamp": t1})
+			require.NoError(t, err)
+			_, err = sCorruptColl.Doc("missing-json").Set(ctx, map[string]any{"timestamp": t2})
+			require.NoError(t, err)
+
+			var logBuf bytes.Buffer
+			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
+
+			stats, err := f.MigrateLegacyPricing(warnCtx, PricingMigrationOptions{
+				DryRun:      false,
+				PurgeLegacy: true,
+				UtilityID:   uCorruptID,
+				SiteID:      sCorruptID,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.UtilityHoursMigrated)
+			assert.Equal(t, 1, stats.SiteHoursMigrated)
+
+			// Valid records were migrated into monthly_prices
+			migratedU, err := f.GetUtilityPrices(ctx, uCorruptID, t1, t1.Add(time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, migratedU, 1)
+
+			migratedS, err := f.GetPriceHistory(ctx, sCorruptID, t1, t1.Add(time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, migratedS, 1)
+
+			// Legacy collections must NOT be purged because corrupt records failed to parse
+			remainingU, err := uCorruptColl.Documents(ctx).GetAll()
+			require.NoError(t, err)
+			assert.Len(t, remainingU, 2)
+
+			remainingS, err := sCorruptColl.Documents(ctx).GetAll()
+			require.NoError(t, err)
+			assert.Len(t, remainingS, 2)
+
+			logs := logBuf.String()
+			assert.Contains(t, logs, "failed to unmarshal legacy utility price")
+			assert.Contains(t, logs, "skipping legacy utility price purge due to unparsed records")
+			assert.Contains(t, logs, "legacy site price doc missing json")
+			assert.Contains(t, logs, "skipping legacy site price purge due to unparsed records")
+		})
 	})
 
 	t.Run("Interest", func(t *testing.T) {
@@ -1720,6 +1987,83 @@ func TestFirestoreProvider(t *testing.T) {
 
 		assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), rawEarliest.(time.Time).UTC())
 		assert.Equal(t, time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), rawLatest.(time.Time).UTC())
+
+		t.Run("WeatherOnlyAndMixedDateBounds", func(t *testing.T) {
+			weatherSiteID := "test-site-weather-only-summary"
+			wDay1 := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+			wDay2 := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+
+			weatherOnly := types.HistorySummary{
+				Weather: []types.Weather{
+					{
+						TSDayStart: wDay2,
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: wDay2.Add(12 * time.Hour), TemperatureC: 28.0},
+						},
+					},
+					{
+						TSDayStart: wDay1,
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: wDay1.Add(12 * time.Hour), TemperatureC: 24.0},
+						},
+					},
+				},
+			}
+
+			mergedWeatherOnly, err := f.UpdateHistorySummary(ctx, weatherSiteID, "2026-08", weatherOnly)
+			require.NoError(t, err)
+			assert.Empty(t, mergedWeatherOnly.Energy)
+			assert.Len(t, mergedWeatherOnly.Weather, 2)
+
+			wColl, err := f.getCollection(weatherSiteID, "history_summary")
+			require.NoError(t, err)
+			wDoc, err := wColl.Doc("2026-08").Get(ctx)
+			require.NoError(t, err)
+
+			wEarliest, err := wDoc.DataAt("earliestDate")
+			require.NoError(t, err)
+			wLatest, err := wDoc.DataAt("latestDate")
+			require.NoError(t, err)
+			assert.Equal(t, wDay1, wEarliest.(time.Time).UTC())
+			assert.Equal(t, wDay2, wLatest.(time.Time).UTC())
+
+			gotWeatherOnly, err := f.GetHistorySummaries(
+				ctx,
+				weatherSiteID,
+				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+			)
+			require.NoError(t, err)
+			if assert.Len(t, gotWeatherOnly, 1) {
+				assert.Empty(t, gotWeatherOnly[0].Energy)
+				assert.Len(t, gotWeatherOnly[0].Weather, 2)
+			}
+
+			// Merge Energy in the middle (Aug 5) and wider Weather (Aug 1 and Aug 20)
+			wEarly := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+			eMid := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+			wLate := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+
+			_, err = f.UpdateHistorySummary(ctx, weatherSiteID, "2026-08", types.HistorySummary{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: eMid},
+				},
+				Weather: []types.Weather{
+					{TSDayStart: wEarly},
+					{TSDayStart: wLate},
+				},
+			})
+			require.NoError(t, err)
+
+			wDocMixed, err := wColl.Doc("2026-08").Get(ctx)
+			require.NoError(t, err)
+			mixedEarliest, err := wDocMixed.DataAt("earliestDate")
+			require.NoError(t, err)
+			mixedLatest, err := wDocMixed.DataAt("latestDate")
+			require.NoError(t, err)
+			assert.Equal(t, wEarly, mixedEarliest.(time.Time).UTC())
+			assert.Equal(t, wLate, mixedLatest.(time.Time).UTC())
+		})
 	})
 
 	t.Run("UserPushSubscriptions", func(t *testing.T) {
@@ -1825,6 +2169,61 @@ func TestFirestoreProvider(t *testing.T) {
 		gotUser, err = f.GetUser(ctx, userID)
 		require.NoError(t, err)
 		assert.Len(t, gotUser.Subscriptions, 0)
+
+		t.Run("UpdateUserIndexesEndpointHashAndNilReplaceCleansSiteNotifications", func(t *testing.T) {
+			require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, userID, types.UserNotificationSettings{
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
+			}))
+
+			customSub1 := types.PushSubscription{
+				ID:       "custom-sub-id-1",
+				Endpoint: "https://fcm.googleapis.com/fcm/send/custom-endpoint-1",
+				Keys:     types.PushSubscriptionKeys{P256DH: "p256-1", Auth: "auth-custom-1"},
+			}
+			customSub2 := types.PushSubscription{
+				ID:       "custom-sub-id-2",
+				Endpoint: "https://web.push.apple.com/custom-endpoint-2",
+				Keys:     types.PushSubscriptionKeys{P256DH: "p256-2", Auth: "auth-custom-2"},
+			}
+
+			// UpdateUser must write both custom ID and sha256(Endpoint) into subscriptionIDs
+			require.NoError(t, f.UpdateUser(ctx, types.User{
+				ID:            userID,
+				Email:         userID,
+				Sites:         []types.UserSite{{ID: siteID, Name: "My Site"}},
+				Subscriptions: []types.PushSubscription{customSub1, customSub2},
+			}))
+
+			userSnap, err := f.client.Collection("users").Doc(userID).Get(ctx)
+			require.NoError(t, err)
+			rawSubIDs, err := userSnap.DataAt("subscriptionIDs")
+			require.NoError(t, err)
+			h1 := sha256.Sum256([]byte(customSub1.Endpoint))
+			h2 := sha256.Sum256([]byte(customSub2.Endpoint))
+			assert.Contains(t, rawSubIDs, "custom-sub-id-1")
+			assert.Contains(t, rawSubIDs, hex.EncodeToString(h1[:]))
+			assert.Contains(t, rawSubIDs, "custom-sub-id-2")
+			assert.Contains(t, rawSubIDs, hex.EncodeToString(h2[:]))
+
+			// Revoking customSub1 via nil ReplaceUserPushSubscription finds the user via endpoint hash
+			// and preserves site.Notifications because customSub2 remains
+			require.NoError(t, f.ReplaceUserPushSubscription(ctx, customSub1.Endpoint, customSub1.Keys.Auth, nil))
+			gotSettingsMid, _, _, err := f.GetSettings(ctx, siteID)
+			require.NoError(t, err)
+			assert.Contains(t, gotSettingsMid.Notifications, userID)
+
+			// Revoking the final subscription via nil ReplaceUserPushSubscription cleans up site.Notifications[userID]
+			require.NoError(t, f.ReplaceUserPushSubscription(ctx, customSub2.Endpoint, customSub2.Keys.Auth, nil))
+			gotUserAfter, err := f.GetUser(ctx, userID)
+			require.NoError(t, err)
+			assert.Empty(t, gotUserAfter.Subscriptions)
+
+			gotSettingsAfter, _, _, err := f.GetSettings(ctx, siteID)
+			require.NoError(t, err)
+			assert.NotContains(t, gotSettingsAfter.Notifications, userID)
+		})
 	})
 
 	t.Run("UserApps", func(t *testing.T) {
@@ -2092,6 +2491,39 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, log2Time.UTC(), rawEarliest10.(time.Time).UTC())
 		assert.Equal(t, log3Time.UTC(), rawLatest10.(time.Time).UTC())
+
+		t.Run("MalformedJSONSkippedWithWarning", func(t *testing.T) {
+			corruptSiteID := "site-notif-logs-corrupt"
+			tLog := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+			require.NoError(t, f.AppendNotificationLog(ctx, corruptSiteID, types.NotificationLog{
+				ID:        "valid-log",
+				TSCreated: tLog,
+				UserID:    "user1@test.com",
+			}))
+
+			corruptColl, err := f.getCollection(corruptSiteID, "notification_logs")
+			require.NoError(t, err)
+			_, err = corruptColl.Doc("2026-11-missing").Set(ctx, map[string]any{"earliestDate": tLog.Add(time.Minute)})
+			require.NoError(t, err)
+			_, err = corruptColl.Doc("2026-11-not-str").Set(ctx, map[string]any{"earliestDate": tLog.Add(2 * time.Minute), "json": 99})
+			require.NoError(t, err)
+			_, err = corruptColl.Doc("2026-11-bad-json").Set(ctx, map[string]any{"earliestDate": tLog.Add(3 * time.Minute), "json": "{corrupt"})
+			require.NoError(t, err)
+
+			var logBuf bytes.Buffer
+			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
+
+			gotLogs, err := f.GetNotificationLogs(warnCtx, corruptSiteID, tLog.Add(-time.Hour), tLog.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, gotLogs, 1) {
+				assert.Equal(t, "valid-log", gotLogs[0].ID)
+			}
+
+			logs := logBuf.String()
+			assert.Contains(t, logs, "notification logs doc missing json")
+			assert.Contains(t, logs, "notification logs doc json not string")
+			assert.Contains(t, logs, "failed to unmarshal notification logs")
+		})
 	})
 
 	t.Run("RevokeUserSession", func(t *testing.T) {
