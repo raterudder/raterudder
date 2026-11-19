@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'wouter';
 import { fetchUtilities, type UtilityProviderInfo } from '../api';
+import { consumePrefetchedUtilities } from '../utils/utilitiesPrefetch';
 import { usePageSEO, PUBLIC_PAGES_SEO } from '../utils/seo';
 import './MarketingPages.css';
 
@@ -283,12 +284,16 @@ type CategoryFilter = 'all' | 'realtime' | 'california' | 'texas' | 'tou' | 'int
 const SupportedUtilitiesPage: React.FC = () => {
     usePageSEO(PUBLIC_PAGES_SEO.utilities);
 
-    const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [initialPrefetched] = useState<UtilityProviderInfo[] | null>(() => consumePrefetchedUtilities());
+    const [utilities, setUtilities] = useState<UtilityProviderInfo[]>(() => initialPrefetched ?? []);
+    const [loading, setLoading] = useState(() => initialPrefetched === null);
     const [searchQuery, setSearchQuery] = useState('');
     const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
 
     useEffect(() => {
+        if (initialPrefetched !== null) {
+            return;
+        }
         let cancelled = false;
         fetchUtilities()
             .then((liveUtilities) => {
@@ -308,7 +313,7 @@ const SupportedUtilitiesPage: React.FC = () => {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [initialPrefetched]);
 
     const filteredUtilities = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();

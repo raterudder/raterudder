@@ -226,6 +226,55 @@ func TestWebHandler(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 
+	t.Run("Serve Existing Asset File", func(t *testing.T) {
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+		}
+
+		mux := http.NewServeMux()
+		fileServer := http.FileServer(http.FS(testFS))
+		mux.Handle("/", srv.webHandler(testFS, fileServer))
+
+		req := httptest.NewRequest("GET", "/assets/main.js", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		if assert.Equal(t, http.StatusOK, resp.StatusCode) {
+			assert.Equal(t, "console.log('hello');", w.Body.String())
+		}
+	})
+
+	t.Run("Serve Not Found on Missing Asset", func(t *testing.T) {
+		srv := &Server{
+			utilities:        mockUMap,
+			ess:              mockP,
+			storage:          mockS,
+			listenAddr:       ":8080",
+			controller:       controller.NewController(),
+			webCacheDuration: 5 * time.Minute,
+		}
+
+		mux := http.NewServeMux()
+		fileServer := http.FileServer(http.FS(testFS))
+		mux.Handle("/", srv.webHandler(testFS, fileServer))
+
+		req := httptest.NewRequest("GET", "/assets/stale-chunk-9f8a7b.js", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		assert.NotContains(t, w.Body.String(), "<html>index</html>")
+		assert.Empty(t, w.Header().Get("Cache-Control"))
+	})
+
 	t.Run("Serve Assetlinks on .well-known", func(t *testing.T) {
 		fs := fstest.MapFS{
 			".well-known/assetlinks.json": {Data: []byte("[]\n")},

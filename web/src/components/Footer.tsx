@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'wouter';
 import { Separator } from '@base-ui/react/separator';
+import { getRoutePreloadProps } from '../utils/routePreload';
 import './Footer.css';
 
 const Footer: React.FC = () => {
@@ -13,17 +14,17 @@ const Footer: React.FC = () => {
                     Open Source Project. Contribute on <a href="https://github.com/raterudder/raterudder" target="_blank" rel="noopener noreferrer">GitHub</a>.
                 </div>
                 <div className="footer-links">
-                    <Link to="/how-it-works">How It Works</Link>
+                    <Link to="/how-it-works" {...getRoutePreloadProps('/how-it-works')}>How It Works</Link>
                     <Separator className="separator" />
-                    <Link to="/getting-started">Getting Started</Link>
+                    <Link to="/getting-started" {...getRoutePreloadProps('/getting-started')}>Getting Started</Link>
                     <Separator className="separator" />
-                    <Link to="/utilities">Supported Utilities</Link>
+                    <Link to="/utilities" {...getRoutePreloadProps('/utilities')}>Supported Utilities</Link>
                     <Separator className="separator" />
-                    <Link to="/changelog">Changelog</Link>
+                    <Link to="/changelog" {...getRoutePreloadProps('/changelog')}>Changelog</Link>
                     <Separator className="separator" />
-                    <Link to="/privacy">Privacy Policy</Link>
+                    <Link to="/privacy" {...getRoutePreloadProps('/privacy')}>Privacy Policy</Link>
                     <Separator className="separator" />
-                    <Link to="/terms">Terms of Service</Link>
+                    <Link to="/terms" {...getRoutePreloadProps('/terms')}>Terms of Service</Link>
                 </div>
                 <div className="copyright">
                     &copy; {currentYear} RateRudder. All rights reserved.
