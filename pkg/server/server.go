@@ -90,6 +90,7 @@ type Server struct {
 	cimdCache          sync.Map
 	cimdFetchGroup     singleflight.Group
 	cimdHTTPClient     *http.Client
+	pushHTTPClient     *http.Client
 	generalRateLimit   rate.Limit
 	generalBurst       int
 	sensitiveRateLimit rate.Limit

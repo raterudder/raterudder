@@ -21,6 +21,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -28,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
@@ -663,6 +665,106 @@ func webPushTopic(tag string) string {
 	return base64.RawURLEncoding.EncodeToString(h[:16])
 }
 
+const (
+	webPushTimeout        = 10 * time.Second
+	maxPushEndpointLength = 2048
+)
+
+var defaultPushHTTPClient = common.SSRFSafeHTTPClient(webPushTimeout)
+
+func (s *Server) getPushHTTPClient() *http.Client {
+	if s.pushHTTPClient != nil {
+		return s.pushHTTPClient
+	}
+	return defaultPushHTTPClient
+}
+
+// validatePushSubscriptionEndpoint validates a Web Push subscription endpoint URL (RFC 8030).
+// It requires an https URL on the default port ("" or "443") with a public domain host,
+// a non-root path without dot segments, and no userinfo, fragments, or IP literals.
+func validatePushSubscriptionEndpoint(rawEndpoint string) (*url.URL, error) {
+	if rawEndpoint == "" {
+		return nil, errors.New("push subscription endpoint is required")
+	}
+	if len(rawEndpoint) > maxPushEndpointLength {
+		return nil, fmt.Errorf("push subscription endpoint must be %d characters or fewer", maxPushEndpointLength)
+	}
+	if strings.TrimSpace(rawEndpoint) != rawEndpoint {
+		return nil, errors.New("push subscription endpoint cannot contain leading or trailing whitespace")
+	}
+	if strings.Contains(rawEndpoint, `\`) {
+		return nil, errors.New("push subscription endpoint cannot contain backslashes")
+	}
+	for _, r := range rawEndpoint {
+		if unicode.IsControl(r) {
+			return nil, errors.New("push subscription endpoint cannot contain control characters")
+		}
+	}
+	if !strings.HasPrefix(rawEndpoint, "https://") {
+		return nil, errors.New("push subscription endpoint must use https scheme")
+	}
+
+	u, err := url.Parse(rawEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid push subscription endpoint URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return nil, errors.New("push subscription endpoint must use https scheme")
+	}
+	if u.User != nil {
+		return nil, errors.New("push subscription endpoint must not contain userinfo")
+	}
+	port := u.Port()
+	if (port != "" && port != "443") || strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("push subscription endpoint must use default https port")
+	}
+	if u.Fragment != "" || strings.Contains(rawEndpoint, "#") {
+		return nil, errors.New("push subscription endpoint must not contain a fragment")
+	}
+
+	hostname := strings.ToLower(u.Hostname())
+	if hostname == "" || strings.HasPrefix(hostname, ".") || strings.HasSuffix(hostname, ".") || strings.Contains(hostname, "..") {
+		return nil, errors.New("push subscription endpoint must include a valid host")
+	}
+	if _, err := netip.ParseAddr(hostname); err == nil {
+		return nil, errors.New("push subscription endpoint host must not be an IP address")
+	}
+	if hostname == "localhost" ||
+		strings.HasSuffix(hostname, ".localhost") ||
+		hostname == "localhost.localdomain" ||
+		strings.HasSuffix(hostname, ".localdomain") ||
+		strings.HasSuffix(hostname, ".local") ||
+		strings.HasSuffix(hostname, ".internal") ||
+		!strings.Contains(hostname, ".") {
+		return nil, errors.New("push subscription endpoint host must be a public domain")
+	}
+	tld := hostname[strings.LastIndexByte(hostname, '.')+1:]
+	allDigits := len(tld) > 0
+	for i := 0; i < len(tld); i++ {
+		if tld[i] < '0' || tld[i] > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return nil, errors.New("push subscription endpoint host must not be an IP address")
+	}
+
+	if u.Path == "" || u.Path == "/" {
+		return nil, errors.New("push subscription endpoint must include a non-root path")
+	}
+	for _, seg := range strings.Split(u.EscapedPath(), "/") {
+		if seg == "." || seg == ".." {
+			return nil, errors.New("push subscription endpoint must not contain dot path segments")
+		}
+		unescaped, err := url.PathUnescape(seg)
+		if err != nil || unescaped == "." || unescaped == ".." || strings.Contains(unescaped, "/") || strings.Contains(unescaped, `\`) {
+			return nil, errors.New("push subscription endpoint must not contain dot path segments")
+		}
+	}
+	return u, nil
+}
+
 // sendWebPush sends an encrypted Web Push notification using RFC 8291 and RFC 8292.
 func (s *Server) sendWebPush(
 	ctx context.Context,
@@ -675,6 +777,11 @@ func (s *Server) sendWebPush(
 		return 0, errors.New("notifications are not enabled on server")
 	}
 
+	parsedEndpoint, err := validatePushSubscriptionEndpoint(sub.Endpoint)
+	if err != nil {
+		return 0, fmt.Errorf("invalid push subscription endpoint: %w", err)
+	}
+
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal push payload: %w", err)
@@ -685,11 +792,7 @@ func (s *Server) sendWebPush(
 		return 0, fmt.Errorf("failed to encrypt push payload: %w", err)
 	}
 
-	parsedEndpoint, err := url.Parse(sub.Endpoint)
-	if err != nil {
-		return 0, fmt.Errorf("invalid push subscription endpoint: %w", err)
-	}
-	audience := fmt.Sprintf("%s://%s", parsedEndpoint.Scheme, parsedEndpoint.Host)
+	audience := fmt.Sprintf("%s://%s", parsedEndpoint.Scheme, strings.ToLower(parsedEndpoint.Hostname()))
 
 	// RFC 8292 Section 2 mandates that VAPID expiration must not be more than 24 hours in the future.
 	// 12 hours provides sufficient leeway for network retries while complying with RFC requirements.
@@ -717,8 +820,7 @@ func (s *Server) sendWebPush(
 	req.Header.Set("Authorization", fmt.Sprintf("vapid t=%s, k=%s", vapidToken, s.vapidPublicKey))
 	req.Header.Set("Crypto-Key", fmt.Sprintf("p256ecdsa=%s", s.vapidPublicKey))
 
-	client := common.HTTPClient(10 * time.Second)
-	res, err := client.Do(req)
+	res, err := s.getPushHTTPClient().Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -3374,6 +3476,10 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "subscription endpoint and keys are required", http.StatusBadRequest)
 		return
 	}
+	if _, err := validatePushSubscriptionEndpoint(req.Subscription.Endpoint); err != nil {
+		writeJSONError(w, fmt.Sprintf("invalid subscription endpoint: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	// Generate SHA256 ID from endpoint if empty
 	if req.Subscription.ID == "" {
@@ -3487,6 +3593,10 @@ func (s *Server) handleReplaceSubscription(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Subscription != nil && req.Subscription.Endpoint != "" {
+		if _, err := validatePushSubscriptionEndpoint(req.Subscription.Endpoint); err != nil {
+			writeJSONError(w, fmt.Sprintf("invalid subscription endpoint: %v", err), http.StatusBadRequest)
+			return
+		}
 		if req.Subscription.Keys.P256DH == "" || req.Subscription.Keys.Auth == "" {
 			writeJSONError(w, "subscription keys are required for replacement", http.StatusBadRequest)
 			return

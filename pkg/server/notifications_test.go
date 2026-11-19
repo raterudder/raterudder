@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -340,6 +342,328 @@ func TestWebPushTopic(t *testing.T) {
 	})
 }
 
+const testPushBaseURL = "https://fcm.googleapis.com"
+
+type pushRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f pushRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func newMockPushHTTPClient(rt pushRoundTripFunc) *http.Client {
+	return &http.Client{
+		Transport: rt,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return errors.New("redirects are not allowed")
+		},
+	}
+}
+
+func TestValidatePushSubscriptionEndpoint(t *testing.T) {
+	t.Run("AllowsPublicHTTPSPushServices", func(t *testing.T) {
+		uFCM, err := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/send/eXampleToken123")
+		require.NoError(t, err)
+		assert.Equal(t, "fcm.googleapis.com", uFCM.Hostname())
+
+		uFCM443, err := validatePushSubscriptionEndpoint("https://fcm.googleapis.com:443/fcm/send/eXampleToken123")
+		require.NoError(t, err)
+		assert.Equal(t, "443", uFCM443.Port())
+
+		uMozilla, err := validatePushSubscriptionEndpoint("https://updates.push.services.mozilla.com/wpush/v2/gAAAAABk")
+		require.NoError(t, err)
+		assert.Equal(t, "updates.push.services.mozilla.com", uMozilla.Hostname())
+
+		uApple, err := validatePushSubscriptionEndpoint("https://web.push.apple.com/QNl0exampleToken")
+		require.NoError(t, err)
+		assert.Equal(t, "web.push.apple.com", uApple.Hostname())
+
+		uWNS, err := validatePushSubscriptionEndpoint("https://wns2-bn2p.notify.windows.com/w/?token=AwYAAAC8example%3d")
+		require.NoError(t, err)
+		assert.Equal(t, "wns2-bn2p.notify.windows.com", uWNS.Hostname())
+	})
+
+	t.Run("RejectsNonHTTPS", func(t *testing.T) {
+		_, errEmpty := validatePushSubscriptionEndpoint("")
+		assert.ErrorContains(t, errEmpty, "required")
+
+		_, errHTTP := validatePushSubscriptionEndpoint("http://fcm.googleapis.com/fcm/send/abc")
+		assert.ErrorContains(t, errHTTP, "https")
+
+		_, errFTP := validatePushSubscriptionEndpoint("ftp://fcm.googleapis.com/fcm/send/abc")
+		assert.ErrorContains(t, errFTP, "https")
+
+		_, errSchemeRel := validatePushSubscriptionEndpoint("//fcm.googleapis.com/fcm/send/abc")
+		assert.ErrorContains(t, errSchemeRel, "https")
+	})
+
+	t.Run("RejectsNonDefaultPort", func(t *testing.T) {
+		_, errCustomPort := validatePushSubscriptionEndpoint("https://fcm.googleapis.com:8443/fcm/send/abc")
+		assert.ErrorContains(t, errCustomPort, "port")
+
+		_, errPort80 := validatePushSubscriptionEndpoint("https://fcm.googleapis.com:80/fcm/send/abc")
+		assert.ErrorContains(t, errPort80, "port")
+
+		_, errLeadingZero := validatePushSubscriptionEndpoint("https://fcm.googleapis.com:0443/fcm/send/abc")
+		assert.ErrorContains(t, errLeadingZero, "port")
+
+		_, errTrailingColon := validatePushSubscriptionEndpoint("https://fcm.googleapis.com:/fcm/send/abc")
+		assert.ErrorContains(t, errTrailingColon, "port")
+	})
+
+	t.Run("RejectsRootOrEmptyPath", func(t *testing.T) {
+		_, errNoPath := validatePushSubscriptionEndpoint("https://fcm.googleapis.com")
+		assert.ErrorContains(t, errNoPath, "non-root path")
+
+		_, errRootPath := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/")
+		assert.ErrorContains(t, errRootPath, "non-root path")
+	})
+
+	t.Run("RejectsDotPathSegmentsAndBackslashes", func(t *testing.T) {
+		_, errSingleDot := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/./send")
+		assert.ErrorContains(t, errSingleDot, "dot path segments")
+
+		_, errDoubleDot := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/../send")
+		assert.ErrorContains(t, errDoubleDot, "dot path segments")
+
+		_, errEncodedDot := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/%2e%2e/send")
+		assert.ErrorContains(t, errEncodedDot, "dot path segments")
+
+		_, errEncodedSlash := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/%2f/send")
+		assert.ErrorContains(t, errEncodedSlash, "dot path segments")
+
+		_, errBackslash := validatePushSubscriptionEndpoint(`https://fcm.googleapis.com\evil.com/send`)
+		assert.ErrorContains(t, errBackslash, "backslashes")
+	})
+
+	t.Run("RejectsUserinfoFragmentWhitespaceAndControlChars", func(t *testing.T) {
+		_, errUser := validatePushSubscriptionEndpoint("https://user:pass@fcm.googleapis.com/fcm/send/abc")
+		assert.ErrorContains(t, errUser, "userinfo")
+
+		_, errFrag := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/send/abc#frag")
+		assert.ErrorContains(t, errFrag, "fragment")
+
+		_, errSpace := validatePushSubscriptionEndpoint(" https://fcm.googleapis.com/fcm/send/abc")
+		assert.ErrorContains(t, errSpace, "whitespace")
+
+		_, errCtrl := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/send/abc\n")
+		assert.ErrorContains(t, errCtrl, "whitespace")
+
+		_, errMidCtrl := validatePushSubscriptionEndpoint("https://fcm.googleapis.com/fcm/\x00send/abc")
+		assert.ErrorContains(t, errMidCtrl, "control characters")
+	})
+
+	t.Run("RejectsIPLiteralsAndNonPublicDomains", func(t *testing.T) {
+		_, errLoopback := validatePushSubscriptionEndpoint("https://127.0.0.1/push/1")
+		assert.ErrorContains(t, errLoopback, "IP address")
+
+		_, errPrivate := validatePushSubscriptionEndpoint("https://10.0.0.1/push/1")
+		assert.ErrorContains(t, errPrivate, "IP address")
+
+		_, errMetadataIP := validatePushSubscriptionEndpoint("https://169.254.169.254/latest/meta-data")
+		assert.ErrorContains(t, errMetadataIP, "IP address")
+
+		_, errIPv6 := validatePushSubscriptionEndpoint("https://[::1]/push/1")
+		assert.ErrorContains(t, errIPv6, "IP address")
+
+		_, errIPv6Zone := validatePushSubscriptionEndpoint("https://[fe80::1%25eth0]/push/1")
+		assert.ErrorContains(t, errIPv6Zone, "IP address")
+
+		_, errShortIPv4 := validatePushSubscriptionEndpoint("https://127.1/push/1")
+		assert.ErrorContains(t, errShortIPv4, "IP address")
+
+		_, errOctalIPv4 := validatePushSubscriptionEndpoint("https://0177.0.0.1/push/1")
+		assert.ErrorContains(t, errOctalIPv4, "IP address")
+
+		_, errLocalhost := validatePushSubscriptionEndpoint("https://localhost/push/1")
+		assert.ErrorContains(t, errLocalhost, "public domain")
+
+		_, errSubLocalhost := validatePushSubscriptionEndpoint("https://app.localhost/push/1")
+		assert.ErrorContains(t, errSubLocalhost, "public domain")
+
+		_, errTrailingDot := validatePushSubscriptionEndpoint("https://localhost./push/1")
+		assert.ErrorContains(t, errTrailingDot, "valid host")
+
+		_, errSingleLabel := validatePushSubscriptionEndpoint("https://metadata/computeMetadata/v1")
+		assert.ErrorContains(t, errSingleLabel, "public domain")
+
+		_, errInternal := validatePushSubscriptionEndpoint("https://metadata.google.internal/computeMetadata/v1")
+		assert.ErrorContains(t, errInternal, "public domain")
+
+		_, errMDNS := validatePushSubscriptionEndpoint("https://printer.local/push/1")
+		assert.ErrorContains(t, errMDNS, "public domain")
+	})
+}
+
+func TestSendWebPush(t *testing.T) {
+	now := time.Date(2026, 9, 4, 7, 10, 0, 0, time.UTC)
+
+	t.Run("ValidHTTPSAndDefaultPort443UsesCanonicalOriginAudience", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, now)
+		user := createTestPushUser(t, "user1@test.com", "https://fcm.googleapis.com:443/fcm/send/sub-1")
+		sub := user.Subscriptions[0]
+
+		var capturedReq *http.Request
+		srv.pushHTTPClient = newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			capturedReq = r
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		})
+
+		code, err := srv.sendWebPush(context.Background(), sub, pushPayload{
+			Title: "Hello",
+			Body:  "World",
+			Tag:   "raterudder-test",
+		}, 300, "high")
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, code)
+		if assert.NotNil(t, capturedReq) {
+			assert.Equal(t, "https://fcm.googleapis.com:443/fcm/send/sub-1", capturedReq.URL.String())
+			assert.Equal(t, "aes128gcm", capturedReq.Header.Get("Content-Encoding"))
+			assert.Equal(t, "300", capturedReq.Header.Get("TTL"))
+			assert.Equal(t, "high", capturedReq.Header.Get("Urgency"))
+			assert.Equal(t, "raterudder-test", capturedReq.Header.Get("Topic"))
+
+			authHeader := capturedReq.Header.Get("Authorization")
+			require.True(t, strings.HasPrefix(authHeader, "vapid t="))
+			jwtPart := strings.Split(strings.TrimPrefix(authHeader, "vapid t="), ",")[0]
+			segments := strings.Split(jwtPart, ".")
+			if assert.Len(t, segments, 3) {
+				claimsJSON, decErr := base64.RawURLEncoding.DecodeString(segments[1])
+				require.NoError(t, decErr)
+				var claims map[string]any
+				require.NoError(t, json.Unmarshal(claimsJSON, &claims))
+				assert.Equal(t, "https://fcm.googleapis.com", claims["aud"])
+			}
+		}
+	})
+
+	t.Run("RejectsStoredInvalidEndpointsBeforeDial", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, now)
+		baseUser := createTestPushUser(t, "user1@test.com", "https://fcm.googleapis.com/fcm/send/sub-1")
+
+		var roundTrips atomic.Int32
+		srv.pushHTTPClient = newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			roundTrips.Add(1)
+			return &http.Response{StatusCode: http.StatusCreated, Body: http.NoBody, Request: r}, nil
+		})
+
+		assertSendRejected := func(endpoint string) {
+			t.Helper()
+			sub := baseUser.Subscriptions[0]
+			sub.Endpoint = endpoint
+			code, err := srv.sendWebPush(context.Background(), sub, pushPayload{Title: "T", Body: "B"}, 60, "normal")
+			assert.Equal(t, 0, code)
+			assert.ErrorContains(t, err, "invalid push subscription endpoint")
+		}
+
+		assertSendRejected("http://fcm.googleapis.com/fcm/send/sub-1")
+		assertSendRejected("http://127.0.0.1:8080/internal")
+		assertSendRejected("https://127.0.0.1/push")
+		assertSendRejected("https://10.128.0.5/push")
+		assertSendRejected("https://169.254.169.254/latest/meta-data")
+		assertSendRejected("https://[::1]/push")
+		assertSendRejected("https://localhost/push")
+		assertSendRejected("https://metadata.google.internal/computeMetadata/v1")
+		assertSendRejected("https://fcm.googleapis.com:8443/push")
+		assert.Equal(t, int32(0), roundTrips.Load())
+	})
+
+	t.Run("DefaultSSRFSafeClientBlocksLoopbackAndPrivateIPsAtDialTime", func(t *testing.T) {
+		var canaryHits atomic.Int32
+		internalLis, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		internalSrv := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				canaryHits.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}),
+		}
+		go func() { _ = internalSrv.Serve(internalLis) }()
+		t.Cleanup(func() {
+			_ = internalSrv.Close()
+			_ = internalLis.Close()
+		})
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, now)
+		srv.pushHTTPClient = nil // Verify getPushHTTPClient() defaults to common.SSRFSafeHTTPClient
+		ssrfTransport := srv.getPushHTTPClient().Transport
+		user := createTestPushUser(t, "user1@test.com", "https://fcm.googleapis.com/fcm/send/sub-1")
+		sub := user.Subscriptions[0]
+
+		// Simulate DNS resolving fcm.googleapis.com to loopback canary listener
+		srv.pushHTTPClient = &http.Client{
+			Transport: pushRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				cloned := r.Clone(r.Context())
+				cloned.URL.Scheme = "http"
+				cloned.URL.Host = internalLis.Addr().String()
+				return ssrfTransport.RoundTrip(cloned)
+			}),
+			CheckRedirect: defaultPushHTTPClient.CheckRedirect,
+		}
+		_, errLoopback := srv.sendWebPush(context.Background(), sub, pushPayload{Title: "T", Body: "B"}, 60, "normal")
+		assert.ErrorContains(t, errLoopback, "blocked IP address")
+		assert.Equal(t, int32(0), canaryHits.Load())
+
+		// Simulate DNS resolving fcm.googleapis.com to private RFC1918 VPC address
+		srv.pushHTTPClient = &http.Client{
+			Transport: pushRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				cloned := r.Clone(r.Context())
+				cloned.URL.Host = "10.128.0.10:443"
+				return ssrfTransport.RoundTrip(cloned)
+			}),
+			CheckRedirect: defaultPushHTTPClient.CheckRedirect,
+		}
+		_, errPrivate := srv.sendWebPush(context.Background(), sub, pushPayload{Title: "T", Body: "B"}, 60, "normal")
+		assert.ErrorContains(t, errPrivate, "blocked IP address")
+		assert.Equal(t, int32(0), canaryHits.Load())
+	})
+
+	t.Run("DefaultSSRFSafeClientBlocksRedirects", func(t *testing.T) {
+		var canaryHits atomic.Int32
+		internalLis, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		internalSrv := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				canaryHits.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}),
+		}
+		go func() { _ = internalSrv.Serve(internalLis) }()
+		t.Cleanup(func() {
+			_ = internalSrv.Close()
+			_ = internalLis.Close()
+		})
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, now)
+		srv.pushHTTPClient = nil
+		baseClient := *srv.getPushHTTPClient()
+		baseClient.Transport = pushRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Location", fmt.Sprintf("http://%s/internal-admin/ssrf-canary", internalLis.Addr().String()))
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     h,
+				Body:       http.NoBody,
+				Request:    r,
+			}, nil
+		})
+		srv.pushHTTPClient = &baseClient
+
+		user := createTestPushUser(t, "user1@test.com", "https://fcm.googleapis.com/fcm/send/sub-1")
+		_, errSend := srv.sendWebPush(context.Background(), user.Subscriptions[0], pushPayload{Title: "T", Body: "B"}, 60, "normal")
+		assert.ErrorContains(t, errSend, "redirects are not allowed")
+		assert.Equal(t, int32(0), canaryHits.Load())
+	})
+}
+
 func createTestEndpointsServer(t *testing.T, mockS *storagemock.MockDatabase) (*Server, http.Handler, string, string) {
 	t.Helper()
 	mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
@@ -497,6 +821,149 @@ func TestHandleSubscribe(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+
+	t.Run("SendTestWithPublicHTTPSUsesPushClient", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, handler, _, _ := createTestEndpointsServer(t, mockS)
+		user := createTestPushUser(t, "fake", "https://fcm.googleapis.com/fcm/send/test-sub-id")
+
+		var pushCalls atomic.Int32
+		srv.pushHTTPClient = newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			pushCalls.Add(1)
+			assert.Equal(t, "https://fcm.googleapis.com/fcm/send/test-sub-id", r.URL.String())
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		})
+		mockS.On("AddUserPushSubscription", mock.Anything, "fake", mock.Anything).Return(nil).Once()
+
+		subReq := subscribeRequest{
+			Subscription: user.Subscriptions[0],
+			SendTest:     true,
+		}
+		body, err := json.Marshal(subReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int32(1), pushCalls.Load())
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RejectsLoopbackSSRFCanaryWithSessionCookie", func(t *testing.T) {
+		var canaryHits atomic.Int32
+		internalLis, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		internalSrv := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				canaryHits.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}),
+		}
+		go func() { _ = internalSrv.Serve(internalLis) }()
+		t.Cleanup(func() {
+			_ = internalSrv.Close()
+			_ = internalLis.Close()
+		})
+
+		mockS := &storagemock.MockDatabase{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:            "user-1",
+			Email:         "user1@example.com",
+			SessionSecret: "sec-1",
+		}, nil)
+
+		privB64, _ := generateTestVAPIDKeys(t)
+		privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
+		require.NoError(t, err)
+
+		now := time.Date(2026, 9, 4, 7, 10, 0, 0, time.UTC)
+		srv := &Server{
+			storage:              mockS,
+			vapidKey:             privKey,
+			vapidPublicKey:       pubKey,
+			vapidSubject:         "mailto:support@raterudder.com",
+			sessionEncryptionKey: "0123456789abcdef0123456789abcdef",
+			generalRateLimit:     rate.Every(time.Minute / 30),
+			generalBurst:         30,
+			sensitiveRateLimit:   rate.Every(time.Minute / 10),
+			sensitiveBurst:       10,
+			nowFunc:              func() time.Time { return now },
+		}
+		handler := srv.setupHandler()
+
+		sessionToken, err := srv.createSessionToken("user-1", "user1@example.com", "sec-1", time.Hour)
+		require.NoError(t, err)
+
+		subKey, err := ecdh.P256().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		subPubB64 := base64.RawURLEncoding.EncodeToString(subKey.PublicKey().Bytes())
+		subAuthB64 := base64.RawURLEncoding.EncodeToString([]byte("1234567812345678"))
+
+		canaryTarget := fmt.Sprintf("http://%s/internal-admin/ssrf-canary?probe=1", internalLis.Addr().String())
+		subPayload := map[string]any{
+			"subscription": map[string]any{
+				"endpoint": canaryTarget,
+				"keys":     map[string]string{"p256dh": subPubB64, "auth": subAuthB64},
+			},
+			"sendTest": true,
+		}
+		body, err := json.Marshal(subPayload)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, int32(0), canaryHits.Load())
+		mockS.AssertNotCalled(t, "AddUserPushSubscription", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("RejectsInvalidEndpoints", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		assertRejected := func(endpoint string) {
+			t.Helper()
+			subReq := subscribeRequest{
+				Subscription: types.PushSubscription{
+					Endpoint: endpoint,
+					Keys:     types.PushSubscriptionKeys{P256DH: "test-p256dh", Auth: "test-auth"},
+				},
+				SendTest: true,
+			}
+			body, err := json.Marshal(subReq)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		}
+
+		assertRejected("http://fcm.googleapis.com/fcm/send/test-sub-id")
+		assertRejected("https://127.0.0.1/push/1")
+		assertRejected("https://10.0.0.1/push/1")
+		assertRejected("https://169.254.169.254/latest/meta-data")
+		assertRejected("https://[::1]/push/1")
+		assertRejected("https://localhost/push/1")
+		assertRejected("https://sub.localhost/push/1")
+		assertRejected("https://metadata.google.internal/computeMetadata/v1")
+		assertRejected("https://fcm.googleapis.com:8443/fcm/send/test-sub-id")
+		assertRejected("https://fcm.googleapis.com/")
+		assertRejected("https://user:pass@fcm.googleapis.com/fcm/send/test-sub-id")
+		assertRejected("https://fcm.googleapis.com/fcm/send/test-sub-id#frag")
+		mockS.AssertNotCalled(t, "AddUserPushSubscription", mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 
@@ -725,6 +1192,71 @@ func TestHandleReplaceSubscription(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("RejectsInvalidReplacementEndpoints", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		assertReplaceRejected := func(newEndpoint string) {
+			t.Helper()
+			reqBody := replaceSubscriptionRequest{
+				PrevEndpoint: "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint",
+				PrevAuth:     "test-prev-auth",
+				Subscription: &types.PushSubscription{
+					Endpoint: newEndpoint,
+					Keys: types.PushSubscriptionKeys{
+						P256DH: "test-new-p256dh",
+						Auth:   "test-new-auth",
+					},
+				},
+			}
+			body, err := json.Marshal(reqBody)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		}
+
+		assertReplaceRejected("http://updates.push.services.mozilla.com/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://127.0.0.1/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://192.168.1.10/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://169.254.169.254/latest/meta-data")
+		assertReplaceRejected("https://[::1]/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://localhost/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://sub.localhost/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://metadata.google.internal/computeMetadata/v1")
+		assertReplaceRejected("https://updates.push.services.mozilla.com:8443/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://updates.push.services.mozilla.com/")
+		assertReplaceRejected("https://user@updates.push.services.mozilla.com/wpush/v2/new-endpoint")
+		assertReplaceRejected("https://updates.push.services.mozilla.com/wpush/v2/new-endpoint#frag")
+		mockS.AssertNotCalled(t, "ReplaceUserPushSubscription", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("AllowsRevocationOfLegacyInvalidPrevEndpoint", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		prevEndpoint := "http://127.0.0.1:8080/legacy-push"
+		prevAuth := "test-prev-auth"
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, prevEndpoint, prevAuth, (*types.PushSubscription)(nil)).Return(nil).Once()
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: prevEndpoint,
+			PrevAuth:     prevAuth,
+			Subscription: nil,
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		mockS.AssertExpectations(t)
 	})
 }
 
@@ -1242,6 +1774,14 @@ func createTestNotificationServer(t *testing.T, mockS *storagemock.MockDatabase,
 		vapidPublicKey:  pubKey,
 		vapidSubject:    "mailto:support@raterudder.com",
 		gridOutageDelay: 10 * time.Millisecond,
+		pushHTTPClient: newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		}),
 		nowFunc: func() time.Time {
 			return nowTime
 		},
@@ -1301,11 +1841,6 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 
@@ -1352,7 +1887,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 	t.Run("DispatchWhenHourMatchesAndNotSentToday", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1374,7 +1909,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 	t.Run("MetricsHeavyProjectedPeakDispatched", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1420,7 +1955,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 	t.Run("MetricsHeavyProjectedNotChargingDispatched", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1467,7 +2002,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 	t.Run("CapacityHitDetectionFromHitCapacityAt", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1602,11 +2137,6 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowEvening := time.Date(2026, 9, 4, 20, 15, 0, 0, loc)
 
@@ -1629,7 +2159,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 	t.Run("DispatchWhenHourMatchesAndNotSentToday", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1651,7 +2181,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 	t.Run("HomePlannerUsesPlanDeficitETA", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1739,7 +2269,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 	t.Run("ImmediateDeficitAtReserve", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1801,11 +2331,6 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 
@@ -1821,7 +2346,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		srv.gridOutageDelay = 10 * time.Millisecond
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1854,7 +2379,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		srv.gridOutageDelay = 10 * time.Millisecond
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -1914,7 +2439,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 	t.Run("RestoredNotification", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		statusRestored := statusOutage
 		statusRestored.GridUnavailable = false
@@ -2008,7 +2533,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
 		srv := createTestNotificationServer(t, mockS, nowWakeup)
 		srv.gridOutageDelay = 10 * time.Millisecond
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2098,7 +2623,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
 		srv := createTestNotificationServer(t, mockS, nowWakeup)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		statusRestored := statusOutage
 		statusRestored.GridUnavailable = false
@@ -2176,18 +2701,13 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 
 	t.Run("Dispatched", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2258,7 +2778,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("SensitivityTiers", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		userHigh := createTestPushUser(t, "user-high@test.com", pushServer.URL+"/push/user-high")
+		userHigh := createTestPushUser(t, "user-high@test.com", testPushBaseURL+"/push/user-high")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user-low@test.com": {
@@ -2372,7 +2892,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("AllowedAfter18Hours", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2416,7 +2936,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("SolarCoversHomeDuringSpike", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2478,7 +2998,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("SolarUnder05KWHFallsBackToBattery", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2542,7 +3062,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("NetLoadOver01KWHFallsBackToBattery", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2606,7 +3126,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("NetLoadUnder01KWHWithMeaningfulSolarCoversHome", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2668,7 +3188,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("BatteryPowersThroughSpike", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2733,7 +3253,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("BatteryReachesReserveDuringSpike", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2800,7 +3320,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("ThirtyMinuteSimulationSlotsCaptured", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2878,7 +3398,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("BatteryAlreadyAtReserve", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -2942,7 +3462,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("RealTimeCurrentPriceSpikeWithBatteryOutcome", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3014,7 +3534,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("ForecastHigherPeakAndDuration", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3112,7 +3632,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("ReAlertBetween1And6HoursOnSignificantChange", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3254,7 +3774,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("ReAlertAfter6HoursIfPriceDroppedBelow", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3397,7 +3917,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("HighSensitivityAlertsIfAboveTimeOfDay", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3489,7 +4009,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 	t.Run("MediumSensitivityAlertsIfAboveTimeOfDay", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3565,7 +4085,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
 		srv := createTestNotificationServer(t, mockS, nowWakeup)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3612,7 +4132,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowOvernight)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3668,7 +4188,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowOvernight)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3742,7 +4262,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowOvernight)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3823,7 +4343,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		nowAfternoon := time.Date(2026, 9, 4, 13, 10, 0, 0, loc) // 1:10 PM
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowAfternoon)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3925,7 +4445,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3975,7 +4495,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -4144,11 +4664,6 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 	nowMidday := time.Date(2026, 9, 4, 12, 10, 0, 0, loc)
@@ -4169,7 +4684,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 	t.Run("SignificantDrop", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -4383,7 +4898,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 	t.Run("SensitivityLevels", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
-		user := createTestPushUser(t, "user-low@test.com", pushServer.URL+"/push/user-low")
+		user := createTestPushUser(t, "user-low@test.com", testPushBaseURL+"/push/user-low")
 		userStore := newMockUserStore(user)
 
 		statusSensitivity := statusMid
@@ -4522,11 +5037,6 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 
@@ -4543,7 +5053,7 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 	t.Run("UnplannedVPPDispatch", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -4676,11 +5186,6 @@ func TestHandleNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-notif"
 	nowMorning := time.Date(2026, 9, 4, 7, 10, 0, 0, loc)
 
@@ -4723,7 +5228,7 @@ func TestHandleNotifications(t *testing.T) {
 	t.Run("DispatchesDueNotifications", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -4872,7 +5377,7 @@ func TestHandleNotifications(t *testing.T) {
 	t.Run("CachedUserFetcherPreventsDuplicateDBQueries", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
@@ -5912,11 +6417,6 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
-	pushServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(pushServer.Close)
-
 	siteID := "test-site-high-load"
 	now := time.Date(2026, 9, 19, 7, 49, 0, 0, loc)
 
@@ -5978,7 +6478,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("AbnormalMorningSurgeAlertsWillRunOut", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6027,7 +6527,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("AtReserveAlertsHasRunOutWithoutDynamicKW", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6076,7 +6576,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		nowAfternoon := time.Date(2026, 9, 19, 14, 0, 0, 0, loc) // 2:00 PM -> 8 PM is 6 hours away
 		srv := createTestNotificationServer(t, mockS, nowAfternoon)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6128,7 +6628,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("PriceGuidance_CheapestRateOmitsPrice", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6181,7 +6681,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("PriceGuidance_DropLessThanFiveCentsIgnored", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6381,7 +6881,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		// Scenario C: Already sent alert 7 hours ago (> 6h cooldown) -> notification allowed!
 		mockS3 := &storagemock.MockDatabase{}
 		srv3 := createTestNotificationServer(t, mockS3, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 		oldLog := existingLog
 		oldLog.TSCreated = now.Add(-7 * time.Hour)
 		mockS3.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{oldLog}, nil).Once()
@@ -6484,7 +6984,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		nowNight := time.Date(2026, 9, 19, 22, 15, 0, 0, loc) // 10:15 PM (within 20:00-06:59 nighttime window)
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowNight)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6529,7 +7029,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 
 	t.Run("EVChargingStandby_FastChargerSiteDoesNotSuppressMidTierApplianceLoad", func(t *testing.T) {
 		nowNight := time.Date(2026, 9, 19, 22, 15, 0, 0, loc) // 10:15 PM (within 20:00-06:59 nighttime window)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		// Build 5-day history (120 hours >= 72) with two nights of 11.4 kWh charging at 01:00-02:00,
 		// raising adaptive EV thresholds to 6.8 / 5.4 kW, plus an in-progress 22:00 bucket.
@@ -6733,7 +7233,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		nowDaytime := time.Date(2026, 9, 19, 14, 15, 0, 0, loc) // 2:15 PM (outside 20:00-06:59 nighttime window)
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowDaytime)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6778,7 +7278,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("IntermittentHistoricalEVSpikesIgnoredInTODBaseline", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -6891,7 +7391,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("AtReserve_SkipsSustainedCheck", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -7058,7 +7558,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("ConservativeProfile_IncludesReserveBuffer", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -7138,7 +7638,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 	t.Run("VariableReserveSchedule_DynamicReserveRatio", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -7223,7 +7723,7 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		nowAfternoon := time.Date(2026, 9, 19, 15, 50, 0, 0, loc) // 3:50 PM
 		srv := createTestNotificationServer(t, mockS, nowAfternoon)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
