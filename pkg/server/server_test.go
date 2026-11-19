@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
@@ -15,6 +17,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -359,4 +362,155 @@ func TestIsMultiSiteAdmin(t *testing.T) {
 
 	assert.True(t, server.isMultiSiteAdmin(types.User{Email: "admin@example.com"}))
 	assert.False(t, server.isMultiSiteAdmin(types.User{Email: "user@example.com"}))
+}
+
+func TestConfigureOIDC(t *testing.T) {
+	googleSrv, googlePriv := setupOIDCTest(t)
+	defer googleSrv.Close()
+
+	appleSrv, applePriv := setupOIDCTest(t)
+	defer appleSrv.Close()
+
+	webToken := generateTestTokenWithAudience(t, googleSrv.URL, googlePriv, "user@example.com", "user-sub", "web-audience")
+	updateToken := generateTestTokenWithAudience(t, googleSrv.URL, googlePriv, "updater@example.com", "updater-sub", "update-audience")
+	appleToken := generateTestTokenWithAudience(t, appleSrv.URL, applePriv, "apple@example.com", "apple-sub", "apple-audience")
+
+	t.Run("OIDCAudiencesWithUpdateSpecificAudienceReusesGoogleProvider", func(t *testing.T) {
+		var googleCalls int
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			if issuer == "https://accounts.google.com" {
+				googleCalls++
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			}
+			return nil, assert.AnError
+		}
+
+		srv := &Server{}
+		err := srv.configureOIDC(
+			context.Background(),
+			map[string]string{"google": "web-audience"},
+			"",
+			"update-audience",
+			newProvider,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, 1, googleCalls, "google provider should be initialized once and reused")
+		assert.Equal(t, map[string]string{"google": "web-audience"}, srv.oidcAudiences)
+		assert.Len(t, srv.oidcVerifiers, 1)
+		assert.NotContains(t, srv.oidcVerifiers, "google_update_specific")
+		if assert.NotNil(t, srv.updateOIDCVerifier) {
+			_, err := srv.updateOIDCVerifier(context.Background(), updateToken)
+			assert.NoError(t, err)
+			_, err = srv.updateOIDCVerifier(context.Background(), webToken)
+			assert.Error(t, err)
+		}
+		_, _, _, err = srv.authenticateToken(context.Background(), webToken, "google")
+		assert.NoError(t, err)
+		_, _, _, err = srv.authenticateToken(context.Background(), updateToken, "")
+		assert.Error(t, err)
+	})
+
+	t.Run("LegacyOIDCAudienceWithUpdateSpecificAudience", func(t *testing.T) {
+		var googleCalls int
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			if issuer == "https://accounts.google.com" {
+				googleCalls++
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			}
+			return nil, assert.AnError
+		}
+
+		srv := &Server{}
+		err := srv.configureOIDC(
+			context.Background(),
+			nil,
+			"web-audience",
+			"update-audience",
+			newProvider,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, 1, googleCalls)
+		assert.Equal(t, map[string]string{"google": "web-audience"}, srv.oidcAudiences)
+		assert.Len(t, srv.oidcVerifiers, 1)
+		if assert.NotNil(t, srv.updateOIDCVerifier) {
+			_, err := srv.updateOIDCVerifier(context.Background(), updateToken)
+			assert.NoError(t, err)
+			_, err = srv.updateOIDCVerifier(context.Background(), webToken)
+			assert.Error(t, err)
+		}
+	})
+
+	t.Run("UpdateSpecificAudienceOnlySingleSite", func(t *testing.T) {
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			if issuer == "https://accounts.google.com" {
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			}
+			return nil, assert.AnError
+		}
+
+		srv := &Server{singleSite: true}
+		err := srv.configureOIDC(
+			context.Background(),
+			nil,
+			"",
+			"update-audience",
+			newProvider,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, srv.oidcAudiences)
+		assert.Empty(t, srv.oidcVerifiers)
+		if assert.NotNil(t, srv.updateOIDCVerifier) {
+			_, err := srv.updateOIDCVerifier(context.Background(), updateToken)
+			assert.NoError(t, err)
+		}
+		_, _, _, err = srv.authenticateToken(context.Background(), updateToken, "")
+		assert.Error(t, err)
+	})
+
+	t.Run("AppleOIDCAudienceWithUpdateSpecificAudience", func(t *testing.T) {
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			switch issuer {
+			case "https://accounts.google.com":
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			case "https://appleid.apple.com":
+				return oidc.NewProvider(ctx, appleSrv.URL)
+			default:
+				return nil, assert.AnError
+			}
+		}
+
+		srv := &Server{}
+		err := srv.configureOIDC(
+			context.Background(),
+			map[string]string{"apple": "apple-audience"},
+			"",
+			"update-audience",
+			newProvider,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"apple": "apple-audience"}, srv.oidcAudiences)
+		assert.Len(t, srv.oidcVerifiers, 1)
+		if assert.NotNil(t, srv.updateOIDCVerifier) {
+			_, err := srv.updateOIDCVerifier(context.Background(), updateToken)
+			assert.NoError(t, err)
+		}
+		_, _, _, err = srv.authenticateToken(context.Background(), appleToken, "apple")
+		assert.NoError(t, err)
+		_, _, _, err = srv.authenticateToken(context.Background(), updateToken, "")
+		assert.Error(t, err)
+	})
+
+	t.Run("UnsupportedClientReturnsError", func(t *testing.T) {
+		srv := &Server{}
+		err := srv.configureOIDC(
+			context.Background(),
+			map[string]string{"google_update_specific": "update-audience"},
+			"",
+			"",
+			func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			},
+		)
+		assert.ErrorContains(t, err, "unsupported oidc audience client")
+	})
 }

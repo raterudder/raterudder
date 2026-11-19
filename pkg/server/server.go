@@ -70,6 +70,7 @@ type Server struct {
 	httpServer *http.Server
 
 	updateSpecificEmail   string
+	updateOIDCVerifier    tokenVerifier
 	adminEmails           []string
 	oidcAudiences         map[string]string
 	oidcVerifiers         map[string]tokenVerifier
@@ -190,60 +191,8 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 				srv.adminEmails[i] = strings.TrimSpace(email)
 			}
 		}
-		var googleProvider *oidc.Provider
-		if len(oidcAudiences) > 0 {
-			srv.oidcAudiences = make(map[string]string, len(oidcAudiences))
-			srv.oidcVerifiers = make(map[string]tokenVerifier, len(oidcAudiences))
-			for n, a := range oidcAudiences {
-				switch n {
-				case "google":
-					provider, err := oidc.NewProvider(context.Background(), "https://accounts.google.com")
-					if err != nil {
-						log.Ctx(context.Background()).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-						os.Exit(1)
-					}
-					srv.oidcVerifiers[n] = provider.Verifier(&oidc.Config{ClientID: a}).Verify
-					srv.oidcAudiences[n] = a
-				case "apple":
-					provider, err := oidc.NewProvider(context.Background(), "https://appleid.apple.com")
-					if err != nil {
-						log.Ctx(context.Background()).Error("failed to initialize Apple OIDC provider", slog.Any("error", err))
-						os.Exit(1)
-					}
-					srv.oidcVerifiers[n] = provider.Verifier(&oidc.Config{ClientID: a}).Verify
-					srv.oidcAudiences[n] = a
-				default:
-					log.Ctx(context.Background()).Error("unsupported oidc audience client", slog.String("client", n))
-					os.Exit(1)
-				}
-			}
-		} else if *oidcAudience != "" {
-			var err error
-			googleProvider, err = oidc.NewProvider(context.Background(), "https://accounts.google.com")
-			if err != nil {
-				log.Ctx(context.Background()).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-				os.Exit(1)
-			}
-			srv.oidcVerifiers = map[string]tokenVerifier{
-				"google": googleProvider.Verifier(&oidc.Config{ClientID: *oidcAudience}).Verify,
-			}
-			srv.oidcAudiences = map[string]string{
-				"google": *oidcAudience,
-			}
-		}
-		if *updateSpecificAudience != "" {
-			if srv.oidcVerifiers == nil {
-				srv.oidcVerifiers = map[string]tokenVerifier{}
-			}
-			if googleProvider == nil {
-				var err error
-				googleProvider, err = oidc.NewProvider(context.Background(), "https://accounts.google.com")
-				if err != nil {
-					log.Ctx(context.Background()).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-					os.Exit(1)
-				}
-				srv.oidcVerifiers["google_update_specific"] = googleProvider.Verifier(&oidc.Config{ClientID: *updateSpecificAudience}).Verify
-			}
+		if err := srv.configureOIDC(context.Background(), oidcAudiences, *oidcAudience, *updateSpecificAudience, oidc.NewProvider); err != nil {
+			os.Exit(1)
 		}
 		srv.singleSite = *singleSite
 		srv.showHidden = *showHidden
@@ -290,6 +239,69 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	})
 
 	return srv
+}
+
+func (s *Server) configureOIDC(
+	ctx context.Context,
+	oidcAudiences map[string]string,
+	oidcAudience string,
+	updateSpecificAudience string,
+	newProvider func(context.Context, string) (*oidc.Provider, error),
+) error {
+	var googleProvider *oidc.Provider
+	if len(oidcAudiences) > 0 {
+		s.oidcAudiences = make(map[string]string, len(oidcAudiences))
+		s.oidcVerifiers = make(map[string]tokenVerifier, len(oidcAudiences))
+		for n, a := range oidcAudiences {
+			switch n {
+			case "google":
+				var err error
+				googleProvider, err = newProvider(ctx, "https://accounts.google.com")
+				if err != nil {
+					log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
+					return err
+				}
+				s.oidcVerifiers[n] = googleProvider.Verifier(&oidc.Config{ClientID: a}).Verify
+				s.oidcAudiences[n] = a
+			case "apple":
+				provider, err := newProvider(ctx, "https://appleid.apple.com")
+				if err != nil {
+					log.Ctx(ctx).Error("failed to initialize Apple OIDC provider", slog.Any("error", err))
+					return err
+				}
+				s.oidcVerifiers[n] = provider.Verifier(&oidc.Config{ClientID: a}).Verify
+				s.oidcAudiences[n] = a
+			default:
+				log.Ctx(ctx).Error("unsupported oidc audience client", slog.String("client", n))
+				return fmt.Errorf("unsupported oidc audience client: %s", n)
+			}
+		}
+	} else if oidcAudience != "" {
+		var err error
+		googleProvider, err = newProvider(ctx, "https://accounts.google.com")
+		if err != nil {
+			log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
+			return err
+		}
+		s.oidcVerifiers = map[string]tokenVerifier{
+			"google": googleProvider.Verifier(&oidc.Config{ClientID: oidcAudience}).Verify,
+		}
+		s.oidcAudiences = map[string]string{
+			"google": oidcAudience,
+		}
+	}
+	if updateSpecificAudience != "" {
+		if googleProvider == nil {
+			var err error
+			googleProvider, err = newProvider(ctx, "https://accounts.google.com")
+			if err != nil {
+				log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
+				return err
+			}
+		}
+		s.updateOIDCVerifier = googleProvider.Verifier(&oidc.Config{ClientID: updateSpecificAudience}).Verify
+	}
+	return nil
 }
 
 func (s *Server) startCleanupStaleMapKeys() {
