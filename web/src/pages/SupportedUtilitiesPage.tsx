@@ -1,12 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'wouter';
-import type { UtilityProviderInfo } from '../api';
-import {
-    clearPrefetchedUtilities,
-    getInFlightUtilitiesPrefetch,
-    getPrefetchedUtilities,
-    prefetchSupportedUtilities,
-} from '../utils/utilitiesPrefetch';
+import { fetchUtilities, type UtilityProviderInfo } from '../api';
 import { usePageSEO, PUBLIC_PAGES_SEO } from '../utils/seo';
 import './MarketingPages.css';
 
@@ -289,61 +283,32 @@ type CategoryFilter = 'all' | 'realtime' | 'california' | 'texas' | 'tou' | 'int
 const SupportedUtilitiesPage: React.FC = () => {
     usePageSEO(PUBLIC_PAGES_SEO.utilities);
 
-    const [initialPrefetched] = useState<UtilityProviderInfo[] | null>(() => getPrefetchedUtilities());
-    const [utilities, setUtilities] = useState<UtilityProviderInfo[]>(() => initialPrefetched ?? []);
-    const [loading, setLoading] = useState(() => initialPrefetched === null);
+    const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
+    const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
 
     useEffect(() => {
-        if (initialPrefetched !== null) {
-            clearPrefetchedUtilities();
-            return;
-        }
-
-        const resolvedPrefetch = getPrefetchedUtilities();
-        if (resolvedPrefetch !== null) {
-            clearPrefetchedUtilities();
-            setUtilities(resolvedPrefetch);
-            setLoading(false);
-            return;
-        }
-
         let cancelled = false;
-        const existingInFlight = getInFlightUtilitiesPrefetch();
-        const request = existingInFlight ?? prefetchSupportedUtilities();
-
-        void request.then((result) => {
-            if (cancelled) {
-                return;
-            }
-            if (result !== null) {
-                clearPrefetchedUtilities();
-                setUtilities(result);
-                setLoading(false);
-                return;
-            }
-            if (existingInFlight !== null) {
-                // Earlier speculative prefetch failed; retry once for actual page view
-                void prefetchSupportedUtilities().then((retryResult) => {
-                    if (cancelled) {
-                        return;
-                    }
-                    if (retryResult !== null) {
-                        clearPrefetchedUtilities();
-                        setUtilities(retryResult);
-                    }
+        fetchUtilities()
+            .then((liveUtilities) => {
+                if (!cancelled && Array.isArray(liveUtilities)) {
+                    const visible = liveUtilities.filter((u) => !u.hidden && u.id !== 'tou_example');
+                    setUtilities(visible);
+                }
+            })
+            .catch(() => {
+                // Handled gracefully by empty state if backend is unreachable
+            })
+            .finally(() => {
+                if (!cancelled) {
                     setLoading(false);
-                });
-                return;
-            }
-            setLoading(false);
-        });
-
+                }
+            });
         return () => {
             cancelled = true;
         };
-    }, [initialPrefetched]);
+    }, []);
 
     const filteredUtilities = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();

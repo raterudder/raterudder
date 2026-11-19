@@ -4,14 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from './App';
 import * as api from './api';
 import { setupDefaultApiMocks, defaultAuthStatus } from './test/apiMocks';
-import { resetUtilitiesPrefetch } from './utils/utilitiesPrefetch';
 
 vi.mock('./api');
 
 describe('App routing and viewSite parameter preservation', () => {
     beforeEach(() => {
         vi.resetAllMocks();
-        resetUtilitiesPrefetch();
         setupDefaultApiMocks(api);
     });
 
@@ -97,7 +95,7 @@ describe('App routing and viewSite parameter preservation', () => {
         window.history.pushState(null, '', '/utilities');
         const { unmount: unmount3 } = render(<App />);
         expect(await screen.findByText(/How RateRudder Models Notable Grids/i)).toBeInTheDocument();
-        expect(screen.getByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
+        expect(await screen.findByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
         unmount3();
 
         window.history.pushState(null, '', '/changelog');

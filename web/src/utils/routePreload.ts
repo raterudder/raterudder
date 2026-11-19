@@ -21,21 +21,6 @@ function decrementBackgroundPreload(path: string): void {
     }
 }
 
-function trackCompanionBackgroundImport<T>(path: string, factory: () => Promise<T>): Promise<T> {
-    if (!inFlightBackgroundPreloads.has(path)) {
-        return factory();
-    }
-    incrementBackgroundPreload(path);
-    try {
-        return factory().finally(() => {
-            decrementBackgroundPreload(path);
-        });
-    } catch (err) {
-        decrementBackgroundPreload(path);
-        throw err;
-    }
-}
-
 export const routeImporters = {
     '/dashboard': () => import('../pages/Dashboard'),
     '/settings': () => import('../pages/Settings'),
@@ -51,14 +36,7 @@ export const routeImporters = {
     '/how-it-works': () => import('../pages/HowItWorksPage'),
     '/getting-started': () => import('../pages/GettingStartedPage'),
     '/changelog': () => import('../pages/ChangelogPage'),
-    '/utilities': () => {
-        void trackCompanionBackgroundImport('/utilities', () => import('./utilitiesPrefetch'))
-            .then((p) => p.prefetchSupportedUtilities())
-            .catch(() => {
-                // Ignore background prefetch errors; SupportedUtilitiesPage fetches directly if needed
-            });
-        return import('../pages/SupportedUtilitiesPage');
-    },
+    '/utilities': () => import('../pages/SupportedUtilitiesPage'),
     '/callback/tesla': () => import('../pages/TeslaCallback'),
     '/oauth/authorize': () => import('../pages/OAuthAuthorizePage'),
 } as const;
