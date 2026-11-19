@@ -822,6 +822,14 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}
 	dcCoupled := hasPW3 && siteInfo.Components.BatteryType == "solar_powerwall"
 
+	var maxGridImportKW, maxGridExportKW float64
+	if siteInfo.MaxSiteMeterPowerAC > 0 && siteInfo.MaxSiteMeterPowerAC < 1e6 {
+		maxGridImportKW = siteInfo.MaxSiteMeterPowerAC
+	}
+	if siteInfo.MinSiteMeterPowerAC < 0 && siteInfo.MinSiteMeterPowerAC > -1e6 {
+		maxGridExportKW = -siteInfo.MinSiteMeterPowerAC
+	}
+
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(loc),
 		TimeLocation:          loc.String(),
@@ -830,6 +838,8 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryCapacityKWH:    capacityKWH,
 		MaxBatteryDischargeKW: totalDischargeKW,
 		MaxBatteryChargeKW:    totalChargeKW,
+		MaxGridImportKW:       maxGridImportKW,
+		MaxGridExportKW:       maxGridExportKW,
 		SolarKW:               liveStatus.SolarPowerW / 1000.0,
 		GridKW:                liveStatus.GridPowerW / 1000.0,
 		HomeKW:                liveStatus.LoadPowerW / 1000.0,
@@ -2216,9 +2226,9 @@ type teslaSiteInfoResponse struct {
 	UserSettings         struct {
 		StormModeEnabled bool `json:"storm_mode_enabled"`
 	} `json:"user_settings"`
-	TariffContentV2 map[string]any `json:"tariff_content_v2"`
-
-	// there's also max_site_meter_power_ac and min_site_meter_power_ac
+	TariffContentV2     map[string]any `json:"tariff_content_v2"`
+	MaxSiteMeterPowerAC float64        `json:"max_site_meter_power_ac"`
+	MinSiteMeterPowerAC float64        `json:"min_site_meter_power_ac"`
 }
 
 type teslaSiteComponents struct {

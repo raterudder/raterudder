@@ -41,6 +41,8 @@ type enphaseCSRFToken struct {
 	CreatedAt time.Time
 }
 
+const enphasePELCacheTTL = 24 * time.Hour
+
 type Enphase struct {
 	client           *http.Client
 	baseURL          *url.URL
@@ -54,6 +56,8 @@ type Enphase struct {
 	userID           int
 	dataCache        enphaseDataResult
 	dataExpiry       time.Time
+	pelCache         enphasePELDetailsResponse
+	pelExpiry        time.Time
 	lastCSRFToken    map[string]enphaseCSRFToken
 	todayCache       enphaseTodayResponse
 	todayCacheDate   string
@@ -188,6 +192,9 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 			return creds, false, ErrNeedsNextStage
 		}
 
+		if e.systemID != res.SystemID {
+			e.pelExpiry = time.Time{}
+		}
 		e.username = creds.Enphase.Username
 		e.password = creds.Enphase.Password
 		e.sessionID = res.SessionID
@@ -205,6 +212,9 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 		changed = true
 	} else {
 		log.Ctx(ctx).DebugContext(ctx, "restoring enphase credentials from cache")
+		if e.systemID != creds.Enphase.SystemID {
+			e.pelExpiry = time.Time{}
+		}
 		e.username = creds.Enphase.Username
 		e.password = creds.Enphase.Password
 		e.sessionID = creds.Enphase.SessionID
@@ -342,8 +352,10 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		loc = time.UTC
 	}
 
+	nowLocal := time.Now().In(loc)
+
 	// Fetch today's stats to estimate live powers and get actual state of charge
-	todayStats, err := e.getToday(ctx, time.Now().In(loc), true)
+	todayStats, err := e.getToday(ctx, nowLocal, true)
 	if err != nil {
 		return types.SystemStatus{}, fmt.Errorf("failed to get enphase today stats: %w", err)
 	}
@@ -507,14 +519,28 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		gridUnavailable = gridCheck.GridOutageCheck
 	}
 
+	// Populate MaxGridExportKW from Power Export Limiting (get_pel_details), cached for 24h.
+	// We intentionally skip fetching MaxGridImportKW for Enphase to avoid extra API calls:
+	// US sites omit gridInterconnectionDetails in siteSettings, and pcs-setting only reports
+	// main-panel breaker_rating for EVSE dynamic load balancing, where residential panels
+	// (even 100A-150A) have far more continuous import headroom than Enphase batteries can
+	// draw alongside baseline home load.
+	var maxGridExportKW float64
+	if pelDetails, err := e.getPELDetailsWithCache(ctx); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get enphase pel details for status", slog.Any("error", err))
+	} else {
+		maxGridExportKW = resolveEnphasePELExportKW(ctx, pelDetails)
+	}
+
 	status := types.SystemStatus{
-		Timestamp:               time.Now().In(loc),
+		Timestamp:               nowLocal,
 		TimeLocation:            loc.String(),
 		BatterySOC:              currentSOC,
 		BatteryKW:               batteryKW,
 		BatteryCapacityKWH:      capacityKWH,
 		MaxBatteryDischargeKW:   maxPower,
 		MaxBatteryChargeKW:      maxPower,
+		MaxGridExportKW:         maxGridExportKW,
 		SolarKW:                 solarKW,
 		GridKW:                  gridKW,
 		HomeKW:                  homeKW,
@@ -912,6 +938,139 @@ func (e *Enphase) getGridControlCheck(ctx context.Context) (enphaseGridControlCh
 		return enphaseGridControlCheckResponse{}, err
 	}
 	return res, nil
+}
+
+type enphasePELGatewayLimit struct {
+	SerialNumber string `json:"serial_number"`
+	ExportValue  any    `json:"export_value"`
+}
+
+type enphasePELDetailsResponse struct {
+	PELType     string          `json:"pel_type"`
+	ExportLimit json.RawMessage `json:"export_limit"`
+}
+
+func (e *Enphase) getPELDetailsWithCache(ctx context.Context) (enphasePELDetailsResponse, error) {
+	if time.Now().Before(e.pelExpiry) {
+		return e.pelCache, nil
+	}
+	res, err := e.getPELDetails(ctx)
+	if err != nil {
+		return enphasePELDetailsResponse{}, err
+	}
+	e.pelCache = res
+	e.pelExpiry = time.Now().Add(enphasePELCacheTTL)
+	return res, nil
+}
+
+func (e *Enphase) getPELDetails(ctx context.Context) (enphasePELDetailsResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("app-api/%d/get_pel_details", e.systemID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphasePELDetailsResponse{}, err
+	}
+	if e.managerToken != "" {
+		req.Header.Set("Authorization", e.managerToken)
+	}
+
+	var res enphasePELDetailsResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphasePELDetailsResponse{}, err
+	}
+	return res, nil
+}
+
+func resolveEnphasePELExportKW(ctx context.Context, res enphasePELDetailsResponse) float64 {
+	pelType := strings.TrimSpace(res.PELType)
+	raw := bytes.TrimSpace(res.ExportLimit)
+	if strings.EqualFold(pelType, "Not Configured") || len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return 0
+	}
+	if strings.EqualFold(pelType, "24-Hour Schedule") {
+		log.Ctx(ctx).WarnContext(ctx,
+			"enphase 24-hour scheduled pel is not supported, ignoring export limit",
+			slog.String("pelType", pelType),
+			slog.String("exportLimit", string(raw)),
+		)
+		return 0
+	}
+
+	parseOrWarn := func(val any) float64 {
+		if val == nil {
+			return 0
+		}
+		if s, ok := val.(string); ok {
+			switch strings.ToLower(strings.TrimSpace(s)) {
+			case "", "n/a", "not available", "not configured":
+				return 0
+			}
+		}
+		kw, ok := parseEnphasePELPowerKW(val)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx,
+				"unexpected enphase pel export_limit format",
+				slog.String("pelType", pelType),
+				slog.Any("exportValue", val),
+				slog.String("raw", string(raw)),
+			)
+			return 0
+		}
+		return kw
+	}
+
+	switch raw[0] {
+	case '[':
+		var gateways []enphasePELGatewayLimit
+		if err := json.Unmarshal(raw, &gateways); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to decode enphase pel gateway array", slog.Any("error", err), slog.String("raw", string(raw)))
+			return 0
+		}
+		var totalKW float64
+		for _, gw := range gateways {
+			totalKW += parseOrWarn(gw.ExportValue)
+		}
+		return totalKW
+
+	case '{':
+		var gw enphasePELGatewayLimit
+		if err := json.Unmarshal(raw, &gw); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to decode enphase pel gateway object", slog.Any("error", err), slog.String("raw", string(raw)))
+			return 0
+		}
+		return parseOrWarn(gw.ExportValue)
+
+	default:
+		var scalar any
+		if err := json.Unmarshal(raw, &scalar); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to decode enphase pel scalar", slog.Any("error", err), slog.String("raw", string(raw)))
+			return 0
+		}
+		return parseOrWarn(scalar)
+	}
+}
+
+func parseEnphasePELPowerKW(v any) (float64, bool) {
+	val, ok := v.(string)
+	if !ok {
+		return 0, false
+	}
+	lower := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(val, ",", "")))
+	var multiplier float64
+	switch {
+	case strings.HasSuffix(lower, "kw"):
+		multiplier = 1.0
+		lower = strings.TrimSpace(strings.TrimSuffix(lower, "kw"))
+	case strings.HasSuffix(lower, "w"):
+		multiplier = 0.001
+		lower = strings.TrimSpace(strings.TrimSuffix(lower, "w"))
+	default:
+		return 0, false
+	}
+	num, err := strconv.ParseFloat(lower, 64)
+	if err != nil || math.IsNaN(num) || math.IsInf(num, 0) || num <= 0 {
+		return 0, false
+	}
+	return num * multiplier, true
 }
 
 func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySettingsResponse, error) {

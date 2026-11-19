@@ -1806,6 +1806,34 @@ func TestEstimatePairedBlockStartState(t *testing.T) {
 		assert.InDelta(t, 35.0, stateB.soc, 1e-6, "Second Charge block should see power-limited gain (+25%) minus intervening Load drain (-10%)")
 	})
 
+	t.Run("ChargeAtA_ChargeAtB_RespectsMaxGridImportKWLimit", func(t *testing.T) {
+		t.Parallel()
+		// 20 kWh battery with 10 kW maxChargeKW, but MaxGridImportKW is 4.0 kW:
+		// - Block 0 (1h): gains at most 4 kWh = +20% SOC (from 20% to 40% SOC).
+		blocks := []timelineBlock{
+			{startIdx: 0, endIdx: 0, durationHours: 1.0, minSOC: 20.0},
+			{startIdx: 1, endIdx: 1, durationHours: 1.0, minSOC: 20.0},
+		}
+		currentChoices := []blockActionChoice{
+			{actionType: blockActionLoad},
+			{actionType: blockActionLoad},
+		}
+		currentStates := []planState{
+			{soc: 20.0},
+			{soc: 20.0},
+			{soc: 20.0},
+		}
+		gridLimitedInit := initialState
+		gridLimitedInit.maxChargeKW = 10.0
+		gridLimitedInit.maxGridImportKW = 4.0
+		pt := [2]blockActionChoice{
+			{actionType: blockActionCharge, targetSOC: 100.0},
+			{actionType: blockActionCharge, targetSOC: 100.0},
+		}
+		stateB := estimatePairedBlockStartState(0, 1, pt, blocks, currentChoices, currentStates, gridLimitedInit, roundTripEff)
+		assert.InDelta(t, 40.0, stateB.soc, 1e-6, "Second Charge block should see gain limited by MaxGridImportKW (+20% to 40%)")
+	})
+
 	t.Run("StandbyAtA_PreservesStateASOCIntoBlockB", func(t *testing.T) {
 		t.Parallel()
 		blocks := []timelineBlock{

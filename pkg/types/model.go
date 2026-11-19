@@ -266,16 +266,18 @@ type VPPEvent struct {
 type SystemStatus struct {
 	Timestamp               time.Time     `json:"timestamp"`
 	TimeLocation            string        `json:"timeLocation,omitempty"`
-	BatterySOC              float64       `json:"batterySOC"`            // 0-100
-	BatteryKW               float64       `json:"batteryKW"`             // Positive for discharge, negative for charge
-	BatteryCapacityKWH      float64       `json:"batteryCapacityKWH"`    // Total capacity of the battery (kWh)
-	MaxBatteryChargeKW      float64       `json:"maxBatteryChargeKW"`    // Maximum charge rate of the battery (kW)
-	MaxBatteryDischargeKW   float64       `json:"maxBatteryDischargeKW"` // Maximum discharge rate of the battery (kW)
-	SolarKW                 float64       `json:"solarKW"`               // Solar generation (kW)
-	GridKW                  float64       `json:"gridKW"`                // Grid import/export (kW, + import, - export)
-	HomeKW                  float64       `json:"homeKW"`                // Home consumption (kW)
-	ElevatedMinBatterySOC   bool          `json:"elevatedMinBatterySOC"` // True if the minimum SOC is elevated to force standby
-	BatteryAboveMinSOC      bool          `json:"batteryAboveMinSOC"`    // True if the battery SOC is above the minimum SOC
+	BatterySOC              float64       `json:"batterySOC"`                // 0-100
+	BatteryKW               float64       `json:"batteryKW"`                 // Positive for discharge, negative for charge
+	BatteryCapacityKWH      float64       `json:"batteryCapacityKWH"`        // Total capacity of the battery (kWh)
+	MaxBatteryChargeKW      float64       `json:"maxBatteryChargeKW"`        // Maximum charge rate of the battery (kW)
+	MaxBatteryDischargeKW   float64       `json:"maxBatteryDischargeKW"`     // Maximum discharge rate of the battery (kW)
+	MaxGridImportKW         float64       `json:"maxGridImportKW,omitempty"` // Maximum power that can be imported from the grid (kW, 0 = unlimited)
+	MaxGridExportKW         float64       `json:"maxGridExportKW,omitempty"` // Maximum power that can be exported to the grid (kW, 0 = unlimited)
+	SolarKW                 float64       `json:"solarKW"`                   // Solar generation (kW)
+	GridKW                  float64       `json:"gridKW"`                    // Grid import/export (kW, + import, - export)
+	HomeKW                  float64       `json:"homeKW"`                    // Home consumption (kW)
+	ElevatedMinBatterySOC   bool          `json:"elevatedMinBatterySOC"`     // True if the minimum SOC is elevated to force standby
+	BatteryAboveMinSOC      bool          `json:"batteryAboveMinSOC"`        // True if the battery SOC is above the minimum SOC
 	EmergencyMode           bool          `json:"emergencyMode,omitempty"`
 	GridUnavailable         bool          `json:"gridUnavailable,omitempty"`         // True if the grid is unavailable
 	BatteryChargingDisabled bool          `json:"batteryChargingDisabled,omitempty"` // True if battery charging is disabled due to alarms

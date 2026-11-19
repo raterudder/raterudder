@@ -101,10 +101,129 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 30.0, status.BatteryCapacityKWH, "BatteryCapacityKWH should match")
 		assert.Equal(t, 13.0, status.MaxBatteryChargeKW, "MaxBatteryChargeKW should match 5kW + 8kW")
 		assert.Equal(t, 15.0, status.MaxBatteryDischargeKW, "MaxBatteryDischargeKW should match 5kW + 10kW")
+		assert.Equal(t, 15.0, status.MaxGridImportKW, "MaxGridImportKW should match globalGridChargeMax when gridMax unset")
+		assert.Zero(t, status.MaxGridExportKW, "MaxGridExportKW should be 0 when unset")
 		assert.True(t, status.ElevatedMinBatterySOC, "ElevatedMinBatterySOC should be true")
 		assert.True(t, status.BatteryAboveMinSOC, "BatteryAboveMinSOC should be true")
 		assert.False(t, status.ManagedTOUMode, "ManagedTOUMode should be false for self-consumption")
 		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
+	})
+
+	t.Run("GetStatus GridPowerLimits", func(t *testing.T) {
+		var powerControlResult map[string]any
+		var powerControlCalls int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 30.0, "peHwVerList": []int{20, 20}, "zoneInfo": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				powerControlCalls++
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  powerControlResult,
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": []map[string]any{{"id": 1.0, "workMode": 2}}, "currendId": 1.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":           true,
+						"runtimeData":     map[string]any{"soc": 80.0, "timestamp": time.Now().Unix()},
+						"currentWorkMode": 2,
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		newClient := func() *Franklin {
+			return &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g",
+			}
+		}
+
+		// 1. Capped grid export (11 kW) and grid import (30 kW) on a 2x aPower 2 (16 kW / 20 kW) system
+		powerControlResult = map[string]any{
+			"gridFeedMax":            11.0,
+			"globalGridDischargeMax": 11.0,
+			"gridFeedMaxFlag":        2,
+			"gridMax":                30.0,
+			"globalGridChargeMax":    30.0,
+			"gridMaxFlag":            2,
+			"peakDemandGridMax":      nil,
+		}
+		f := newClient()
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 16.0, status.MaxBatteryChargeKW)
+		assert.Equal(t, 20.0, status.MaxBatteryDischargeKW)
+		assert.Equal(t, 30.0, status.MaxGridImportKW)
+		assert.Equal(t, 11.0, status.MaxGridExportKW)
+
+		// Subsequent GridSettings call reuses the cached power control response
+		callsBefore := powerControlCalls
+		gs, err := f.GridSettings(context.Background())
+		require.NoError(t, err)
+		assert.True(t, gs.GridChargeBatteries)
+		assert.True(t, gs.GridExportBatteries)
+		assert.Equal(t, callsBefore, powerControlCalls)
+
+		// 2. Uncapped (-1 sentinel) leaves grid limits at 0 (unlimited)
+		powerControlResult = map[string]any{
+			"gridFeedMax":            -1.0,
+			"globalGridDischargeMax": -1.0,
+			"gridFeedMaxFlag":        2,
+			"gridMax":                -1.0,
+			"globalGridChargeMax":    -1.0,
+			"gridMaxFlag":            2,
+		}
+		f = newClient()
+		status, err = f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Zero(t, status.MaxGridImportKW)
+		assert.Zero(t, status.MaxGridExportKW)
+
+		// 3. Tighter peakDemandGridMax overrides gridMax
+		powerControlResult = map[string]any{
+			"gridFeedMax":       -1.0,
+			"gridMax":           30.0,
+			"peakDemandGridMax": 12.5,
+		}
+		f = newClient()
+		status, err = f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 12.5, status.MaxGridImportKW)
+		assert.Zero(t, status.MaxGridExportKW)
 	})
 
 	t.Run("GetStatus ManagedTOUMode", func(t *testing.T) {

@@ -2217,6 +2217,101 @@ func TestStepPhysics(t *testing.T) {
 		assert.InDelta(t, 5.0*0.1168, vosMetrics.grossImportCostDollars, 1e-6)
 		assert.InDelta(t, 5.0*(0.1168-0.1289), vosMetrics.costDollars, 1e-6)
 	})
+
+	t.Run("MaxGridExportKW_CapsBatteryAndSolarExportWithoutCappingHomeLoad", func(t *testing.T) {
+		t.Parallel()
+
+		// Dual-battery system: 20 kW max discharge, 11 kW max grid export.
+		// Battery starts at 28 kWh / 30 kWh (93.3%), reserve 20% (6 kWh).
+		// Interval: 2 kWh home load, 3 kWh solar generation -> solar uses 3 kW of the 11 kW grid export cap,
+		// leaving 8 kW of grid export capacity for battery export, while battery still covers 2 kW home load.
+		limitedState := planState{
+			energyKWH:       28.0,
+			soc:             (28.0 / 30.0) * 100.0,
+			capacityKWH:     30.0,
+			maxChargeKW:     16.0,
+			maxDischargeKW:  20.0,
+			maxGridExportKW: 11.0,
+		}
+		limitedInterval := planInterval{
+			durationHours:     1.0,
+			importRate:        0.25,
+			exportRate:        0.30,
+			batteryExportRate: 0.30,
+			loadKWH:           2.0,
+			solarKWH:          3.0,
+			minSOC:            20.0,
+		}
+		exportSettings := settings
+		exportSettings.GridExportBatteries = true
+		exportSettings.GridExportSolar = true
+
+		_, metrics := stepPhysics(limitedState, actionCandidate{
+			batteryMode: types.BatteryModeExport,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   20.0,
+		}, limitedInterval, exportSettings, 0.90)
+
+		assert.InDelta(t, 2.0, metrics.batSuppliedHomeKWH, 1e-6, "Battery covers full home load behind the meter")
+		assert.InDelta(t, 3.0, metrics.solarExportKWH, 1e-6, "Solar exports 3 kWh")
+		assert.InDelta(t, 8.0, metrics.batExportKWH, 1e-6, "Battery export capped at remaining 8 kW grid export headroom")
+		assert.InDelta(t, 11.0, metrics.gridExportKWH, 1e-6, "Total grid export capped at 11 kW")
+		assert.InDelta(t, 0.0, metrics.solarCurtailedKW, 1e-6)
+
+		// If solar itself exceeds 11 kW (14 kW solar, 2 kW home load covered by battery), excess 3 kW solar is curtailed
+		// and battery export is 0.
+		highSolarInterval := limitedInterval
+		highSolarInterval.solarKWH = 14.0
+		_, highSolarMetrics := stepPhysics(limitedState, actionCandidate{
+			batteryMode: types.BatteryModeExport,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   20.0,
+		}, highSolarInterval, exportSettings, 0.90)
+		assert.InDelta(t, 11.0, highSolarMetrics.solarExportKWH, 1e-6)
+		assert.InDelta(t, 0.0, highSolarMetrics.batExportKWH, 1e-6)
+		assert.InDelta(t, 11.0, highSolarMetrics.gridExportKWH, 1e-6)
+		assert.InDelta(t, 3.0, highSolarMetrics.solarCurtailedKW, 1e-6)
+	})
+
+	t.Run("MaxGridImportKW_CapsGridChargingAfterHomeLoad", func(t *testing.T) {
+		t.Parallel()
+
+		// 16 kW max battery charge, 9 kW max grid import.
+		// With 2 kW unmet home load and 0 solar, grid charging is capped at 9 - 2 = 7 kW.
+		limitedState := planState{
+			energyKWH:       6.0,
+			soc:             20.0,
+			capacityKWH:     30.0,
+			maxChargeKW:     16.0,
+			maxDischargeKW:  20.0,
+			maxGridImportKW: 9.0,
+		}
+		chargeInterval := planInterval{
+			durationHours: 1.0,
+			importRate:    0.05,
+			loadKWH:       2.0,
+			solarKWH:      0.0,
+			minSOC:        20.0,
+		}
+		_, metrics := stepPhysics(limitedState, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, chargeInterval, settings, 0.90)
+		assert.InDelta(t, 7.0, metrics.gridChargeKWH, 1e-6, "Grid charge must leave room for 2 kW home load under 9 kW grid import limit")
+		assert.InDelta(t, 9.0, metrics.gridImportKWH, 1e-6, "Total grid import capped at 9 kW")
+
+		// With 5 kW solar and 2 kW home load, 3 kW surplus solar charges behind the meter and grid charge can pull full 9 kW.
+		sunnyChargeInterval := chargeInterval
+		sunnyChargeInterval.solarKWH = 5.0
+		_, sunnyMetrics := stepPhysics(limitedState, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, sunnyChargeInterval, settings, 0.90)
+		assert.InDelta(t, 9.0, sunnyMetrics.gridChargeKWH, 1e-6, "Solar charges behind the meter while grid import uses full 9 kW cap")
+		assert.InDelta(t, 9.0, sunnyMetrics.gridImportKWH, 1e-6)
+	})
 }
 
 // TestCalculateTerminalValuation tests ending battery valuation (replacement cost vs banked credit).
@@ -6186,6 +6281,75 @@ func TestPlanScenarios(t *testing.T) {
 			}
 		}
 		assert.True(t, sawOnPeakLoad, "Battery should discharge to cover home load during On-Peak 15:00-18:00 ($0.15788)")
+	})
+
+	t.Run("GridExportLimit_WidensBatteryExportWindow", func(t *testing.T) {
+		t.Parallel()
+
+		// 30 kWh dual-battery system starting at 100% SOC (24 kWh usable above 20% reserve),
+		// with 20 kW max battery discharge and a 2-hour high export window ($0.50/kWh).
+		// Without an export cap, 20 kW discharge can dump 24 kWh in < 1.5h (finishing cleanly in the tail).
+		// With MaxGridExportKW = 11 kW, exporting 24 kWh requires starting earlier across all 2 hours.
+		ctLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		tNow := time.Date(2026, 7, 20, 17, 0, 0, 0, ctLoc)
+
+		currP := types.Price{
+			TSStart:                              tNow,
+			TSEnd:                                tNow.Add(time.Hour),
+			DollarsPerKWH:                        0.10,
+			GenerationCreditDollarsPerKWH:        0.50,
+			SeparateGenerationCredit:             true,
+			BatteryGenerationCreditDollarsPerKWH: 0.50,
+			SeparateBatteryGenerationCredit:      true,
+		}
+		var futP []types.Price
+		for i := 1; i < 24; i++ {
+			ts := tNow.Add(time.Duration(i) * time.Hour)
+			imp := 0.10
+			exp := 0.05
+			if i == 1 {
+				// 2nd hour of the $0.50 export spike (hours 17:00-19:00)
+				exp = 0.50
+			}
+			futP = append(futP, types.Price{
+				TSStart:                              ts,
+				TSEnd:                                ts.Add(time.Hour),
+				DollarsPerKWH:                        imp,
+				GenerationCreditDollarsPerKWH:        exp,
+				SeparateGenerationCredit:             true,
+				BatteryGenerationCreditDollarsPerKWH: exp,
+				SeparateBatteryGenerationCredit:      true,
+			})
+		}
+
+		st := types.SystemStatus{
+			Timestamp:             tNow,
+			TimeLocation:          "America/Chicago",
+			BatteryCapacityKWH:    30.0,
+			BatterySOC:            100.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    16.0,
+			MaxBatteryDischargeKW: 20.0,
+			MaxGridExportKW:       11.0,
+			HomeKW:                0.5,
+		}
+		cfg := types.Settings{
+			MinBatterySOC:       20.0,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+
+		dec, plan, err := c.Plan(ctx, st, currP, futP, nil, nil, cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeExport, dec.Action.BatteryMode, "11 kW grid export cap requires exporting immediately at 17:00 across the 2h spike")
+		require.NotEmpty(t, plan.Periods)
+		for _, pp := range plan.Periods {
+			if pp.DurationHours > 0 {
+				assert.LessOrEqual(t, pp.GridExportKWH/pp.DurationHours, 11.0+1e-6, "Planned grid export rate must not exceed MaxGridExportKW")
+			}
+		}
 	})
 }
 

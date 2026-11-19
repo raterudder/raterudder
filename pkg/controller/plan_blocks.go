@@ -1762,7 +1762,11 @@ func estimatePairedBlockStartState(
 	switch pt[0].actionType {
 	case blockActionCharge:
 		if pt[1].actionType == blockActionCharge {
-			maxGainSOC := (resolveBatteryPowerKW(initialState.maxChargeKW, initialState.capacityKWH) * blocks[a].durationHours * math.Sqrt(roundTripEff) / initialState.capacityKWH) * 100.0
+			maxChargeKW := resolveBatteryPowerKW(initialState.maxChargeKW, initialState.capacityKWH)
+			if maxGridImportKW := resolveGridLimitKW(initialState.maxGridImportKW); maxGridImportKW > 0 && maxGridImportKW < maxChargeKW {
+				maxChargeKW = maxGridImportKW
+			}
+			maxGainSOC := (maxChargeKW * blocks[a].durationHours * math.Sqrt(roundTripEff) / initialState.capacityKWH) * 100.0
 			simSOCB := min(pt[0].targetSOC, stateA.soc+maxGainSOC)
 			for k := a + 1; k < b; k++ {
 				if currentChoices[k].actionType == blockActionLoad && blocks[k].netSolarKWH < 0 {
@@ -2895,6 +2899,14 @@ func (c *Controller) searchOptimalPlanBlocks(
 	lastAction = sanitizeLastAction(lastAction, refTime)
 	initial.maxChargeKW = resolveBatteryPowerKW(initial.maxChargeKW, initial.capacityKWH)
 	initial.maxDischargeKW = resolveBatteryPowerKW(initial.maxDischargeKW, initial.capacityKWH)
+	if initial.maxGridImportKW == 0 && currentStatus.MaxGridImportKW > 0 {
+		initial.maxGridImportKW = currentStatus.MaxGridImportKW
+	}
+	if initial.maxGridExportKW == 0 && currentStatus.MaxGridExportKW > 0 {
+		initial.maxGridExportKW = currentStatus.MaxGridExportKW
+	}
+	initial.maxGridImportKW = resolveGridLimitKW(initial.maxGridImportKW)
+	initial.maxGridExportKW = resolveGridLimitKW(initial.maxGridExportKW)
 
 	initialDeficitWait := computeInitialDeficitWait(initial, timeline, lastAction)
 
