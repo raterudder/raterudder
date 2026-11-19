@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -502,12 +503,16 @@ func TestERCOT(t *testing.T) {
 
 	t.Run("GetConfirmedPrices Only Returns RTM and Does Not Fallback to DAM", func(t *testing.T) {
 		ctx := context.Background()
-		nowCT := time.Now().In(ctLocation)
+		nowCT := time.Date(2026, time.October, 7, 14, 25, 0, 0, ctLocation) // 2:25 PM CT
 		dayStart := truncateDay(nowCT)
-		dayEnd := dayStart.Add(24 * time.Hour)
+		completedEnd := nowCT.Truncate(time.Hour) // 2:00 PM CT (completed window)
+		tomorrowStart := dayStart.AddDate(0, 0, 1)
+		todayStr := dayStart.Format("2006-01-02")
+		tomorrowStr := tomorrowStart.Format("2006-01-02")
 
-		// 1. Success case: RTM prices returned
+		// 1. Success case: RTM prices returned for completed window
 		baseSuccess := &baseERCOT{
+			nowFunc: func() time.Time { return nowCT },
 			cachedPrices: map[string][]types.Price{
 				"LZ_HOUSTON_" + dayStart.Format("20060102"): {
 					{
@@ -519,12 +524,12 @@ func TestERCOT(t *testing.T) {
 				},
 			},
 		}
-		prices, err := baseSuccess.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+		prices, err := baseSuccess.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, completedEnd)
 		require.NoError(t, err)
 		require.Len(t, prices, 1)
 		assert.Equal(t, 0.050, prices[0].DollarsPerKWH)
 
-		// 2. Failure case: RTM missing, DAM available.
+		// 2. Failure case: RTM missing, DAM available for completed window.
 		// GetConfirmedPrices should return error and NOT fall back to DAM.
 		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "np6-905-cd") {
@@ -539,7 +544,7 @@ func TestERCOT(t *testing.T) {
 					Data: []ercotDAMEntry{
 						{
 							SettlementPoint:      "LZ_HOUSTON",
-							DeliveryDate:         dayStart.Format("2006-01-02"),
+							DeliveryDate:         todayStr,
 							DeliveryHour:         1,
 							SettlementPointPrice: 45.0,
 						},
@@ -554,13 +559,117 @@ func TestERCOT(t *testing.T) {
 			apiURL:          apiServer.URL,
 			token:           "mock-token",
 			client:          apiServer.Client(),
+			nowFunc:         func() time.Time { return nowCT },
 			cachedPrices:    make(map[string][]types.Price),
 			cachedDAMPrices: make(map[string][]types.Price),
 		}
 
-		prices, err = baseFail.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+		prices, err = baseFail.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, completedEnd)
 		require.Error(t, err, "expected error when RTM is unavailable")
 		assert.Nil(t, prices)
+
+		// 3. Afternoon poll (14:25 CT) with fetchEnd = now + 12h (02:25 CT tomorrow):
+		//    - Must clamp end to 14:00 CT and issue 0 RTM requests for tomorrow.
+		//    - Must return only completed published RTM intervals (HE 1..13, 00:00..13:00),
+		//      excluding carry-forward placeholders for unpublished HE 14 (13:00..14:00) and future hours (14:00..24:00).
+		var todayRTMCalls, tomorrowRTMCalls atomic.Int32
+		afternoonServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "np6-905-cd") {
+				http.NotFound(w, r)
+				return
+			}
+			dateFrom := r.URL.Query().Get("deliveryDateFrom")
+			if dateFrom == tomorrowStr {
+				tomorrowRTMCalls.Add(1)
+				http.Error(w, "tomorrow rtm not published", http.StatusNotFound)
+				return
+			}
+			if dateFrom == todayStr {
+				todayRTMCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				var entries []ercotSPPEntry
+				// Publish HE 1..13 (00:00 to 13:00 CT); HE 14 (13:00-14:00) not yet published, HE 15..24 in future
+				for h := 1; h <= 13; h++ {
+					priceMWh := 30.0
+					if h == 13 {
+						priceMWh = 900.0 // $0.90/kWh spike in HE 13 that fetchERCOTRTM carries forward into HE 14..24
+					}
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         todayStr,
+							DeliveryHour:         h,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: priceMWh,
+						})
+					}
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer afternoonServer.Close()
+
+		baseAfternoon := &baseERCOT{
+			apiURL:             afternoonServer.URL,
+			token:              "mock-token",
+			client:             afternoonServer.Client(),
+			nowFunc:            func() time.Time { return nowCT },
+			cachedPrices:       make(map[string][]types.Price),
+			cachedPricesTime:   make(map[string]time.Time),
+			cachedConfirmedEnd: make(map[string]time.Time),
+			cachedDAMPrices:    make(map[string][]types.Price),
+		}
+
+		afternoonPrices, err := baseAfternoon.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, nowCT.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), todayRTMCalls.Load(), "expected 1 RTM request for today")
+		assert.Equal(t, int32(0), tomorrowRTMCalls.Load(), "expected 0 RTM requests for tomorrow during afternoon poll")
+		if assert.Len(t, afternoonPrices, 13, "expected only the 13 published completed hours, excluding carry-forward placeholders") {
+			assert.Equal(t, dayStart, afternoonPrices[0].TSStart)
+			assert.Equal(t, dayStart.Add(13*time.Hour), afternoonPrices[len(afternoonPrices)-1].TSEnd)
+		}
+
+		// 4. Empty slice when truncated start is at or after clamped end (14:00 CT >= 14:00 CT)
+		emptyPrices, err := baseAfternoon.GetConfirmedPrices(ctx, "LZ_HOUSTON", nowCT, nowCT.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, emptyPrices)
+		assert.Equal(t, int32(1), todayRTMCalls.Load(), "expected 0 additional RTM requests when start >= clamped end")
+		assert.Equal(t, int32(0), tomorrowRTMCalls.Load())
+
+		// 5. Historical replay (cmd/replayplan/main.go) returns full past range when end precedes nowHourCT
+		replayStart := time.Date(2026, time.October, 4, 0, 0, 0, 0, ctLocation)
+		replayEnd := replayStart.AddDate(0, 0, 2).Add(2 * time.Hour) // 50 hours ending Oct 6 02:00 CT < Oct 7 14:00 CT
+		replayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			dateFrom := r.URL.Query().Get("deliveryDateFrom")
+			w.Header().Set("Content-Type", "application/json")
+			var entries []ercotSPPEntry
+			for h := 1; h <= 24; h++ {
+				entries = append(entries, ercotSPPEntry{
+					DeliveryDate:         dateFrom,
+					DeliveryHour:         h,
+					DeliveryInterval:     1,
+					SettlementPoint:      "LZ_HOUSTON",
+					SettlementPointPrice: 40.0,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer replayServer.Close()
+
+		baseReplay := &baseERCOT{
+			apiURL:             replayServer.URL,
+			token:              "mock-token",
+			client:             replayServer.Client(),
+			nowFunc:            func() time.Time { return nowCT },
+			cachedPrices:       make(map[string][]types.Price),
+			cachedPricesTime:   make(map[string]time.Time),
+			cachedConfirmedEnd: make(map[string]time.Time),
+		}
+		replayPrices, err := baseReplay.GetConfirmedPrices(ctx, "LZ_HOUSTON", replayStart, replayEnd)
+		require.NoError(t, err)
+		assert.Len(t, replayPrices, 50)
 	})
 
 	t.Run("Concurrent Multi-Zone Requests Return Correct Separate Prices", func(t *testing.T) {

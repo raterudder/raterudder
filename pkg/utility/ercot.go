@@ -29,22 +29,23 @@ const (
 
 // baseERCOT implements the wholesale pricing provider for ERCOT Settlement Point Prices (SPP).
 type baseERCOT struct {
-	apiURL           string
-	apiKey           string
-	tokenURL         string
-	clientID         string
-	username         string
-	password         string
-	token            string // static token override
-	client           *http.Client
-	db               storage.Database
-	mu               sync.Mutex
-	cachedPrices     map[string][]types.Price // Key: loadZone_YYYYMMDD (RTM prices)
-	cachedPricesTime map[string]time.Time     // Key: loadZone_YYYYMMDD (timestamp when cached)
-	cachedDAMPrices  map[string][]types.Price // Key: loadZone_YYYYMMDD (DAM prices)
-	lastFutureFetch  time.Time
-	nowFunc          func() time.Time
-	sfGroup          singleflight.Group
+	apiURL             string
+	apiKey             string
+	tokenURL           string
+	clientID           string
+	username           string
+	password           string
+	token              string // static token override
+	client             *http.Client
+	db                 storage.Database
+	mu                 sync.Mutex
+	cachedPrices       map[string][]types.Price // Key: loadZone_YYYYMMDD (RTM prices)
+	cachedPricesTime   map[string]time.Time     // Key: loadZone_YYYYMMDD (timestamp when cached)
+	cachedConfirmedEnd map[string]time.Time     // Key: loadZone_YYYYMMDD (latest published RTM TSEnd)
+	cachedDAMPrices    map[string][]types.Price // Key: loadZone_YYYYMMDD (DAM prices)
+	lastFutureFetch    time.Time
+	nowFunc            func() time.Time
+	sfGroup            singleflight.Group
 
 	tokenMu     sync.Mutex
 	cachedToken string
@@ -213,13 +214,14 @@ func (c *baseERCOT) getToken(ctx context.Context) (string, error) {
 
 func configuredERCOT(db storage.Database) *baseERCOT {
 	c := &baseERCOT{
-		client:           common.HTTPClient(10 * time.Second),
-		cachedPrices:     make(map[string][]types.Price),
-		cachedPricesTime: make(map[string]time.Time),
-		cachedDAMPrices:  make(map[string][]types.Price),
-		db:               db,
-		tokenURL:         defaultERCOTTokenURL,
-		clientID:         defaultERCOTClientID,
+		client:             common.HTTPClient(10 * time.Second),
+		cachedPrices:       make(map[string][]types.Price),
+		cachedPricesTime:   make(map[string]time.Time),
+		cachedConfirmedEnd: make(map[string]time.Time),
+		cachedDAMPrices:    make(map[string][]types.Price),
+		db:                 db,
+		tokenURL:           defaultERCOTTokenURL,
+		clientID:           defaultERCOTClientID,
 	}
 	apiURL := lflag.String("ercot-api-url", "https://api.ercot.com/api/public-reports", "URL for the ERCOT Public Reports API")
 	apiKey := lflag.String("ercot-api-key", "", "API Subscription Key for ERCOT Public Reports API (Ocp-Apim-Subscription-Key)")
@@ -423,16 +425,28 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 	key := fmt.Sprintf("%s_%s", loadZone, dateStr)
 
 	todayCT := truncateDay(c.now().In(ctLocation))
-	isToday := truncateDay(dateCT).Equal(todayCT)
+	dayStart := truncateDay(dateCT)
+	dayEnd := dayStart.AddDate(0, 0, 1)
+	isToday := dayStart.Equal(todayCT)
+
+	isCacheFresh := func(cachedAt, confirmedEnd time.Time) bool {
+		if !isToday && (confirmedEnd.IsZero() || !confirmedEnd.Before(dayEnd)) {
+			return true
+		}
+		return cachedAt.IsZero() || c.now().Sub(cachedAt) < 5*time.Minute
+	}
 
 	c.mu.Lock()
 	if prices, ok := c.cachedPrices[key]; ok {
-		cachedAt := time.Time{}
+		var cachedAt, confirmedEnd time.Time
 		if c.cachedPricesTime != nil {
 			cachedAt = c.cachedPricesTime[key]
 		}
-		// Past days are immutable once cached; today's cache is valid for 5 minutes (or if pre-seeded)
-		if !isToday || cachedAt.IsZero() || c.now().Sub(cachedAt) < 5*time.Minute {
+		if c.cachedConfirmedEnd != nil {
+			confirmedEnd = c.cachedConfirmedEnd[key]
+		}
+		// Past days with full coverage are immutable once cached; incomplete or today's cache is valid for 5 minutes (or if pre-seeded)
+		if isCacheFresh(cachedAt, confirmedEnd) {
 			c.mu.Unlock()
 			return copyPrices(prices), nil
 		}
@@ -444,11 +458,14 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 	res, err, _ := c.sfGroup.Do(sfKey, func() (any, error) {
 		c.mu.Lock()
 		if prices, ok := c.cachedPrices[key]; ok {
-			cachedAt := time.Time{}
+			var cachedAt, confirmedEnd time.Time
 			if c.cachedPricesTime != nil {
 				cachedAt = c.cachedPricesTime[key]
 			}
-			if !isToday || cachedAt.IsZero() || c.now().Sub(cachedAt) < 5*time.Minute {
+			if c.cachedConfirmedEnd != nil {
+				confirmedEnd = c.cachedConfirmedEnd[key]
+			}
+			if isCacheFresh(cachedAt, confirmedEnd) {
 				c.mu.Unlock()
 				return prices, nil
 			}
@@ -457,8 +474,8 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 
 		// 1. Check Firestore database cache first (unified ercot_<loadZone> ID)
 		if c.db != nil {
-			start := truncateDay(dateCT)
-			end := start.AddDate(0, 0, 1)
+			start := dayStart
+			end := dayEnd
 			expectedHours := hoursInDay(start)
 			dbUtilityID := "ercot_" + strings.ToLower(loadZone)
 			dbPrices, err := c.db.GetUtilityPrices(ctx, dbUtilityID, start, end)
@@ -481,9 +498,15 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 						prices = append(prices, p.Price)
 					}
 					c.mu.Lock()
+					if c.cachedPrices == nil {
+						c.cachedPrices = make(map[string][]types.Price)
+					}
 					c.cachedPrices[key] = prices
 					if c.cachedPricesTime != nil {
 						c.cachedPricesTime[key] = c.now()
+					}
+					if c.cachedConfirmedEnd != nil {
+						c.cachedConfirmedEnd[key] = end
 					}
 					c.mu.Unlock()
 					return prices, nil
@@ -494,31 +517,48 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		// 2. Fetch all load zones in a single request from ERCOT RTM API using inner singleflight
 		fetchKey := "fetch_rtm_" + dateStr
 		fetchRes, err, _ := c.sfGroup.Do(fetchKey, func() (any, error) {
-			return c.fetchERCOTRTM(ctx, dateCT)
+			byZone, confirmedEndByZone, fetchErr := c.fetchERCOTRTMWithBounds(ctx, dateCT)
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			return rtmFetchResult{
+				byZone:             byZone,
+				confirmedEndByZone: confirmedEndByZone,
+			}, nil
 		})
 		if err != nil {
 			return nil, err
 		}
-		byZone := fetchRes.(map[string][]types.Price)
+		fetched := fetchRes.(rtmFetchResult)
+		byZone := fetched.byZone
 
 		nowTime := c.now()
 		c.mu.Lock()
+		if c.cachedPrices == nil {
+			c.cachedPrices = make(map[string][]types.Price)
+		}
 		if c.cachedPricesTime == nil {
 			c.cachedPricesTime = make(map[string]time.Time)
 		}
+		if c.cachedConfirmedEnd == nil {
+			c.cachedConfirmedEnd = make(map[string]time.Time)
+		}
 		for z, prices := range byZone {
-			c.cachedPrices[z+"_"+dateStr] = prices
-			c.cachedPricesTime[z+"_"+dateStr] = nowTime
+			zKey := z + "_" + dateStr
+			c.cachedPrices[zKey] = prices
+			c.cachedPricesTime[zKey] = nowTime
+			c.cachedConfirmedEnd[zKey] = fetched.confirmedEndByZone[z]
 		}
 		c.mu.Unlock()
 
 		// 3. Persist confirmed RTM prices to Firestore database cache under unified ercot_<loadZone> ID
 		if c.db != nil {
 			for z, prices := range byZone {
+				confirmedEnd := fetched.confirmedEndByZone[z]
 				var toUpsert []types.PriceState
 				for _, p := range prices {
-					// Only completed intervals that have ended are confirmed settled prices
-					confirmed := !nowTime.Before(p.TSEnd)
+					// Only completed published intervals that have ended are confirmed settled prices
+					confirmed := !nowTime.Before(p.TSEnd) && (confirmedEnd.IsZero() || !p.TSEnd.After(confirmedEnd))
 					toUpsert = append(toUpsert, types.PriceState{
 						Price:     p,
 						Confirmed: confirmed,
@@ -563,7 +603,17 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 // for electrical load zones (LZ_HOUSTON, LZ_NORTH, LZ_SOUTH, LZ_WEST). Retail electric providers with
 // wholesale-indexed buyback plans (such as Tesla Electric, Almika Solar, etc.) settle residential export
 // credits against these exact 15-minute settlement point prices for the customer's load zone.
+type rtmFetchResult struct {
+	byZone             map[string][]types.Price
+	confirmedEndByZone map[string]time.Time
+}
+
 func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[string][]types.Price, error) {
+	byZone, _, err := c.fetchERCOTRTMWithBounds(ctx, date)
+	return byZone, err
+}
+
+func (c *baseERCOT) fetchERCOTRTMWithBounds(ctx context.Context, date time.Time) (map[string][]types.Price, map[string]time.Time, error) {
 	dateCT := date.In(ctLocation)
 	dateFormatted := dateCT.Format("2006-01-02")
 	endpoint := fmt.Sprintf("%s/np6-905-cd/spp_node_zone_hub?deliveryDateFrom=%s&deliveryDateTo=%s&settlementPointType=LZ",
@@ -574,14 +624,14 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Ocp-Apim-Subscription-Key", c.apiKey)
 	}
 	token, err := c.getToken(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -590,7 +640,7 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -603,21 +653,21 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 			c.tokenExpiry = time.Time{}
 			c.tokenMu.Unlock()
 		}
-		return nil, fmt.Errorf("ercot api unauthorized (check Ocp-Apim-Subscription-Key and ercot credentials/token): %s", bodyStr)
+		return nil, nil, fmt.Errorf("ercot api unauthorized (check Ocp-Apim-Subscription-Key and ercot credentials/token): %s", bodyStr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ercot api error status %d: %s", resp.StatusCode, string(body))
+		return nil, nil, fmt.Errorf("ercot api error status %d: %s", resp.StatusCode, string(body))
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	parsedData, err := parseERCOTRTMResponse(bodyBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Group 15-minute intervals into hourly averages per settlement point
@@ -648,10 +698,11 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 	}
 
 	if len(hourlyByZone) == 0 {
-		return nil, fmt.Errorf("no ercot rtm data available for %s", dateFormatted)
+		return nil, nil, fmt.Errorf("no ercot rtm data available for %s", dateFormatted)
 	}
 
 	byZone := make(map[string][]types.Price)
+	confirmedEndByZone := make(map[string]time.Time)
 	dayStart := truncateDay(dateCT)
 	numHours := hoursInDay(dayStart)
 
@@ -664,6 +715,7 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 			}
 		}
 
+		var latestPublishedEnd time.Time
 		var prices []types.Price
 		for h := 0; h < numHours; h++ {
 			start := dayStart.Add(time.Duration(h) * time.Hour)
@@ -671,6 +723,7 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 
 			if acc, ok := hourlyMap[h]; ok && acc.count > 0 {
 				lastWholesaleDollarsPerKWH = (acc.sum / float64(acc.count)) / 1000.0
+				latestPublishedEnd = end
 			}
 
 			prices = append(prices, types.Price{
@@ -683,9 +736,10 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 			})
 		}
 		byZone[zone] = prices
+		confirmedEndByZone[zone] = latestPublishedEnd
 	}
 
-	return byZone, nil
+	return byZone, confirmedEndByZone, nil
 }
 
 // ercotDAMEntry represents a single Day-Ahead Market Settlement Point Price entry from ERCOT.
@@ -1163,23 +1217,43 @@ func (c *baseERCOT) GetFuturePrices(ctx context.Context, loadZone string) ([]typ
 }
 
 // GetConfirmedPrices returns confirmed wholesale prices for the given date range.
-// It retrieves Real-Time Market (RTM) prices, which are the only confirmed prices.
+// It retrieves Real-Time Market (RTM) prices, clamping end to the start of the current hour
+// in Central Time and returning only completed RTM intervals (excluding carry-forward future hours).
 func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, start, end time.Time) ([]types.Price, error) {
 	if loadZone == "" {
 		return nil, fmt.Errorf("ercot load zone is required")
 	}
-	var confirmed []types.Price
+	nowHourCT := c.now().In(ctLocation).Truncate(time.Hour)
 	curr := start.In(ctLocation).Truncate(time.Hour)
 	endCT := end.In(ctLocation)
+	if endCT.After(nowHourCT) {
+		endCT = nowHourCT
+	} else {
+		endCT = endCT.Truncate(time.Hour)
+	}
 
+	if !curr.Before(endCT) {
+		return []types.Price{}, nil
+	}
+
+	confirmed := make([]types.Price, 0)
 	for curr.Before(endCT) {
 		dayDate := truncateDay(curr)
 		prices, err := c.getPricesForDate(ctx, dayDate, loadZone)
 		if err != nil {
 			return nil, err
 		}
+
+		dateKey := fmt.Sprintf("%s_%s", loadZone, dayDate.Format("20060102"))
+		var confirmedEnd time.Time
+		c.mu.Lock()
+		if c.cachedConfirmedEnd != nil {
+			confirmedEnd = c.cachedConfirmedEnd[dateKey]
+		}
+		c.mu.Unlock()
+
 		for _, p := range prices {
-			if !p.TSStart.Before(curr) && p.TSStart.Before(endCT) {
+			if !p.TSStart.Before(curr) && !p.TSEnd.After(endCT) && (confirmedEnd.IsZero() || !p.TSEnd.After(confirmedEnd)) {
 				confirmed = append(confirmed, p)
 			}
 		}
