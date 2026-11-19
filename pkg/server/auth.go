@@ -761,7 +761,6 @@ func verifyOIDCToken(ctx context.Context, providerName string, verifier tokenVer
 	if err := idToken.Claims(&claims); err != nil {
 		return "", "", time.Time{}, err
 	}
-	// TODO: set this to false after we've confirmed that there are no errors from existing users
 	verified := false
 	if claims.EmailVerified != nil {
 		switch v := claims.EmailVerified.(type) {
