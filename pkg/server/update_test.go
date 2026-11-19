@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
@@ -1582,7 +1583,8 @@ func TestHandleUpdateSites(t *testing.T) {
 		require.NoError(t, err)
 
 		updateEmail := "updater@example.com"
-		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
+		token := generateTestTokenWithAudience(t, oidcSrv.URL, priv, updateEmail, "updater", "update-audience")
+		webAudSchedEmailToken := generateTestTokenWithAudience(t, oidcSrv.URL, priv, updateEmail, "updater", "test-audience")
 
 		mockS := &mockStorage{}
 		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
@@ -1637,11 +1639,12 @@ func TestHandleUpdateSites(t *testing.T) {
 			controller:          controller.NewController(),
 			release:             "production",
 			updateSpecificEmail: updateEmail,
+			updateOIDCVerifier:  provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
 			oidcVerifiers: map[string]tokenVerifier{
-				"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 			},
 			oidcAudiences: map[string]string{
-				"google_update_specific": "test-audience",
+				"google": "test-audience",
 			},
 		}
 
@@ -1657,9 +1660,41 @@ func TestHandleUpdateSites(t *testing.T) {
 		})
 
 		t.Run("Mismatch Token", func(t *testing.T) {
-			badToken := generateTestToken(t, oidcSrv.URL, priv, "wrong@example.com", "wrong")
+			badToken := generateTestTokenWithAudience(t, oidcSrv.URL, priv, "wrong@example.com", "wrong", "update-audience")
 			req := httptest.NewRequest("POST", "/api/updateSites", nil)
 			req.Header.Set("Authorization", "Bearer "+badToken)
+			w := httptest.NewRecorder()
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+
+		t.Run("Web Audience Token Rejected", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites", nil)
+			req.Header.Set("Authorization", "Bearer "+webAudSchedEmailToken)
+			w := httptest.NewRecorder()
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+
+		t.Run("Unverified Email Token Rejected", func(t *testing.T) {
+			unverifiedClaims := fmt.Sprintf(`{
+				"iss": "%s",
+				"aud": "update-audience",
+				"sub": "updater",
+				"email": "%s",
+				"email_verified": false,
+				"exp": %d
+			}`, oidcSrv.URL, updateEmail, time.Now().Add(time.Hour).Unix())
+			unverifiedToken := oidctest.SignIDToken(priv, "my-key-id", "RS256", unverifiedClaims)
+
+			req := httptest.NewRequest("POST", "/api/updateSites", nil)
+			req.Header.Set("Authorization", "Bearer "+unverifiedToken)
 			w := httptest.NewRecorder()
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))

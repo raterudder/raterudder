@@ -229,27 +229,31 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						return
 					}
 					token := strings.TrimPrefix(authHeader, "Bearer ")
-					specificClient := ""
-					if _, ok := s.oidcAudiences["google_update_specific"]; ok {
-						specificClient = "google_update_specific"
+					var emailRet, subjectRet string
+					var err error
+					if s.updateOIDCVerifier != nil {
+						emailRet, subjectRet, _, err = verifyOIDCToken(ctx, "google_update_specific", s.updateOIDCVerifier, token)
+					} else {
+						emailRet, subjectRet, _, err = s.authenticateToken(ctx, token, "")
 					}
-					emailRet, subjectRet, _, err := s.authenticateToken(ctx, token, specificClient)
 					if err != nil {
 						log.Ctx(ctx).WarnContext(ctx, "update token validation failed", slog.Any("error", err))
-					} else {
+						writeJSONError(w, "invalid update token", http.StatusUnauthorized)
+						return
+					}
+
+					emailHash := sha256.Sum256([]byte(emailRet))
+					updateSpecificEmailHash := sha256.Sum256([]byte(s.updateSpecificEmail))
+					emailMatch := subtle.ConstantTimeCompare(emailHash[:], updateSpecificEmailHash[:]) == 1
+					if emailMatch && emailRet != "" {
 						email = emailRet
 						userID = subjectRet
-
-						emailHash := sha256.Sum256([]byte(email))
-						updateSpecificEmailHash := sha256.Sum256([]byte(s.updateSpecificEmail))
-						if subtle.ConstantTimeCompare(emailHash[:], updateSpecificEmailHash[:]) == 1 {
-							authSuccess = true
-							authViaUpdateSpecific = true
-						} else {
-							log.Ctx(ctx).WarnContext(ctx, "update email mismatch", slog.String("got", email), slog.String("want", s.updateSpecificEmail))
-							writeJSONError(w, "unauthorized update specific email", http.StatusUnauthorized)
-							return
-						}
+						authSuccess = true
+						authViaUpdateSpecific = true
+					} else {
+						log.Ctx(ctx).WarnContext(ctx, "update email mismatch", slog.String("got", emailRet), slog.String("want", s.updateSpecificEmail))
+						writeJSONError(w, "unauthorized update specific email", http.StatusUnauthorized)
+						return
 					}
 				}
 			}
@@ -286,6 +290,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					}
 					if authCookie != nil && authCookie.Value != "" {
 						emailRet, subjectRet, _, err := s.authenticateToken(ctx, authCookie.Value, "")
+						if err == nil && !hasUserOIDCSubjectPrefix(subjectRet) {
+							err = errors.New("unsupported oidc client for auth cookie")
+						}
 						if err != nil {
 							log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
 							if !allowNoLogin {
@@ -497,6 +504,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		// since we failed to read, don't return JSON error
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.Client != "" && !isUserOIDCClient(req.Client) {
+		log.Ctx(r.Context()).WarnContext(r.Context(), "unsupported login client", slog.String("client", req.Client))
+		writeJSONError(w, "invalid id token", http.StatusUnauthorized)
 		return
 	}
 
@@ -724,41 +737,66 @@ func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var userOIDCClients = []string{"google", "apple"}
+
+func isUserOIDCClient(client string) bool {
+	return client == "google" || client == "apple"
+}
+
+func hasUserOIDCSubjectPrefix(subject string) bool {
+	return strings.HasPrefix(subject, "google:") || strings.HasPrefix(subject, "apple:")
+}
+
+func verifyOIDCToken(ctx context.Context, providerName string, verifier tokenVerifier, token string) (string, string, time.Time, error) {
+	idToken, err := verifier(ctx, token)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	var claims struct {
+		Email string `json:"email"`
+		// Apple documentation states email_verified can be either a boolean or a string:
+		// https://developer.apple.com/documentation/signinwithapplejs/authorizationi/id_token
+		EmailVerified any `json:"email_verified"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		return "", "", time.Time{}, err
+	}
+	// TODO: set this to false after we've confirmed that there are no errors from existing users
+	verified := false
+	if claims.EmailVerified != nil {
+		switch v := claims.EmailVerified.(type) {
+		case bool:
+			verified = v
+		case string:
+			verified = v == "true"
+		}
+	} else {
+		log.Ctx(ctx).ErrorContext(ctx, "email_verified claim missing from id token", slog.String("email", claims.Email), slog.String("provider", providerName))
+	}
+	if !verified {
+		return "", "", time.Time{}, errors.New("email not verified")
+	}
+	return claims.Email, providerName + ":" + idToken.Subject, idToken.Expiry, nil
+}
+
 func (s *Server) authenticateToken(ctx context.Context, token string, specificClient string) (string, string, time.Time, error) {
+	if specificClient != "" && !isUserOIDCClient(specificClient) {
+		return "", "", time.Time{}, fmt.Errorf("unsupported oidc client: %s", specificClient)
+	}
+
 	var errs []error
 
-	for providerName, verifier := range s.oidcVerifiers {
+	for _, providerName := range userOIDCClients {
 		if specificClient != "" && providerName != specificClient {
 			continue
 		}
-		idToken, err := verifier(ctx, token)
+		verifier, ok := s.oidcVerifiers[providerName]
+		if !ok || verifier == nil {
+			continue
+		}
+		email, subject, expiry, err := verifyOIDCToken(ctx, providerName, verifier, token)
 		if err == nil {
-			var claims struct {
-				Email string `json:"email"`
-				// Apple documentation states email_verified can be either a boolean or a string:
-				// https://developer.apple.com/documentation/signinwithapplejs/authorizationi/id_token
-				EmailVerified any `json:"email_verified"`
-			}
-			err = idToken.Claims(&claims)
-			if err == nil {
-				// TODO: set this to false after we've confirmed that there are no errors from existing users
-				verified := false
-				if claims.EmailVerified != nil {
-					switch v := claims.EmailVerified.(type) {
-					case bool:
-						verified = v
-					case string:
-						verified = v == "true"
-					}
-				} else {
-					log.Ctx(ctx).ErrorContext(ctx, "email_verified claim missing from id token", slog.String("email", claims.Email), slog.String("provider", providerName))
-				}
-				if !verified {
-					err = errors.New("email not verified")
-				} else {
-					return claims.Email, providerName + ":" + idToken.Subject, idToken.Expiry, nil
-				}
-			}
+			return email, subject, expiry, nil
 		}
 		errs = append(errs, fmt.Errorf("%s verifier failed: %v", providerName, err))
 	}

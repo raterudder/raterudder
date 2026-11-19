@@ -101,13 +101,12 @@ func TestAuthMiddleware(t *testing.T) {
 		sessionEncryptionKey: testKey,
 		sessionDuration:      7 * 24 * time.Hour,
 		oidcAudiences: map[string]string{
-			"google":                 "test-audience",
-			"google_update_specific": "update-audience",
+			"google": "test-audience",
 		},
 		oidcVerifiers: map[string]tokenVerifier{
-			"google":                 provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
-			"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
+			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 		},
+		updateOIDCVerifier: provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
 	}
 
 	// Helper to create request
@@ -398,14 +397,22 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Update Specific Email", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		// Test special update logic
+		// Test fallback update logic when updateOIDCVerifier is nil (--update-specific-email without --update-specific-audience)
 		server.singleSite = false
 		server.updateSpecificEmail = "updater@example.com"
+		savedUpdateVerifier := server.updateOIDCVerifier
+		server.updateOIDCVerifier = nil
+		defer func() {
+			server.updateOIDCVerifier = savedUpdateVerifier
+			server.updateSpecificEmail = ""
+		}()
+
+		fallbackUpdaterToken := generateTestToken(t, srv.URL, priv, "updater@example.com", "updater@example.com")
 
 		t.Run("Valid Email", func(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
-			req.Header.Set("Authorization", "Bearer "+updaterToken)
+			req.Header.Set("Authorization", "Bearer "+fallbackUpdaterToken)
 
 			server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -431,24 +438,73 @@ func TestAuthMiddleware(t *testing.T) {
 		server.storage = mocks
 		server.singleSite = false
 		server.updateSpecificEmail = "updater@example.com"
+		defer func() {
+			server.updateSpecificEmail = ""
+		}()
 
-		// 1. Success with correct audience
-		token := generateTestTokenWithAudience(t, srv.URL, priv, "updater@example.com", "updater@example.com", "update-audience")
+		// 1. Success with correct update audience and scheduler email
 		w := httptest.NewRecorder()
 		req := createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Authorization", "Bearer "+updaterToken)
 
 		// Update specific should NOT call GetUser or GetSite since it's bypassed
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "true", w.Header().Get("X-Update-Specific"))
 
-		// 2. Failure with regular audience on update path
+		// 2. Failure with web audience on update path even when email matches updateSpecificEmail
+		webAudSchedEmailToken := generateTestTokenWithAudience(t, srv.URL, priv, "updater@example.com", "updater@example.com", "test-audience")
 		w = httptest.NewRecorder()
 		req = createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
-		req.Header.Set("Authorization", "Bearer "+validToken) // validToken has "test-audience"
+		req.Header.Set("Authorization", "Bearer "+webAudSchedEmailToken)
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		// 3. Failure with update audience when email does not match updateSpecificEmail
+		wrongEmailUpdateToken := generateTestTokenWithAudience(t, srv.URL, priv, "user@example.com", "user@example.com", "update-audience")
+		w = httptest.NewRecorder()
+		req = createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
+		req.Header.Set("Authorization", "Bearer "+wrongEmailUpdateToken)
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		// 4. Failure with update audience when email_verified is false
+		unverifiedUpdateClaims := fmt.Sprintf(`{
+			"iss": "%s",
+			"aud": "update-audience",
+			"sub": "updater@example.com",
+			"email": "updater@example.com",
+			"email_verified": false,
+			"exp": %d
+		}`, srv.URL, time.Now().Add(time.Hour).Unix())
+		unverifiedUpdateToken := oidctest.SignIDToken(priv, "my-key-id", "RS256", unverifiedUpdateClaims)
+		w = httptest.NewRecorder()
+		req = createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
+		req.Header.Set("Authorization", "Bearer "+unverifiedUpdateToken)
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		// 5. External SA token with update-audience must fail on auth_token cookie
+		attackerUpdateToken := generateTestTokenWithAudience(t, srv.URL, priv, "attacker@other-project.iam.gserviceaccount.com", "attacker-sa", "update-audience")
+		w = httptest.NewRecorder()
+		req = createReq("GET", "/api/settings?siteID=site1", nil, &http.Cookie{Name: authTokenCookie, Value: attackerUpdateToken})
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		// 6. Even if a non-user key exists in oidcVerifiers, auth_token cookie must still reject it
+		server.oidcVerifiers["google_update_specific"] = server.updateOIDCVerifier
+		defer delete(server.oidcVerifiers, "google_update_specific")
+
+		w = httptest.NewRecorder()
+		req = createReq("GET", "/api/settings?siteID=site1", nil, &http.Cookie{Name: authTokenCookie, Value: attackerUpdateToken})
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
@@ -1458,6 +1514,7 @@ func TestHandleLogin(t *testing.T) {
 		oidcVerifiers: map[string]tokenVerifier{
 			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 		},
+		updateOIDCVerifier: provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
 	}
 
 	createReq := func(token string) *http.Request {
@@ -1653,6 +1710,59 @@ func TestHandleLogin(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotEqual(t, revokedSess.nonce, newSess.nonce)
 		}
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Rejects Update Audience Token And Unsupported Clients", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.oidcVerifiers["google_update_specific"] = server.updateOIDCVerifier
+		defer delete(server.oidcVerifiers, "google_update_specific")
+
+		attackerUpdateToken := generateTestTokenWithAudience(t, srv.URL, priv, "attacker@other-project.iam.gserviceaccount.com", "attacker-sa", "update-audience")
+
+		postLogin := func(tok, client string) *httptest.ResponseRecorder {
+			bodyBytes, err := json.Marshal(map[string]string{
+				"token":  tok,
+				"client": client,
+			})
+			require.NoError(t, err)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(bodyBytes))
+			server.authMiddleware(http.HandlerFunc(server.handleLogin)).ServeHTTP(w, req)
+			return w
+		}
+
+		t.Run("UpdateTokenWithUpdateSpecificClient", func(t *testing.T) {
+			w := postLogin(attackerUpdateToken, "google_update_specific")
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Empty(t, w.Result().Cookies())
+		})
+
+		t.Run("UpdateTokenWithGoogleClient", func(t *testing.T) {
+			w := postLogin(attackerUpdateToken, "google")
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Empty(t, w.Result().Cookies())
+		})
+
+		t.Run("UpdateTokenWithAppleClient", func(t *testing.T) {
+			w := postLogin(attackerUpdateToken, "apple")
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Empty(t, w.Result().Cookies())
+		})
+
+		t.Run("UpdateTokenWithEmptyClient", func(t *testing.T) {
+			w := postLogin(attackerUpdateToken, "")
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Empty(t, w.Result().Cookies())
+		})
+
+		t.Run("ValidWebTokenWithUnsupportedClient", func(t *testing.T) {
+			w := postLogin(validToken, "google_update_specific")
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Empty(t, w.Result().Cookies())
+		})
+
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 }
