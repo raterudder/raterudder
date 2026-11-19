@@ -3,6 +3,7 @@ import { Router } from 'wouter';
 import { memoryLocation } from 'wouter/memory-location';
 import Header from './Header';
 import { FeaturesProvider } from '../utils/features';
+import * as routePreload from '../utils/routePreload';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 describe('Header Component', () => {
@@ -168,5 +169,20 @@ describe('Header Component', () => {
         fireEvent.click(bellBtn);
 
         expect(mockOnOpenNotifications).toHaveBeenCalledTimes(1);
+    });
+
+    it('preloads route chunks on pointer hover and focus', () => {
+        const forecastSpy = vi.spyOn(routePreload.routeImporters, '/forecast');
+        const settingsSpy = vi.spyOn(routePreload.routeImporters, '/settings');
+
+        renderHeader('/dashboard', true);
+
+        const forecastLinks = screen.getAllByRole('link', { name: 'Forecast' });
+        fireEvent.pointerEnter(forecastLinks[0]);
+        expect(forecastSpy).toHaveBeenCalled();
+
+        const settingsLink = screen.getByRole('link', { name: 'Settings' });
+        fireEvent.focus(settingsLink);
+        expect(settingsSpy).toHaveBeenCalled();
     });
 });

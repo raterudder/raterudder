@@ -77,6 +77,42 @@ export default defineConfig({
     serviceWorkerPlugin(),
     seoSubpagesPlugin(),
   ],
+  build: {
+    modulePreload: {
+      resolveDependencies: (_filename, deps, context) => {
+        if (context.hostType === 'html') {
+          return deps.filter(
+            (dep) => !dep.includes('vendor-charts') && !dep.includes('vendor-ui')
+          )
+        }
+        return deps
+      },
+    },
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store|@base-ui|@floating-ui)[\\/]/,
+              tags: ['$initial'],
+              priority: 30,
+            },
+            {
+              name: 'vendor-charts',
+              test: /node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor|@reduxjs[\\/]toolkit|redux|reselect|immer|decimal\.js-light|es-toolkit|eventemitter3|tiny-invariant|clsx)[\\/]/,
+              priority: 20,
+            },
+            {
+              name: 'vendor-ui',
+              test: /node_modules[\\/](@base-ui|@floating-ui)[\\/]/,
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

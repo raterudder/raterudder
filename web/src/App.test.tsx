@@ -95,7 +95,7 @@ describe('App routing and viewSite parameter preservation', () => {
         window.history.pushState(null, '', '/utilities');
         const { unmount: unmount3 } = render(<App />);
         expect(await screen.findByText(/How RateRudder Models Notable Grids/i)).toBeInTheDocument();
-        expect(screen.getByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
+        expect(await screen.findByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
         unmount3();
 
         window.history.pushState(null, '', '/changelog');
@@ -138,5 +138,33 @@ describe('App routing and viewSite parameter preservation', () => {
             expect(api.acceptTerms).toHaveBeenCalledTimes(1);
             expect(screen.queryByTestId('terms-acceptance-modal')).not.toBeInTheDocument();
         });
+    });
+
+    it('renders /utilities immediately with inline loading message while fetchUtilities is pending', async () => {
+        let resolveUtilities!: (value: api.UtilityProviderInfo[]) => void;
+        vi.mocked(api.fetchUtilities).mockReturnValue(
+            new Promise<api.UtilityProviderInfo[]>((resolve) => {
+                resolveUtilities = resolve;
+            })
+        );
+
+        window.history.pushState(null, '', '/utilities');
+        render(<App />);
+
+        expect(await screen.findByText(/How RateRudder Models Notable Grids/i)).toBeInTheDocument();
+        expect(screen.getByText('Loading supported utilities...')).toBeInTheDocument();
+        expect(api.fetchUtilities).toHaveBeenCalledTimes(1);
+
+        resolveUtilities([
+            {
+                id: 'comed',
+                name: 'Commonwealth Edison (ComEd)',
+                rates: [{ id: 'besh', name: 'Hourly Pricing (BESH)' }],
+            } as api.UtilityProviderInfo,
+        ]);
+
+        expect(await screen.findByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
+        expect(screen.queryByText('Loading supported utilities...')).not.toBeInTheDocument();
+        expect(api.fetchUtilities).toHaveBeenCalledTimes(1);
     });
 });
