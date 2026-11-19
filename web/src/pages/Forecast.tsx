@@ -814,7 +814,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const solarLoadData = useMemo(() => {
         if (!rawModelingData?.plan) return [];
         return buildPlanSolarLoadSeries(
-            rawModelingData.plan.periods,
+            rawModelingData.plan.periods ?? [],
             rawModelingData.energyHistory,
             includeHistory,
             siteTimeZone
@@ -824,7 +824,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const priceData = useMemo(() => {
         if (!rawModelingData?.plan) return [];
         return buildPlanPriceSeries(
-            rawModelingData.plan.periods,
+            rawModelingData.plan.periods ?? [],
             rawModelingData.futurePrices,
             rawModelingData.priceHistory,
             includeHistory,
@@ -835,7 +835,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const planStats = useMemo(() => {
         if (!rawModelingData?.plan) return null;
         return computePlanSummaryStats(
-            rawModelingData.plan.periods,
+            rawModelingData.plan.periods ?? [],
             rawModelingData.futurePrices
         );
     }, [rawModelingData]);
@@ -843,7 +843,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const planScheduleBeats = useMemo(() => {
         if (!rawModelingData?.plan) return [];
         return buildPlanSummaryBeats(
-            rawModelingData.plan.periods,
+            rawModelingData.plan.periods ?? [],
             currencySymbol,
             siteTimeZone
         );

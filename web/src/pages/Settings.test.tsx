@@ -945,7 +945,7 @@ describe('App & Settings', () => {
         };
         (fetchSettings as any).mockResolvedValue(enphaseSettings);
         (api.fetchESSList as any).mockResolvedValue([
-            ...defaultESSProviders,
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
             {
                 id: 'enphase',
                 name: 'Enphase',
@@ -1945,7 +1945,7 @@ describe('App & Settings', () => {
                 features: { enphaseExportSchedules: true },
             });
             (api.fetchESSList as any).mockResolvedValue([
-                ...defaultESSProviders,
+                ...defaultESSProviders.filter(p => p.id !== 'enphase'),
                 {
                     id: 'enphase',
                     name: 'Enphase',

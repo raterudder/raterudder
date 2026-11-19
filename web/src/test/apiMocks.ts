@@ -1,6 +1,14 @@
-import type { ESSProviderInfo, UtilityProviderInfo } from "../api";
+import type {
+    AuthStatus,
+    ESSProviderInfo,
+    ForecastResponse,
+    HistoryEnergyResponse,
+    SavingsStats,
+    Settings,
+    UtilityProviderInfo,
+} from "../api";
 
-export const defaultAuthStatus = {
+export const defaultAuthStatus: AuthStatus = {
     loggedIn: true,
     authRequired: true,
     clientIDs: { google: 'test-client-id' },
@@ -10,7 +18,8 @@ export const defaultAuthStatus = {
     termsAccepted: true,
 };
 
-export const defaultSavings = {
+export const defaultSavings: SavingsStats = {
+    timestamp: '2026-01-01T00:00:00Z',
     batterySavings: 0,
     solarSavings: 0,
     cost: 0,
@@ -21,10 +30,11 @@ export const defaultSavings = {
     gridImported: 0,
     gridExported: 0,
     homeUsed: 0,
-    batteryUsed: 0
+    batteryUsed: 0,
+    hourlyDebugging: [],
 };
 
-export const defaultSettings = {
+export const defaultSettings: Settings = {
     dryRun: false,
     pause: false,
     release: 'production',
@@ -35,6 +45,7 @@ export const defaultSettings = {
     gridChargeBatteries: true,
     solarTrendRatioMax: 3.0,
     solarBellCurveMultiplier: 1.0,
+    solarNetMeteringCreditsValue: 'lowest',
     minArbitrageDifferenceDollarsPerKWH: 0,
     minBatteryExportDifferenceDollarsPerKWH: 0,
     countryCode: 'US',
@@ -44,15 +55,27 @@ export const defaultSettings = {
     utilityRateOptions: {},
     ess: 'franklin',
     hasCredentials: {
-        franklin: true
+        franklin: true,
     },
     features: {},
+    updateGroup: 1,
     homeLoadPredictionStrategy: 'default',
     optimizationProfile: 'balanced',
     notifications: {},
 };
 
-export const defaultUtilities = [
+export const defaultForecast: ForecastResponse = {
+    energyHistory: [],
+    priceHistory: [],
+    updated: '2026-01-01T00:00:00Z',
+};
+
+export const defaultHistoryEnergy: HistoryEnergyResponse = {
+    energy: [],
+    weather: [],
+};
+
+export const defaultUtilities: UtilityProviderInfo[] = [
     {
         id: 'comed',
         name: 'Commonwealth Edison (ComEd)',
@@ -123,17 +146,17 @@ export const defaultUtilities = [
             },
         ],
     },
-] as UtilityProviderInfo[];
+];
 
-export const defaultESSProviders = [
+export const defaultESSProviders: ESSProviderInfo[] = [
     {
         id: 'franklin',
         name: 'FranklinWH',
         credentials: [
-            { field: 'username', name: 'Email', type: 'string', required: true },
-            { field: 'password', name: 'Password', type: 'password', required: true },
-            { field: 'gatewayID', name: 'Target Gateway ID (Optional)', type: 'string', required: false },
-        ]
+            { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+            { field: 'password', name: 'Password', type: 'password', required: true, stage: 0 },
+            { field: 'gatewayID', name: 'Target Gateway ID (Optional)', type: 'string', required: false, stage: 0 },
+        ],
     },
     {
         id: 'hidden_ess',
@@ -145,7 +168,7 @@ export const defaultESSProviders = [
         id: 'missing_ess',
         name: 'Missing ESS',
         credentials: [
-            { field: 'username', name: 'Username', type: 'string', required: true },
+            { field: 'username', name: 'Username', type: 'string', required: true, stage: 0 },
         ],
     },
     {
@@ -153,42 +176,80 @@ export const defaultESSProviders = [
         name: 'Multi Region ESS',
         oAuthURLs: {
             "NA": "https://na.example.com",
-            "EU": "https://eu.example.com"
+            "EU": "https://eu.example.com",
         },
         oAuthKey: {
             field: 'region',
             name: 'Region',
             type: 'select',
             required: true,
+            stage: 0,
             choices: [
                 { value: 'NA', name: 'North America' },
                 { value: 'EU', name: 'Europe' },
             ],
-            default: "NA"
+            default: "NA",
         },
         credentials: [
-            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, oneTime: true },
-        ]
+            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, stage: 0, oneTime: true },
+        ],
     },
     {
         id: 'tesla',
         name: 'Tesla',
         oAuthURLs: {
-            "default": "https://auth.tesla.com"
+            "default": "https://auth.tesla.com",
         },
         credentials: [
-            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, hidden: true, oneTime: true },
-            { field: 'energySiteID', name: 'Energy Site ID (Optional)', type: 'string', required: false }
-        ]
-    }
-] as ESSProviderInfo[];
+            {
+                field: 'authCode',
+                name: 'Authorization Code',
+                type: 'password',
+                required: true,
+                stage: 0,
+                hidden: true,
+                oneTime: true,
+            },
+            {
+                field: 'serialNumber',
+                name: 'Serial Number (Optional)',
+                type: 'string',
+                required: false,
+                stage: 0,
+                description: 'If left empty, RateRudder will choose the first system available.',
+            },
+        ],
+    },
+    {
+        id: 'enphase',
+        name: 'Enphase',
+        hidden: true,
+        credentials: [
+            {
+                field: 'username',
+                name: 'Email',
+                type: 'string',
+                required: true,
+                stage: 0,
+            },
+            {
+                field: 'code',
+                name: 'Email Code',
+                type: 'string',
+                required: false,
+                stage: 1,
+                description: 'Enter the code sent to your email/phone.',
+                oneTime: true,
+            },
+        ],
+    },
+];
 
 export const setupDefaultApiMocks = (api: any) => {
-    if (typeof api.fetchActions?.mockResolvedValue === 'function') api.fetchActions.mockResolvedValue([]);
     if (typeof api.fetchActionsAndSavings?.mockResolvedValue === 'function') {
         api.fetchActionsAndSavings.mockResolvedValue({
             actions: [],
-            savings: defaultSavings
+            savings: defaultSavings,
         });
     }
     if (typeof api.fetchAuthStatus?.mockResolvedValue === 'function') api.fetchAuthStatus.mockResolvedValue(defaultAuthStatus);
@@ -200,7 +261,21 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.login?.mockResolvedValue === 'function') api.login.mockResolvedValue(undefined);
     if (typeof api.logout?.mockResolvedValue === 'function') api.logout.mockResolvedValue(undefined);
     if (typeof api.acceptTerms?.mockResolvedValue === 'function') api.acceptTerms.mockResolvedValue(undefined);
-    if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue([]);
+    if (typeof api.deleteSite?.mockResolvedValue === 'function') api.deleteSite.mockResolvedValue(undefined);
+    if (typeof api.deleteUser?.mockResolvedValue === 'function') api.deleteUser.mockResolvedValue(undefined);
+    if (typeof api.listFeatures?.mockResolvedValue === 'function') api.listFeatures.mockResolvedValue([]);
+    if (typeof api.updateFeatures?.mockResolvedValue === 'function') api.updateFeatures.mockResolvedValue(undefined);
+    if (typeof api.listSites?.mockResolvedValue === 'function') api.listSites.mockResolvedValue([]);
+    if (typeof api.setSiteAlias?.mockResolvedValue === 'function') api.setSiteAlias.mockResolvedValue(undefined);
+    if (typeof api.listUserSites?.mockResolvedValue === 'function') api.listUserSites.mockResolvedValue(defaultAuthStatus.sites);
+    if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue(defaultForecast);
+    if (typeof api.joinSite?.mockResolvedValue === 'function') api.joinSite.mockResolvedValue('site1');
+    if (typeof api.createSite?.mockResolvedValue === 'function') api.createSite.mockResolvedValue('site1');
+    if (typeof api.submitFeedback?.mockResolvedValue === 'function') api.submitFeedback.mockResolvedValue(undefined);
+    if (typeof api.listFeedback?.mockResolvedValue === 'function') api.listFeedback.mockResolvedValue([]);
+    if (typeof api.submitInterest?.mockResolvedValue === 'function') api.submitInterest.mockResolvedValue(undefined);
+    if (typeof api.listInterest?.mockResolvedValue === 'function') api.listInterest.mockResolvedValue([]);
+    if (typeof api.fetchHistoryEnergy?.mockResolvedValue === 'function') api.fetchHistoryEnergy.mockResolvedValue(defaultHistoryEnergy);
     if (typeof api.fetchUtilityPeriods?.mockResolvedValue === 'function') api.fetchUtilityPeriods.mockResolvedValue([]);
     if (typeof api.updateNotificationSettings?.mockResolvedValue === 'function') api.updateNotificationSettings.mockResolvedValue(undefined);
     if (typeof api.fetchNotificationSubscriptions?.mockResolvedValue === 'function') {

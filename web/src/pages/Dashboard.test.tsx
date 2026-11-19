@@ -1663,6 +1663,16 @@ describe('Dashboard', () => {
 
     it('splits consecutive Load actions into battery discharge, solar charging, and running on solar at 100%', async () => {
         const user = userEvent.setup();
+        const baseSys = {
+            timestamp: '2026-06-15T06:00:00-05:00',
+            batteryKW: 0,
+            batteryCapacityKWH: 13.5,
+            maxBatteryChargeKW: 5,
+            maxBatteryDischargeKW: 5,
+            gridKW: 0,
+            elevatedMinBatterySOC: false,
+            batteryAboveMinSOC: true,
+        };
         const actions: Action[] = [
             // Overnight discharging (6:00 AM - 7:20 AM)
             {
@@ -1671,7 +1681,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 50, solarKW: 0.1, homeKW: 1.5 },
+                systemStatus: { ...baseSys, batterySOC: 50, solarKW: 0.1, homeKW: 1.5 },
             },
             {
                 timestamp: '2026-06-15T06:40:00-05:00',
@@ -1679,7 +1689,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 45, solarKW: 0.2, homeKW: 1.4 },
+                systemStatus: { ...baseSys, batterySOC: 45, solarKW: 0.2, homeKW: 1.4 },
             },
             {
                 timestamp: '2026-06-15T07:20:00-05:00',
@@ -1687,7 +1697,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 40, solarKW: 0.4, homeKW: 1.3 },
+                systemStatus: { ...baseSys, batterySOC: 40, solarKW: 0.4, homeKW: 1.3 },
             },
             // Morning solar charging (8:00 AM - 11:20 AM)
             {
@@ -1696,7 +1706,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 50, solarKW: 3.5, homeKW: 1.1 },
+                systemStatus: { ...baseSys, batterySOC: 50, solarKW: 3.5, homeKW: 1.1 },
             },
             {
                 timestamp: '2026-06-15T09:40:00-05:00',
@@ -1704,7 +1714,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 78, solarKW: 5.8, homeKW: 1.1 },
+                systemStatus: { ...baseSys, batterySOC: 78, solarKW: 5.8, homeKW: 1.1 },
             },
             {
                 timestamp: '2026-06-15T11:20:00-05:00',
@@ -1712,7 +1722,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 97, solarKW: 6.2, homeKW: 1.2 },
+                systemStatus: { ...baseSys, batterySOC: 97, solarKW: 6.2, homeKW: 1.2 },
             },
             // Midday running on solar at 100% (11:40 AM - 2:20 PM)
             {
@@ -1721,7 +1731,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 100, solarKW: 6.5, homeKW: 1.3 },
+                systemStatus: { ...baseSys, batterySOC: 100, solarKW: 6.5, homeKW: 1.3 },
             },
             {
                 timestamp: '2026-06-15T13:00:00-05:00',
@@ -1729,7 +1739,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 100, solarKW: 6.0, homeKW: 1.4 },
+                systemStatus: { ...baseSys, batterySOC: 100, solarKW: 6.0, homeKW: 1.4 },
             },
             {
                 timestamp: '2026-06-15T14:20:00-05:00',
@@ -1737,7 +1747,7 @@ describe('Dashboard', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Sufficient battery',
-                systemStatus: { batterySOC: 100, solarKW: 5.2, homeKW: 1.3 },
+                systemStatus: { ...baseSys, batterySOC: 100, solarKW: 5.2, homeKW: 1.3 },
             },
         ];
 

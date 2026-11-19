@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
+import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type UtilityRateOptions, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -106,14 +106,31 @@ interface UtilityFormProps {
     setEditUtility?: (val: boolean) => void;
     isUtilityDirty?: boolean;
     setIsUtilityDirty?: (val: boolean) => void;
-    onUtilityChange?: (provider: string, rate: string, options: Record<string, any>) => void;
+    onUtilityChange?: (provider: string, rate: string, options: UtilityRateOptions) => void;
 }
+
+const getRateOptionField = (
+    opts: UtilityRateOptions | undefined,
+    field: string
+): string | boolean | undefined => {
+    if (!opts) return undefined;
+    return opts[field as keyof UtilityRateOptions];
+};
+
+const setRateOptionField = (
+    opts: UtilityRateOptions,
+    field: string,
+    value: string | number | boolean | undefined
+): void => {
+    if (value === undefined) return;
+    (opts as Record<string, string | number | boolean>)[field] = value;
+};
 
 const getEffectiveOptionValue = (
     opt: UtilityRateOption,
-    rateOptions: Record<string, any> | undefined
+    rateOptions: UtilityRateOptions | undefined
 ) => {
-    const val = rateOptions?.[opt.field];
+    const val = getRateOptionField(rateOptions, opt.field);
     if (val !== undefined && val !== null && val !== '') {
         return val;
     }
@@ -126,7 +143,7 @@ const getEffectiveOptionValue = (
 const isUtilityOptionVisible = (
     opt: UtilityRateOption,
     allOptions: UtilityRateOption[],
-    rateOptions: Record<string, any> | undefined
+    rateOptions: UtilityRateOptions | undefined
 ): boolean => {
     if (opt.hidden) {
         return false;
@@ -136,8 +153,8 @@ const isUtilityOptionVisible = (
     }
     return Object.entries(opt.dependsOn).every(([depField, allowedValues]) => {
         const depOpt = allOptions.find(o => o.field === depField);
-        const val = depOpt ? getEffectiveOptionValue(depOpt, rateOptions) : rateOptions?.[depField];
-        return allowedValues.includes(val);
+        const val = depOpt ? getEffectiveOptionValue(depOpt, rateOptions) : getRateOptionField(rateOptions, depField);
+        return val !== undefined && allowedValues.includes(val);
     });
 };
 
@@ -180,9 +197,9 @@ const UtilityForm = ({
                         if (provider?.rates && provider.rates.length === 1) {
                             const rate = provider.rates[0];
                             newSettings.utilityRate = rate.id;
-                            const newOpts: Record<string, string | number | boolean> = {};
+                            const newOpts: UtilityRateOptions = {};
                             (rate.options || []).forEach((opt: UtilityRateOption) => {
-                                newOpts[opt.field] = opt.default;
+                                setRateOptionField(newOpts, opt.field, opt.default);
                             });
                             newSettings.utilityRateOptions = newOpts;
                         }
@@ -240,9 +257,9 @@ const UtilityForm = ({
                             const rate = (provider?.rates || []).find(r => r.id === rateID);
                             onChange('utilityRate', rateID);
                             if (rate) {
-                                const newOpts: Record<string, string | number | boolean> = {};
+                                const newOpts: UtilityRateOptions = {};
                                 (rate.options || []).forEach((opt: UtilityRateOption) => {
-                                    newOpts[opt.field] = opt.default;
+                                    setRateOptionField(newOpts, opt.field, opt.default);
                                 });
                                 onChange('utilityRateOptions', newOpts);
                                 if (onUtilityChange) onUtilityChange(settings.utilityProvider, rateID, newOpts);
@@ -308,19 +325,22 @@ const UtilityForm = ({
                                     <>
                                         <Field.Label htmlFor={`opt-${opt.field}`}>{opt.name}</Field.Label>
                                         <Select.Root
-                                            value={settings.utilityRateOptions?.[opt.field] || opt.default}
+                                            value={String(getRateOptionField(settings.utilityRateOptions, opt.field) || opt.default || "")}
                                             onValueChange={(value) => {
-                                                const newOpts = {
+                                                const newOpts: UtilityRateOptions = {
                                                     ...settings.utilityRateOptions,
-                                                    [opt.field]: value
                                                 };
+                                                setRateOptionField(newOpts, opt.field, value ?? "");
                                                 onChange('utilityRateOptions', newOpts);
                                                 if (setIsUtilityDirty) setIsUtilityDirty(true);
                                             }}
                                         >
                                             <Select.Trigger className="select-trigger" id={`opt-${opt.field}`}>
                                                 <Select.Value>
-                                                    {opt.choices?.find(c => c.value === (settings.utilityRateOptions?.[opt.field] || opt.default))?.name || (settings.utilityRateOptions?.[opt.field] || opt.default)}
+                                                    {(() => {
+                                                        const selVal = String(getRateOptionField(settings.utilityRateOptions, opt.field) || opt.default || "");
+                                                        return opt.choices?.find(c => c.value === selVal)?.name || selVal;
+                                                    })()}
                                                 </Select.Value>
                                                 <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -347,12 +367,12 @@ const UtilityForm = ({
                                         <div className="switch-row">
                                             <Switch.Root
                                                 id={`opt-${opt.field}`}
-                                                checked={settings.utilityRateOptions?.[opt.field] ?? !!opt.default}
+                                                checked={Boolean(getRateOptionField(settings.utilityRateOptions, opt.field) ?? opt.default)}
                                                 onCheckedChange={(checked) => {
-                                                    const newOpts = {
+                                                    const newOpts: UtilityRateOptions = {
                                                         ...settings.utilityRateOptions,
-                                                        [opt.field]: checked
                                                     };
+                                                    setRateOptionField(newOpts, opt.field, checked);
                                                     onChange('utilityRateOptions', newOpts);
                                                     if (setIsUtilityDirty) setIsUtilityDirty(true);
                                                 }}
@@ -691,7 +711,7 @@ const ESSForm = ({
                                             <Field.Root className="form-group" style={{ marginBottom: '1rem' }}>
                                                 <Field.Label htmlFor={isWizard ? "wizard-oauth-key" : "oauth-key"}>{provider.oAuthKey.name}</Field.Label>
                                                 <Select.Root
-                                                    value={essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || ""}
+                                                    value={essCredentials[provider.oAuthKey.field] || (provider.oAuthKey.default !== undefined ? String(provider.oAuthKey.default) : "")}
                                                     onValueChange={(value) => {
                                                         setEssCredentials({ ...essCredentials, [provider.oAuthKey!.field]: value as string });
                                                         setIsESSDirty(true);
@@ -736,7 +756,7 @@ const ESSForm = ({
                                                     style={{ width: '100%' }}
                                                     disabled={oauthStatus === 'popup_open'}
                                                     onClick={() => {
-                                                        const keyVal = provider.oAuthKey ? (essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || Object.keys(provider.oAuthURLs!)[0]) : Object.keys(provider.oAuthURLs!)[0];
+                                                        const keyVal = String(provider.oAuthKey ? (essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || Object.keys(provider.oAuthURLs!)[0]) : Object.keys(provider.oAuthURLs!)[0]);
                                                         const url = provider.oAuthURLs![keyVal];
                                                         if (url) {
                                                             handleOAuthLogin(url, "authCode");
@@ -761,7 +781,7 @@ const ESSForm = ({
                                         <Field.Label htmlFor={`ess-${cred.field}`}>{cred.name}</Field.Label>
                                         {cred.type === 'select' ? (
                                             <Select.Root
-                                                value={essCredentials[cred.field] || cred.default || ""}
+                                                value={essCredentials[cred.field] || (cred.default !== undefined ? String(cred.default) : "")}
                                                 disabled={isSaving || isStaging}
                                                 onValueChange={(value) => {
                                                     setEssCredentials({ ...essCredentials, [cred.field]: value as string });
@@ -793,7 +813,7 @@ const ESSForm = ({
                                         ) : (
                                             <Input
                                                 id={`ess-${cred.field}`}
-                                                value={essCredentials[cred.field] || cred.default || ""}
+                                                value={essCredentials[cred.field] || (cred.default !== undefined ? String(cred.default) : "")}
                                                 type={cred.type === 'password' ? 'password' : 'text'}
                                                 disabled={isSaving || isStaging}
                                                 onChange={(e) => {
@@ -1644,7 +1664,7 @@ const Settings = ({
             const payload: Record<string, string> = {};
             const stageFields = (provider.credentials || []).filter(cred => (cred.stage ?? 0) <= currentStage);
             for (const cred of stageFields) {
-                const val = essCredentials[cred.field] || cred.default || "";
+                const val = essCredentials[cred.field] || (cred.default !== undefined ? String(cred.default) : "");
                 if (cred.required && !val) {
                     throw new Error(`The ${cred.name} field is required.`);
                 }
@@ -1696,11 +1716,12 @@ const Settings = ({
             const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
             const finalSettings = normalizeMinBatterySOC({ ...settings });
             if (utilityRate) {
-                const finalOpts = { ...finalSettings.utilityRateOptions };
+                const finalOpts: UtilityRateOptions = { ...finalSettings.utilityRateOptions };
                 (utilityRate.options || []).forEach(opt => {
-                    if (finalOpts[opt.field] === undefined || finalOpts[opt.field] === null || finalOpts[opt.field] === "") {
+                    const existing = getRateOptionField(finalOpts, opt.field);
+                    if (existing === undefined || existing === null || existing === "") {
                         if (opt.default !== undefined) {
-                            finalOpts[opt.field] = opt.default;
+                            setRateOptionField(finalOpts, opt.field, opt.default);
                         }
                     }
                 });
@@ -1712,7 +1733,7 @@ const Settings = ({
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
                 const processCred = (cred: ESSCredentialField) => {
-                    let val = essCredentials[cred.field];
+                    let val: string | number | boolean | undefined = essCredentials[cred.field];
                     if (val === undefined || val === null || val === "") {
                         val = cred.default;
                     }
@@ -1853,11 +1874,12 @@ const Settings = ({
                 const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
                 const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
                 if (utilityRate) {
-                    const finalOpts = { ...settings.utilityRateOptions };
+                    const finalOpts: UtilityRateOptions = { ...settings.utilityRateOptions };
                     (utilityRate.options || []).forEach(opt => {
-                        if (finalOpts[opt.field] === undefined || finalOpts[opt.field] === null || finalOpts[opt.field] === "") {
+                        const existing = getRateOptionField(finalOpts, opt.field);
+                        if (existing === undefined || existing === null || existing === "") {
                             if (opt.default !== undefined) {
-                                finalOpts[opt.field] = opt.default;
+                                setRateOptionField(finalOpts, opt.field, opt.default);
                             }
                         }
                     });
@@ -1885,7 +1907,7 @@ const Settings = ({
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
                 const processCred = (cred: ESSCredentialField) => {
-                    let val = essCredentials[cred.field];
+                    let val: string | number | boolean | undefined = essCredentials[cred.field];
                     if (val === undefined || val === null || val === "") {
                         val = cred.default;
                     }

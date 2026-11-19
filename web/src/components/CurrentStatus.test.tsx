@@ -1,20 +1,27 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import CurrentStatus from './CurrentStatus';
-import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
+import { BatteryMode, SolarMode, ActionReason, type Action, type SystemStatus } from '../api';
 
 describe('CurrentStatus', () => {
     const defaultAction: Action = {
         timestamp: new Date().toISOString(),
         batteryMode: BatteryMode.Standby,
         solarMode: SolarMode.NoExport,
+        reason: ActionReason.SufficientBattery,
         description: '',
         systemStatus: {
+            timestamp: new Date().toISOString(),
             batterySOC: 45.5,
-            batteryPower: 0,
-            solarPower: 0,
-            gridPower: 0,
-            loadPower: 0
+            batteryKW: 0,
+            batteryCapacityKWH: 13.5,
+            maxBatteryChargeKW: 5,
+            maxBatteryDischargeKW: 5,
+            solarKW: 0,
+            gridKW: 0,
+            homeKW: 0,
+            elevatedMinBatterySOC: false,
+            batteryAboveMinSOC: true,
         }
     };
 
@@ -56,6 +63,7 @@ describe('CurrentStatus', () => {
         const action: Action = {
             ...defaultAction,
             currentPrice: {
+                provider: 'comed',
                 tsStart: '',
                 tsEnd: '',
                 dollarsPerKWH: 0.15,
@@ -71,6 +79,7 @@ describe('CurrentStatus', () => {
         const action: Action = {
             ...defaultAction,
             currentPrice: {
+                provider: 'octopus',
                 tsStart: '',
                 tsEnd: '',
                 dollarsPerKWH: 0.15,
@@ -220,6 +229,7 @@ describe('CurrentStatus', () => {
         const action: Action = {
             ...defaultAction,
             currentPrice: {
+                provider: 'comed',
                 tsStart: '0001-01-01T00:00:00Z',
                 tsEnd: '0001-01-01T00:00:00Z',
                 dollarsPerKWH: 0,
@@ -233,12 +243,7 @@ describe('CurrentStatus', () => {
     it('renders -- when batterySOC is missing/undefined', () => {
         const action: Action = {
             ...defaultAction,
-            systemStatus: {
-                batteryPower: 0,
-                solarPower: 0,
-                gridPower: 0,
-                loadPower: 0
-            }
+            systemStatus: {} as unknown as SystemStatus
         };
         render(<CurrentStatus action={action} />);
         expect(screen.getByText('--')).toBeInTheDocument();
@@ -323,7 +328,7 @@ describe('CurrentStatus', () => {
         const action: Action = {
             ...defaultAction,
             batteryMode: BatteryMode.ChargeAny,
-            currentPrice: { tsStart: '2026-06-15T01:00:00Z', tsEnd: '2026-06-15T04:00:00Z', dollarsPerKWH: 0.02, gridUseDollarsPerKWH: 0.01 },
+            currentPrice: { provider: 'comed', tsStart: '2026-06-15T01:00:00Z', tsEnd: '2026-06-15T04:00:00Z', dollarsPerKWH: 0.02, gridUseDollarsPerKWH: 0.01 },
             plan: {
                 tsCreated: '2026-06-15T01:00:00Z',
                 horizonHours: 24,

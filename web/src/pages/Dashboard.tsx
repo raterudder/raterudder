@@ -538,7 +538,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                             </p>
                         </div>
                     )}
-                    {settings && settings.essAuthStatus && settings.essAuthStatus.consecutiveFailures >= 3 && (
+                    {settings && settings.essAuthStatus && (settings.essAuthStatus.consecutiveFailures ?? 0) >= 3 && (
                         <div className="banner warning-banner">
                             <p>
                                 <span><strong>Warning:</strong> Energy Storage System authentication failed {settings.essAuthStatus.consecutiveFailures} time(s).{' '}

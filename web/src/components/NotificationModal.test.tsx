@@ -978,6 +978,16 @@ describe('NotificationModal', () => {
             expect(screen.getByText('High Home Load Alert')).toBeInTheDocument();
         });
 
+        // Open High Home Load help dialog and verify generated Go threshold constants
+        fireEvent.click(screen.getByRole('button', { name: /More info about high home load alerts/i }));
+        await waitFor(() => {
+            expect(screen.getByText('High Home Load Alerts')).toBeInTheDocument();
+            expect(screen.getByText(/6\.0 kW/)).toBeInTheDocument();
+            expect(screen.getByText(/4\.5 kW/)).toBeInTheDocument();
+            expect(screen.getByText(/3\.5 kW/)).toBeInTheDocument();
+        });
+        fireEvent.click(screen.getByRole('button', { name: /Got It/i }));
+
         // Trigger save
         fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
 
