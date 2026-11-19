@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -383,162 +382,55 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.NotContains(t, rawJSONStr, `"bucket":`)
 		})
 
-		t.Run("CrossBucketAndMigrateLegacyActions", func(t *testing.T) {
-			siteID := "test-site-migrate-actions"
-			require.NoError(t, f.CreateSite(ctx, siteID, types.Site{ID: siteID}))
-
-			tFeb := time.Date(2026, 2, 6, 5, 15, 11, 513218608, time.UTC)
-			tSep := time.Date(2026, 9, 15, 0, 9, 6, 822395586, time.UTC)
-			tOct1 := time.Date(2026, 10, 10, 21, 47, 9, 123456789, time.UTC)
-			tOct2 := time.Date(2026, 10, 10, 22, 7, 11, 343112381, time.UTC)
-
-			legacyColl, err := f.getCollection(siteID, "action_history")
+		t.Run("CrossBucketActionHistory", func(t *testing.T) {
+			siteID := "test-site-cross-bucket-actions"
+			loc, err := time.LoadLocation("America/Chicago")
 			require.NoError(t, err)
 
-			// 1. Earliest production Decide-mode action (no systemTimestamp, no timeLocation)
-			legacyDocFeb := `{"timestamp":"2026-02-06T05:15:11.513218608Z","batteryMode":1,"solarMode":0,"description":"Deficit predicted and higher prices later (0.020 < 0.065).","currentPrice":{"tsStart":"2026-02-05T23:00:00-06:00","tsEnd":"2026-02-05T23:05:00-06:00","dollarsPerKWH":0.02},"systemStatus":{"timestamp":"0001-01-01T00:00:00Z","batterySOC":0,"eachBatterySOC":null,"batteryKW":0,"eachBatteryKW":null,"batteryCapacityKWH":0,"maxBatteryChargeKW":0,"maxBatteryDischargeKW":0,"solarKW":0,"gridKW":0,"homeKW":0,"canExportSolar":false,"canExportBattery":false,"canImportBattery":false,"emergencyMode":false}}`
+			t1 := time.Date(2026, 10, 10, 10, 0, 0, 100, time.UTC)
+			t2 := time.Date(2026, 10, 10, 22, 0, 0, 200, time.UTC)
+			t3 := time.Date(2026, 10, 11, 8, 0, 0, 300, time.UTC)
 
-			// 2. Sep 2026 production Decide-mode action (with systemTimestamp, timeLocation, simulationParams, capacityAt)
-			legacyDocSep := `{"timestamp":"2026-09-15T00:09:06.822395586Z","systemTimestamp":"2026-09-14T19:09:06.822395586-05:00","batteryMode":-1,"solarMode":2,"reason":"sufficientBattery","description":"Sufficient battery.","currentPrice":{"provider":"comed_besh","tsStart":"2026-09-14T19:00:00-05:00","tsEnd":"2026-09-14T20:00:00-05:00","dollarsPerKWH":0.06592,"gridUseDollarsPerKWH":0.041169209660000004},"systemStatus":{"timestamp":"2026-09-14T19:09:06.822395586-05:00","timeLocation":"America/Chicago","batterySOC":81.474,"batteryKW":0.75,"batteryCapacityKWH":30,"maxBatteryChargeKW":16,"maxBatteryDischargeKW":20,"solarKW":0,"gridKW":0.01,"homeKW":0.746,"elevatedMinBatterySOC":false,"batteryAboveMinSOC":true,"vppSOC":20},"deficitAt":"0001-01-01T00:00:00Z","hitBufferedDeficitAt":"0001-01-01T00:00:00Z","hitThresholdDeficitAt":"0001-01-01T00:00:00Z","capacityAt":"2026-09-15T12:39:26.343947672-05:00","simulationParams":{"clippingCapKWH":10.247333333333334,"panelAzimuth":135,"panelTilt":25,"averageSolarEfficiency":0.010545211265857335,"detectedShift":"none"}}`
-
-			// 3. Oct 2026 production Plan-mode action #1 (in 2026-10-10-12 bucket)
-			legacyDocOct1 := `{"batteryMode":1,"capacityAt":"2026-10-11T11:00:00-05:00","chargeToSoc":25,"currentPrice":{"dollarsPerKWH":0.031,"gridUseDollarsPerKWH":0.11654290735999999,"provider":"comed_besh","tsEnd":"2026-10-10T17:00:00-05:00","tsStart":"2026-10-10T16:00:00-05:00"},"deficitAt":"0001-01-01T00:00:00Z","description":"Preserving battery in standby for upcoming peak rates.","hitBufferedDeficitAt":"0001-01-01T00:00:00Z","hitThresholdDeficitAt":"0001-01-01T00:00:00Z","q3HomeUsageKWH":3.1,"reason":"deficitSaveForPeak","recentHomeUsageKWH":1.9,"shortPlan":{"h":25,"nb":0.92,"p":[{"bm":1,"d":0.3333333333333333,"e":0.031,"es":99.474,"i":0.14754290736,"l":0.35,"r":"deficitSaveForPeak","rs":25,"s":0.40,"sm":2,"ss":99.474,"te":"2026-10-10T17:07:09.123456789-05:00","ts":"2026-10-10T16:47:09.123456789-05:00"}],"te":0.92,"ts":"2026-10-10T21:47:09.123456789Z"},"simulationParams":{"averageSolarEfficiency":0.012228873447686464,"clippingCapKWH":10.243749999999999,"detectedShift":"none","panelAzimuth":90,"panelTilt":25},"solarMode":2,"strategyBenefitDollars":0.92,"systemStatus":{"batteryAboveMinSOC":true,"batteryCapacityKWH":30,"batteryKW":0.0,"batterySOC":99.474,"elevatedMinBatterySOC":false,"gridKW":0.0,"homeKW":1.1,"maxBatteryChargeKW":16,"maxBatteryDischargeKW":20,"solarKW":1.1,"timeLocation":"America/Chicago","timestamp":"2026-10-10T16:47:09.123456789-05:00","vppSOC":20},"systemTimestamp":"2026-10-10T16:47:09.123456789-05:00","timestamp":"2026-10-10T21:47:09.123456789Z"}`
-
-			// 4. Oct 2026 production Plan-mode action #2 (in the SAME 2026-10-10-12 bucket, 20 minutes later)
-			legacyDocOct2 := `{"batteryMode":-1,"capacityAt":"2026-10-11T11:00:00-05:00","chargeToSoc":25,"currentPrice":{"dollarsPerKWH":0.04810999999999999,"gridUseDollarsPerKWH":0.11654290735999999,"provider":"comed_besh","tsEnd":"2026-10-10T18:00:00-05:00","tsStart":"2026-10-10T17:00:00-05:00"},"deficitAt":"0001-01-01T00:00:00Z","description":"Discharging battery to cover household load.","hitBufferedDeficitAt":"0001-01-01T00:00:00Z","hitThresholdDeficitAt":"0001-01-01T00:00:00Z","q3HomeUsageKWH":3.214642537876033,"reason":"sufficientBattery","recentHomeUsageKWH":2.071416666666667,"shortPlan":{"h":25,"nb":0.8787479867152629,"p":[{"bm":-1,"d":0.3333333333333333,"e":0.04810999999999999,"es":99.2625745604791,"i":0.16465290736,"l":0.3818394016436127,"r":"sufficientBattery","rs":25,"s":0.32166666666666666,"sm":2,"ss":99.474,"te":"2026-10-10T17:27:11.343112381-05:00","ts":"2026-10-10T17:07:11.343112381-05:00"},{"bm":-1,"d":0.5468491354497222,"e":0.04810999999999999,"es":97.78417974884252,"i":0.16465290736,"l":0.6264256400083466,"r":"sufficientBattery","rs":25,"s":0.20566710029110363,"sm":2,"ss":99.2625745604791,"te":"2026-10-10T18:00:00-05:00","ts":"2026-10-10T17:27:11.343112381-05:00"}],"te":0.8787479867152629,"ts":"2026-10-10T22:07:11.343112381Z"},"simulationParams":{"averageSolarEfficiency":0.012228873447686464,"clippingCapKWH":10.243749999999999,"detectedShift":"none","panelAzimuth":90,"panelTilt":25},"solarMode":2,"strategyBenefitDollars":0.8787479867152629,"systemStatus":{"batteryAboveMinSOC":true,"batteryCapacityKWH":30,"batteryKW":1.365,"batterySOC":99.474,"elevatedMinBatterySOC":false,"gridKW":0.054,"homeKW":2.383,"maxBatteryChargeKW":16,"maxBatteryDischargeKW":20,"solarKW":0.965,"timeLocation":"America/Chicago","timestamp":"2026-10-10T17:07:11.343112381-05:00","vppSOC":20},"systemTimestamp":"2026-10-10T17:07:11.343112381-05:00","timestamp":"2026-10-10T22:07:11.343112381Z"}`
-
-			_, err = legacyColl.Doc(tFeb.Format(time.RFC3339)).Set(ctx, map[string]any{"json": legacyDocFeb, "timestamp": tFeb})
-			require.NoError(t, err)
-			_, err = legacyColl.Doc(tSep.Format(time.RFC3339)).Set(ctx, map[string]any{"json": legacyDocSep, "timestamp": tSep})
-			require.NoError(t, err)
-			_, err = legacyColl.Doc(tOct1.Format(time.RFC3339)).Set(ctx, map[string]any{"json": legacyDocOct1, "timestamp": tOct1})
-			require.NoError(t, err)
-			_, err = legacyColl.Doc(tOct2.Format(time.RFC3339)).Set(ctx, map[string]any{"json": legacyDocOct2, "timestamp": tOct2})
-			require.NoError(t, err)
-
-			// 1. Dry-run migration should report 4 actions across 3 buckets without writing daily_actions
-			dryStats, err := f.MigrateLegacyActions(ctx, ActionMigrationOptions{
-				DryRun: true,
-				SiteID: siteID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, dryStats.SitesInspected)
-			assert.Equal(t, 4, dryStats.SiteActionsMigrated)
-			assert.Equal(t, 3, dryStats.SiteBucketsCreated)
-			assert.Equal(t, 0, dryStats.SitesPurged)
-
-			emptyHist, err := f.GetActionHistory(ctx, siteID, tFeb.Add(-time.Hour), tOct2.Add(time.Hour))
-			require.NoError(t, err)
-			assert.Empty(t, emptyHist)
-
-			// 2. Migration with Since filter should only migrate the 2 Oct actions in 1 bucket
-			sinceStats, err := f.MigrateLegacyActions(ctx, ActionMigrationOptions{
-				DryRun: false,
-				SiteID: siteID,
-				Since:  tOct1.Truncate(time.Second),
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, sinceStats.SitesInspected)
-			assert.Equal(t, 2, sinceStats.SiteActionsMigrated)
-			assert.Equal(t, 1, sinceStats.SiteBucketsCreated)
-
-			octHist, err := f.GetActionHistory(ctx, siteID, tFeb.Add(-time.Hour), tOct2.Add(time.Hour))
-			require.NoError(t, err)
-			assert.Len(t, octHist, 2)
-
-			// 3. Full migration without Since migrates all 4 actions across 3 buckets and is idempotent on the Oct bucket
-			migStats, err := f.MigrateLegacyActions(ctx, ActionMigrationOptions{
-				DryRun: false,
-				SiteID: siteID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, migStats.SitesInspected)
-			assert.Equal(t, 4, migStats.SiteActionsMigrated)
-			assert.Equal(t, 3, migStats.SiteBucketsCreated)
-			assert.Equal(t, 0, migStats.SitesPurged)
-
-			// Verify cross-bucket GetActionHistory returns all 4 actions with proper Location and Plan.Periods
-			hist, err := f.GetActionHistory(ctx, siteID, tFeb.Add(-time.Minute), tOct2.Add(time.Minute))
-			require.NoError(t, err)
-			if assert.Len(t, hist, 4) {
-				// Action 0: Feb 2026 Decide mode without systemTimestamp/timeLocation
-				assert.Equal(t, "Deficit predicted and higher prices later (0.020 < 0.065).", hist[0].Description)
-				assert.True(t, hist[0].SystemTimestamp.IsZero())
-				assert.Nil(t, hist[0].Plan)
-
-				// Action 1: Sep 2026 Decide mode with America/Chicago
-				assert.Equal(t, "Sufficient battery.", hist[1].Description)
-				assert.Equal(t, "America/Chicago", hist[1].SystemTimestamp.Location().String())
-				assert.Equal(t, "America/Chicago", hist[1].HitCapacityAt.Location().String())
-				assert.Nil(t, hist[1].Plan)
-
-				// Action 2: Oct 2026 Plan mode #1
-				assert.Equal(t, "Preserving battery in standby for upcoming peak rates.", hist[2].Description)
-				assert.Equal(t, "America/Chicago", hist[2].SystemTimestamp.Location().String())
-				if assert.NotNil(t, hist[2].Plan) && assert.Len(t, hist[2].Plan.Periods, 1) {
-					assert.Equal(t, "America/Chicago", hist[2].Plan.Periods[0].TSStart.Location().String())
-					assert.Equal(t, 0.1475, hist[2].Plan.Periods[0].ImportDollars)
-				}
-
-				// Action 3: Oct 2026 Plan mode #2
-				assert.Equal(t, "Discharging battery to cover household load.", hist[3].Description)
-				assert.Equal(t, "America/Chicago", hist[3].SystemTimestamp.Location().String())
-				if assert.NotNil(t, hist[3].Plan) && assert.Len(t, hist[3].Plan.Periods, 2) {
-					assert.Equal(t, "America/Chicago", hist[3].Plan.Periods[0].TSStart.Location().String())
-					assert.Equal(t, 0.1647, hist[3].Plan.Periods[0].ImportDollars)
-					assert.Equal(t, 0.0481, hist[3].Plan.Periods[0].ExportDollars)
-					assert.Equal(t, 99.3, hist[3].Plan.Periods[0].EndSOC)
-					assert.Equal(t, 97.8, hist[3].Plan.Periods[1].EndSOC)
-				}
+			act1 := types.Action{
+				Timestamp:       t1,
+				SystemTimestamp: t1.In(loc),
+				BatteryMode:     types.BatteryModeStandby,
+				SolarMode:       types.SolarModeAny,
+				Description:     "Morning bucket action",
+			}
+			act2 := types.Action{
+				Timestamp:       t2,
+				SystemTimestamp: t2.In(loc),
+				BatteryMode:     types.BatteryModeLoad,
+				SolarMode:       types.SolarModeAny,
+				Description:     "Evening bucket action",
+			}
+			act3 := types.Action{
+				Timestamp:       t3,
+				SystemTimestamp: t3.In(loc),
+				BatteryMode:     types.BatteryModeChargeAny,
+				SolarMode:       types.SolarModeAny,
+				Description:     "Next day bucket action",
 			}
 
-			// Verify GetLatestAction returns the second Oct action
+			require.NoError(t, f.InsertAction(ctx, siteID, act1))
+			require.NoError(t, f.InsertAction(ctx, siteID, act2))
+			require.NoError(t, f.InsertAction(ctx, siteID, act3))
+
+			hist, err := f.GetActionHistory(ctx, siteID, t1.Add(-time.Minute), t3.Add(time.Minute))
+			require.NoError(t, err)
+			if assert.Len(t, hist, 3) {
+				assert.Equal(t, "Morning bucket action", hist[0].Description)
+				assert.Equal(t, "America/Chicago", hist[0].SystemTimestamp.Location().String())
+				assert.Equal(t, "Evening bucket action", hist[1].Description)
+				assert.Equal(t, "Next day bucket action", hist[2].Description)
+			}
+
 			latest, err := f.GetLatestAction(ctx, siteID)
 			require.NoError(t, err)
-			require.NotNil(t, latest)
-			assert.Equal(t, "Discharging battery to cover household load.", latest.Description)
-
-			// 4. Dry-run PurgeLegacy does not delete action_history
-			dryPurgeStats, err := f.MigrateLegacyActions(ctx, ActionMigrationOptions{
-				DryRun:      true,
-				PurgeLegacy: true,
-				SiteID:      siteID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, dryPurgeStats.SitesInspected)
-			assert.Equal(t, 0, dryPurgeStats.SiteActionsMigrated)
-			assert.Equal(t, 0, dryPurgeStats.SiteBucketsCreated)
-			assert.Equal(t, 1, dryPurgeStats.SitesPurged)
-
-			legacyDocsBefore, err := legacyColl.Documents(ctx).GetAll()
-			require.NoError(t, err)
-			assert.Len(t, legacyDocsBefore, 4)
-
-			// Delete the Feb daily_actions bucket before running real PurgeLegacy to prove PurgeLegacy does NOT re-insert
-			dailyColl, err := f.getCollection(siteID, "daily_actions")
-			require.NoError(t, err)
-			_, err = dailyColl.Doc("2026-02-06-00").Delete(ctx)
-			require.NoError(t, err)
-
-			// 5. Real PurgeLegacy ONLY deletes legacy action_history and does not re-insert into daily_actions
-			purgeStats, err := f.MigrateLegacyActions(ctx, ActionMigrationOptions{
-				PurgeLegacy: true,
-				SiteID:      siteID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, purgeStats.SitesInspected)
-			assert.Equal(t, 0, purgeStats.SiteActionsMigrated)
-			assert.Equal(t, 0, purgeStats.SiteBucketsCreated)
-			assert.Equal(t, 1, purgeStats.SitesPurged)
-
-			// Verify action_history collection is now empty
-			legacyDocsAfter, err := legacyColl.Documents(ctx).GetAll()
-			require.NoError(t, err)
-			assert.Empty(t, legacyDocsAfter)
-
-			// Verify 2026-02-06-00 was NOT recreated by PurgeLegacy
-			_, err = dailyColl.Doc("2026-02-06-00").Get(ctx)
-			assert.Equal(t, codes.NotFound, status.Code(err))
+			if assert.NotNil(t, latest) {
+				assert.Equal(t, "Next day bucket action", latest.Description)
+			}
 		})
 
 		t.Run("SubSecondActions", func(t *testing.T) {
@@ -594,43 +486,6 @@ func TestFirestoreProvider(t *testing.T) {
 				assert.Equal(t, types.BatteryModeStandby, gotAfterUpdate[0].BatteryMode)
 				assert.Equal(t, "Second sub-second action", gotAfterUpdate[1].Description)
 			}
-		})
-
-		t.Run("MigrateLegacyActionsLogsMalformedDocs", func(t *testing.T) {
-			siteID := "test-site-migrate-actions-malformed"
-			require.NoError(t, f.CreateSite(ctx, siteID, types.Site{ID: siteID}))
-
-			legacyColl, err := f.getCollection(siteID, "action_history")
-			require.NoError(t, err)
-
-			t1 := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
-			t2 := time.Date(2026, 3, 1, 10, 20, 0, 0, time.UTC)
-			t3 := time.Date(2026, 3, 1, 10, 40, 0, 0, time.UTC)
-
-			_, err = legacyColl.Doc("missing-json").Set(ctx, map[string]any{"timestamp": t1})
-			require.NoError(t, err)
-			_, err = legacyColl.Doc("non-string-json").Set(ctx, map[string]any{"json": 12345, "timestamp": t2})
-			require.NoError(t, err)
-			validJSON := `{"timestamp":"2026-03-01T10:40:00Z","batteryMode":1,"solarMode":2,"description":"Valid legacy action"}`
-			_, err = legacyColl.Doc("valid-json").Set(ctx, map[string]any{"json": validJSON, "timestamp": t3})
-			require.NoError(t, err)
-
-			var logBuf bytes.Buffer
-			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
-
-			stats, err := f.MigrateLegacyActions(warnCtx, ActionMigrationOptions{SiteID: siteID})
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.SiteActionsMigrated)
-
-			hist, err := f.GetActionHistory(ctx, siteID, t1.Add(-time.Hour), t3.Add(time.Hour))
-			require.NoError(t, err)
-			if assert.Len(t, hist, 1) {
-				assert.Equal(t, "Valid legacy action", hist[0].Description)
-			}
-
-			logs := logBuf.String()
-			assert.Contains(t, logs, "legacy action doc missing json")
-			assert.Contains(t, logs, "legacy action doc json not string")
 		})
 	})
 
@@ -1615,182 +1470,6 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 	})
 
-	t.Run("MigrateLegacyPricing", func(t *testing.T) {
-		uID := fmt.Sprintf("legacy-util-%d", time.Now().UnixNano())
-		sID := fmt.Sprintf("legacy-site-%d", time.Now().UnixNano())
-
-		// Create site
-		require.NoError(t, f.CreateSite(ctx, sID, types.Site{ID: sID}))
-
-		// Seed legacy utility documents directly
-		uColl := f.client.Collection("utilities").Doc(uID).Collection("hourly_prices")
-		t1 := time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC)
-		t2 := time.Date(2026, 5, 20, 15, 0, 0, 0, time.UTC)
-
-		uP1 := types.PriceState{
-			Price:     types.Price{TSStart: t1, DollarsPerKWH: 0.11, Provider: "util"},
-			Confirmed: true,
-			TSUpdated: t1,
-		}
-		uP2 := types.PriceState{
-			Price:     types.Price{TSStart: t2, DollarsPerKWH: 0.22, Provider: "util"},
-			Confirmed: false,
-			TSUpdated: t2,
-		}
-		b1, err := json.Marshal(uP1)
-		require.NoError(t, err)
-		b2, err := json.Marshal(uP2)
-		require.NoError(t, err)
-
-		_, err = uColl.Doc(t1.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(b1), "timestamp": t1})
-		require.NoError(t, err)
-		_, err = uColl.Doc(t2.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(b2), "timestamp": t2})
-		require.NoError(t, err)
-
-		// Seed legacy site documents directly
-		sColl, err := f.getCollection(sID, "price_history")
-		require.NoError(t, err)
-
-		sP1 := types.Price{TSStart: t1, DollarsPerKWH: 0.13, Provider: "site"}
-		sP2 := types.Price{TSStart: t2, DollarsPerKWH: 0.26, Provider: "site"}
-		sb1, err := json.Marshal(sP1)
-		require.NoError(t, err)
-		sb2, err := json.Marshal(sP2)
-		require.NoError(t, err)
-
-		_, err = sColl.Doc(t1.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(sb1), "timestamp": t1})
-		require.NoError(t, err)
-		_, err = sColl.Doc(t2.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(sb2), "timestamp": t2})
-		require.NoError(t, err)
-
-		// 1. Dry run
-		dryStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
-			DryRun:    true,
-			UtilityID: uID,
-			SiteID:    sID,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, 1, dryStats.UtilitiesInspected)
-		assert.Equal(t, 2, dryStats.UtilityHoursMigrated)
-		assert.Equal(t, 2, dryStats.UtilityMonthsCreated)
-		assert.Equal(t, 1, dryStats.SitesInspected)
-		assert.Equal(t, 2, dryStats.SiteHoursMigrated)
-		assert.Equal(t, 2, dryStats.SiteMonthsCreated)
-
-		// Verify dry run did not write to monthly_prices
-		resU, err := f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
-		require.NoError(t, err)
-		assert.Empty(t, resU)
-		resS, err := f.GetPriceHistory(ctx, sID, t1, t2.Add(time.Hour))
-		require.NoError(t, err)
-		assert.Empty(t, resS)
-
-		// 2. Real migration without purge
-		migStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
-			DryRun:      false,
-			PurgeLegacy: false,
-			UtilityID:   uID,
-			SiteID:      sID,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, 2, migStats.UtilityHoursMigrated)
-		assert.Equal(t, 2, migStats.SiteHoursMigrated)
-
-		// Verify monthly_prices now has the data
-		resU, err = f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
-		require.NoError(t, err)
-		require.Len(t, resU, 2)
-		assert.Equal(t, 0.11, resU[0].DollarsPerKWH)
-		assert.Equal(t, 0.22, resU[1].DollarsPerKWH)
-
-		resS, err = f.GetPriceHistory(ctx, sID, t1, t2.Add(time.Hour))
-		require.NoError(t, err)
-		require.Len(t, resS, 2)
-		assert.Equal(t, 0.13, resS[0].DollarsPerKWH)
-		assert.Equal(t, 0.26, resS[1].DollarsPerKWH)
-
-		// 3. Migration with purge legacy
-		purgeStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
-			DryRun:      false,
-			PurgeLegacy: true,
-			UtilityID:   uID,
-			SiteID:      sID,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, 2, purgeStats.UtilityHoursMigrated)
-		assert.Equal(t, 2, purgeStats.SiteHoursMigrated)
-
-		// Verify legacy collections are now empty
-		uDocs, err := uColl.Limit(1).Documents(ctx).GetAll()
-		require.NoError(t, err)
-		assert.Empty(t, uDocs)
-
-		sDocs, err := sColl.Limit(1).Documents(ctx).GetAll()
-		require.NoError(t, err)
-		assert.Empty(t, sDocs)
-
-		// Verify monthly_prices still works
-		resUAfter, err := f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
-		require.NoError(t, err)
-		require.Len(t, resUAfter, 2)
-
-		t.Run("CorruptRecordsBlockPurgeLegacy", func(t *testing.T) {
-			uCorruptID := fmt.Sprintf("legacy-util-corrupt-%d", time.Now().UnixNano())
-			sCorruptID := fmt.Sprintf("legacy-site-corrupt-%d", time.Now().UnixNano())
-			require.NoError(t, f.CreateSite(ctx, sCorruptID, types.Site{ID: sCorruptID}))
-
-			uCorruptColl := f.client.Collection("utilities").Doc(uCorruptID).Collection("hourly_prices")
-			_, err := uCorruptColl.Doc("valid").Set(ctx, map[string]any{"json": string(b1), "timestamp": t1})
-			require.NoError(t, err)
-			_, err = uCorruptColl.Doc("corrupt").Set(ctx, map[string]any{"json": "{invalid-json", "timestamp": t2})
-			require.NoError(t, err)
-
-			sCorruptColl, err := f.getCollection(sCorruptID, "price_history")
-			require.NoError(t, err)
-			_, err = sCorruptColl.Doc("valid").Set(ctx, map[string]any{"json": string(sb1), "timestamp": t1})
-			require.NoError(t, err)
-			_, err = sCorruptColl.Doc("missing-json").Set(ctx, map[string]any{"timestamp": t2})
-			require.NoError(t, err)
-
-			var logBuf bytes.Buffer
-			warnCtx := ctxWithCapturedWarnLogger(&logBuf)
-
-			stats, err := f.MigrateLegacyPricing(warnCtx, PricingMigrationOptions{
-				DryRun:      false,
-				PurgeLegacy: true,
-				UtilityID:   uCorruptID,
-				SiteID:      sCorruptID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, 1, stats.UtilityHoursMigrated)
-			assert.Equal(t, 1, stats.SiteHoursMigrated)
-
-			// Valid records were migrated into monthly_prices
-			migratedU, err := f.GetUtilityPrices(ctx, uCorruptID, t1, t1.Add(time.Hour))
-			require.NoError(t, err)
-			assert.Len(t, migratedU, 1)
-
-			migratedS, err := f.GetPriceHistory(ctx, sCorruptID, t1, t1.Add(time.Hour))
-			require.NoError(t, err)
-			assert.Len(t, migratedS, 1)
-
-			// Legacy collections must NOT be purged because corrupt records failed to parse
-			remainingU, err := uCorruptColl.Documents(ctx).GetAll()
-			require.NoError(t, err)
-			assert.Len(t, remainingU, 2)
-
-			remainingS, err := sCorruptColl.Documents(ctx).GetAll()
-			require.NoError(t, err)
-			assert.Len(t, remainingS, 2)
-
-			logs := logBuf.String()
-			assert.Contains(t, logs, "failed to unmarshal legacy utility price")
-			assert.Contains(t, logs, "skipping legacy utility price purge due to unparsed records")
-			assert.Contains(t, logs, "legacy site price doc missing json")
-			assert.Contains(t, logs, "skipping legacy site price purge due to unparsed records")
-		})
-	})
-
 	t.Run("Interest", func(t *testing.T) {
 		// 1. Empty results
 		list, err := f.ListInterest(ctx, 10)
@@ -1988,8 +1667,8 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), rawEarliest.(time.Time).UTC())
 		assert.Equal(t, time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), rawLatest.(time.Time).UTC())
 
-		t.Run("WeatherOnlyAndMixedDateBounds", func(t *testing.T) {
-			weatherSiteID := "test-site-weather-only-summary"
+		t.Run("EnergyOnlyDateBoundsIgnoreWeather", func(t *testing.T) {
+			weatherSiteID := "test-site-weather-ignored-bounds"
 			wDay1 := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 			wDay2 := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 
@@ -2020,12 +1699,12 @@ func TestFirestoreProvider(t *testing.T) {
 			wDoc, err := wColl.Doc("2026-08").Get(ctx)
 			require.NoError(t, err)
 
-			wEarliest, err := wDoc.DataAt("earliestDate")
-			require.NoError(t, err)
-			wLatest, err := wDoc.DataAt("latestDate")
-			require.NoError(t, err)
-			assert.Equal(t, wDay1, wEarliest.(time.Time).UTC())
-			assert.Equal(t, wDay2, wLatest.(time.Time).UTC())
+			// Weather-only summaries intentionally omit earliestDate and latestDate so weather
+			// never advances summary date bounds ahead of delayed energy data.
+			_, err = wDoc.DataAt("earliestDate")
+			assert.Error(t, err)
+			_, err = wDoc.DataAt("latestDate")
+			assert.Error(t, err)
 
 			gotWeatherOnly, err := f.GetHistorySummaries(
 				ctx,
@@ -2034,19 +1713,19 @@ func TestFirestoreProvider(t *testing.T) {
 				time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
 			)
 			require.NoError(t, err)
-			if assert.Len(t, gotWeatherOnly, 1) {
-				assert.Empty(t, gotWeatherOnly[0].Energy)
-				assert.Len(t, gotWeatherOnly[0].Weather, 2)
-			}
+			assert.Empty(t, gotWeatherOnly)
 
-			// Merge Energy in the middle (Aug 5) and wider Weather (Aug 1 and Aug 20)
+			// Merge Energy (Aug 5 and Aug 12) alongside wider Weather (Aug 1 and Aug 20):
+			// earliestDate and latestDate must reflect only the Energy bounds.
 			wEarly := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-			eMid := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+			eStart := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+			eEnd := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 			wLate := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
 			_, err = f.UpdateHistorySummary(ctx, weatherSiteID, "2026-08", types.HistorySummary{
 				Energy: []types.DailyEnergyStats{
-					{TSDayStart: eMid},
+					{TSDayStart: eEnd},
+					{TSDayStart: eStart},
 				},
 				Weather: []types.Weather{
 					{TSDayStart: wEarly},
@@ -2061,8 +1740,20 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			mixedLatest, err := wDocMixed.DataAt("latestDate")
 			require.NoError(t, err)
-			assert.Equal(t, wEarly, mixedEarliest.(time.Time).UTC())
-			assert.Equal(t, wLate, mixedLatest.(time.Time).UTC())
+			assert.Equal(t, eStart, mixedEarliest.(time.Time).UTC())
+			assert.Equal(t, eEnd, mixedLatest.(time.Time).UTC())
+
+			gotMixed, err := f.GetHistorySummaries(
+				ctx,
+				weatherSiteID,
+				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+			)
+			require.NoError(t, err)
+			if assert.Len(t, gotMixed, 1) {
+				assert.Len(t, gotMixed[0].Energy, 2)
+				assert.Len(t, gotMixed[0].Weather, 4)
+			}
 		})
 	})
 
@@ -2647,89 +2338,6 @@ func TestIsRetryableFirestoreErr(t *testing.T) {
 			}
 		}
 		assert.Equal(t, input, got)
-	})
-}
-
-func TestParseLegacyActionJSON(t *testing.T) {
-	t.Run("ProductionShortPlanAction", func(t *testing.T) {
-		rawJSON := []byte(`{"batteryMode":-1,"capacityAt":"2026-10-11T11:00:00-05:00","chargeToSoc":25,"currentPrice":{"dollarsPerKWH":0.04810999999999999,"gridUseDollarsPerKWH":0.11654290735999999,"provider":"comed_besh","tsEnd":"2026-10-10T18:00:00-05:00","tsStart":"2026-10-10T17:00:00-05:00"},"deficitAt":"0001-01-01T00:00:00Z","description":"Discharging battery to cover household load.","hitBufferedDeficitAt":"0001-01-01T00:00:00Z","hitThresholdDeficitAt":"0001-01-01T00:00:00Z","q3HomeUsageKWH":3.214642537876033,"reason":"sufficientBattery","recentHomeUsageKWH":2.071416666666667,"shortPlan":{"h":25,"nb":0.8787479867152629,"p":[{"bm":-1,"d":0.3333333333333333,"e":0.04810999999999999,"es":99.2625745604791,"i":0.16465290736,"l":0.3818394016436127,"r":"sufficientBattery","rs":25,"s":0.32166666666666666,"sm":2,"ss":99.474,"te":"2026-10-10T17:27:11.343112381-05:00","ts":"2026-10-10T17:07:11.343112381-05:00"},{"bm":-1,"d":0.5468491354497222,"e":0.04810999999999999,"es":97.78417974884252,"i":0.16465290736,"l":0.6264256400083466,"r":"sufficientBattery","rs":25,"s":0.20566710029110363,"sm":2,"ss":99.2625745604791,"te":"2026-10-10T18:00:00-05:00","ts":"2026-10-10T17:27:11.343112381-05:00"}],"te":0.8787479867152629,"ts":"2026-10-10T22:07:11.343112381Z"},"simulationParams":{"averageSolarEfficiency":0.012228873447686464,"clippingCapKWH":10.243749999999999,"detectedShift":"none","panelAzimuth":90,"panelTilt":25},"solarMode":2,"strategyBenefitDollars":0.8787479867152629,"systemStatus":{"batteryAboveMinSOC":true,"batteryCapacityKWH":30,"batteryKW":1.365,"batterySOC":99.474,"elevatedMinBatterySOC":false,"gridKW":0.054,"homeKW":2.383,"maxBatteryChargeKW":16,"maxBatteryDischargeKW":20,"solarKW":0.965,"timeLocation":"America/Chicago","timestamp":"2026-10-10T17:07:11.343112381-05:00","vppSOC":20},"systemTimestamp":"2026-10-10T17:07:11.343112381-05:00","timestamp":"2026-10-10T22:07:11.343112381Z"}`)
-
-		act, err := parseLegacyActionJSON(rawJSON)
-		require.NoError(t, err)
-
-		assert.Empty(t, act.Location)
-		assert.Equal(t, "America/Chicago", act.SystemTimestamp.Location().String())
-		assert.Equal(t, "America/Chicago", act.SystemStatus.Timestamp.Location().String())
-		assert.Equal(t, "America/Chicago", act.CurrentPrice.TSStart.Location().String())
-		assert.Equal(t, "America/Chicago", act.HitCapacityAt.Location().String())
-		assert.True(t, act.HitDeficitAt.IsZero())
-
-		require.NotNil(t, act.Plan)
-		assert.Empty(t, act.Plan.ShortPeriods)
-		assert.Equal(t, 25, act.Plan.HorizonHours)
-		if assert.Len(t, act.Plan.Periods, 2) {
-			p0 := act.Plan.Periods[0]
-			assert.Equal(t, "America/Chicago", p0.TSStart.Location().String())
-			assert.Equal(t, "America/Chicago", p0.TSEnd.Location().String())
-			assert.Equal(t, 0.1647, p0.ImportDollars)
-			assert.Equal(t, 0.0481, p0.ExportDollars)
-			assert.Equal(t, 99.5, p0.StartSOC)
-			assert.Equal(t, 99.3, p0.EndSOC)
-			assert.Equal(t, 25.0, p0.ReserveSOC)
-			assert.Equal(t, 0.382, p0.LoadKWH)
-			assert.Equal(t, 0.322, p0.SolarKWH)
-		}
-
-		// Verify round-trip through CompactForStorage -> JSON -> ExpandFromStorage
-		compacted := act.CompactForStorage()
-		assert.Equal(t, "America/Chicago", compacted.Location)
-		data, err := json.Marshal(compacted)
-		require.NoError(t, err)
-
-		var restored types.Action
-		require.NoError(t, json.Unmarshal(data, &restored))
-		restored.ExpandFromStorage()
-		assert.True(t, reflect.DeepEqual(act, restored))
-		assert.Equal(t, act, restored)
-	})
-
-	t.Run("ProductionDecideActionWithTimezone", func(t *testing.T) {
-		rawJSON := []byte(`{"timestamp":"2026-09-15T00:09:06.822395586Z","systemTimestamp":"2026-09-14T19:09:06.822395586-05:00","batteryMode":-1,"solarMode":2,"reason":"sufficientBattery","description":"Sufficient battery.","currentPrice":{"provider":"comed_besh","tsStart":"2026-09-14T19:00:00-05:00","tsEnd":"2026-09-14T20:00:00-05:00","dollarsPerKWH":0.06592,"gridUseDollarsPerKWH":0.041169209660000004},"systemStatus":{"timestamp":"2026-09-14T19:09:06.822395586-05:00","timeLocation":"America/Chicago","batterySOC":81.474,"batteryKW":0.75,"batteryCapacityKWH":30,"maxBatteryChargeKW":16,"maxBatteryDischargeKW":20,"solarKW":0,"gridKW":0.01,"homeKW":0.746,"elevatedMinBatterySOC":false,"batteryAboveMinSOC":true,"vppSOC":20},"deficitAt":"0001-01-01T00:00:00Z","hitBufferedDeficitAt":"0001-01-01T00:00:00Z","hitThresholdDeficitAt":"0001-01-01T00:00:00Z","capacityAt":"2026-09-15T12:39:26.343947672-05:00","simulationParams":{"clippingCapKWH":10.247333333333334,"panelAzimuth":135,"panelTilt":25,"averageSolarEfficiency":0.010545211265857335,"detectedShift":"none"}}`)
-
-		act, err := parseLegacyActionJSON(rawJSON)
-		require.NoError(t, err)
-		assert.Nil(t, act.Plan)
-		assert.Equal(t, "America/Chicago", act.SystemTimestamp.Location().String())
-		assert.Equal(t, "America/Chicago", act.HitCapacityAt.Location().String())
-
-		compacted := act.CompactForStorage()
-		data, err := json.Marshal(compacted)
-		require.NoError(t, err)
-
-		var restored types.Action
-		require.NoError(t, json.Unmarshal(data, &restored))
-		restored.ExpandFromStorage()
-		assert.True(t, reflect.DeepEqual(act, restored))
-	})
-
-	t.Run("ProductionEarliestDecideActionWithoutTimezone", func(t *testing.T) {
-		rawJSON := []byte(`{"timestamp":"2026-02-06T05:15:11.513218608Z","batteryMode":1,"solarMode":0,"description":"Deficit predicted and higher prices later (0.020 < 0.065).","currentPrice":{"tsStart":"2026-02-05T23:00:00-06:00","tsEnd":"2026-02-05T23:05:00-06:00","dollarsPerKWH":0.02},"systemStatus":{"timestamp":"0001-01-01T00:00:00Z","batterySOC":0,"eachBatterySOC":null,"batteryKW":0,"eachBatteryKW":null,"batteryCapacityKWH":0,"maxBatteryChargeKW":0,"maxBatteryDischargeKW":0,"solarKW":0,"gridKW":0,"homeKW":0,"canExportSolar":false,"canExportBattery":false,"canImportBattery":false,"emergencyMode":false}}`)
-
-		act, err := parseLegacyActionJSON(rawJSON)
-		require.NoError(t, err)
-		assert.True(t, act.SystemTimestamp.IsZero())
-		assert.Empty(t, act.Location)
-		require.NotNil(t, act.CurrentPrice)
-		assert.Equal(t, 0.02, act.CurrentPrice.DollarsPerKWH)
-
-		compacted := act.CompactForStorage()
-		assert.Empty(t, compacted.Location)
-		assert.True(t, compacted.SystemTimestamp.IsZero())
-	})
-
-	t.Run("InvalidJSON", func(t *testing.T) {
-		_, err := parseLegacyActionJSON([]byte(`{not valid json`))
-		assert.ErrorContains(t, err, "failed to unmarshal action json")
 	})
 }
 

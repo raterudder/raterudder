@@ -1439,9 +1439,19 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("WeatherOnlySummaryDoesNotTriggerBackfill", func(t *testing.T) {
+	t.Run("WeatherOnlySummaryTriggersBackfill", func(t *testing.T) {
 		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
 		yesterday := truncateDay(now).AddDate(0, 0, -1)
+		monthStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+
+		lateEnergy := []types.DailyEnergyStats{
+			{
+				TSDayStart: yesterday,
+				Hourly: []types.EnergyStats{
+					{TSHourStart: yesterday.Add(23 * time.Hour), HomeKWH: 1.5},
+				},
+			},
+		}
 
 		mockS := &mockStorage{}
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
@@ -1457,9 +1467,22 @@ func TestHandleUpdate(t *testing.T) {
 				},
 			},
 		}, nil).Once()
+		// Backfill queries [monthStart, yesterday + 1d) and saves the missing energy into 2026-07
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, monthStart, yesterday.AddDate(0, 0, 1)).Return(lateEnergy, nil).Once()
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, monthStart, yesterday.AddDate(0, 0, 1)).Return([]types.Weather{
+			{TSDayStart: yesterday},
+		}, nil).Once()
+		mockS.On("GetActionHistory", mock.Anything, types.SiteIDNone, yesterday.Add(23*time.Hour), yesterday.Add(24*time.Hour)).Return([]types.Action{}, nil).Once()
+		mockS.On("UpdateHistorySummary", mock.Anything, types.SiteIDNone, "2026-07", mock.MatchedBy(func(hs types.HistorySummary) bool {
+			return len(hs.Energy) == 1 && hs.Energy[0].TSDayStart.Equal(yesterday)
+		})).Return(types.HistorySummary{
+			TSMonthStart: monthStart,
+			Energy:       lateEnergy,
+			Weather:      []types.Weather{{TSDayStart: yesterday}},
+		}, nil).Once()
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
 		mockS.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 		mockS.On("InsertAction", mock.Anything, types.SiteIDNone, mock.Anything).Return(nil).Once()
 
@@ -1498,7 +1521,6 @@ func TestHandleUpdate(t *testing.T) {
 		srv.handleUpdate(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		mockS.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -4338,7 +4360,7 @@ func TestGetSummaryLatestDate(t *testing.T) {
 		assert.Equal(t, d3, getSummaryLatestDate(summaries))
 	})
 
-	t.Run("WeatherOnlySummaries", func(t *testing.T) {
+	t.Run("WeatherOnlySummariesIgnored", func(t *testing.T) {
 		summaries := []types.HistorySummary{
 			{
 				Weather: []types.Weather{
@@ -4352,17 +4374,17 @@ func TestGetSummaryLatestDate(t *testing.T) {
 				},
 			},
 		}
-		assert.Equal(t, d3, getSummaryLatestDate(summaries))
+		assert.True(t, getSummaryLatestDate(summaries).IsZero())
 	})
 
-	t.Run("MixedEnergyAndWeatherSummaries", func(t *testing.T) {
+	t.Run("MixedEnergyAndWeatherSummariesIgnoresWeather", func(t *testing.T) {
 		weatherNewer := []types.HistorySummary{
 			{
 				Energy:  []types.DailyEnergyStats{{TSDayStart: d2}},
 				Weather: []types.Weather{{TSDayStart: d4}},
 			},
 		}
-		assert.Equal(t, d4, getSummaryLatestDate(weatherNewer))
+		assert.Equal(t, d2, getSummaryLatestDate(weatherNewer))
 
 		energyNewer := []types.HistorySummary{
 			{

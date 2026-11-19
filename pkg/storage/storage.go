@@ -20,24 +20,6 @@ var (
 	ErrFeatureConfigConflict = errors.New("feature config conflict: cannot overwrite")
 )
 
-// PricingMigrationOptions configures the legacy pricing data migration.
-type PricingMigrationOptions struct {
-	DryRun      bool
-	PurgeLegacy bool
-	UtilityID   string // Optional: restrict to a specific utility
-	SiteID      string // Optional: restrict to a specific site
-}
-
-// PricingMigrationStats tracks the outcomes of the legacy pricing migration.
-type PricingMigrationStats struct {
-	UtilitiesInspected   int
-	UtilityHoursMigrated int
-	UtilityMonthsCreated int
-	SitesInspected       int
-	SiteHoursMigrated    int
-	SiteMonthsCreated    int
-}
-
 // Database defines the interface for persisting data and retrieving settings.
 type Database interface {
 	// Settings
