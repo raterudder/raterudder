@@ -520,9 +520,7 @@ type SolarCalibration struct {
 	StdDevRatio          float64
 	RegularizationWeight float64
 	hourScaleFactors     []hourScaleFactorLog
-	validHoursCount      int
 	daylightHoursCount   int
-	cacheByHour          map[int][]historicalHourCache
 }
 
 // calibrateFromHistoricalCache computes static and per-hour solar scale factors from a sorted
@@ -531,18 +529,19 @@ func calibrateFromHistoricalCache(
 	allCache []historicalHourCache,
 	daylightHours [24]bool,
 	clippingCap float64,
-	includeLog bool,
 ) SolarCalibration {
 	var hourlyEffs [24]float64
 
+	// We calculate a preliminary static scale factor (staticEff) first.
+	// We'll use this static efficiency to perform the clipping detection,
+	// and as a fallback if hourly calibration doesn't have enough data points.
 	var staticEff float64
 	var minClippedIrradiance float64
 	if clippingCap > 0 {
 		for i := range allCache {
-			h := &allCache[i]
-			if h.isValid && h.isClipped {
-				if h.gti < minClippedIrradiance || minClippedIrradiance == 0 {
-					minClippedIrradiance = h.gti
+			if allCache[i].isValid && allCache[i].isClipped {
+				if allCache[i].gti < minClippedIrradiance || minClippedIrradiance == 0 {
+					minClippedIrradiance = allCache[i].gti
 				}
 			}
 		}
@@ -552,15 +551,14 @@ func calibrateFromHistoricalCache(
 	var totalTheoreticalIrrad float64
 
 	for i := range allCache {
-		h := &allCache[i]
-		if h.isValid {
-			effectiveIrradiance := h.gti
-			if h.isClipped && minClippedIrradiance > 0 {
-				effectiveIrradiance = min(h.gti, minClippedIrradiance)
+		if allCache[i].isValid {
+			effectiveIrradiance := allCache[i].gti
+			if allCache[i].isClipped && minClippedIrradiance > 0 {
+				effectiveIrradiance = min(allCache[i].gti, minClippedIrradiance)
 			}
 
-			totalSolarKWH += h.solarKWH * h.recencyWeight
-			totalTheoreticalIrrad += effectiveIrradiance * h.tempFactor * h.snowFactor * h.recencyWeight
+			totalSolarKWH += allCache[i].solarKWH * allCache[i].recencyWeight
+			totalTheoreticalIrrad += effectiveIrradiance * allCache[i].tempFactor * allCache[i].snowFactor * allCache[i].recencyWeight
 		}
 	}
 
@@ -578,19 +576,18 @@ func calibrateFromHistoricalCache(
 	var efficienciesByHourOfDay [24]hourlyAcc
 
 	for i := range allCache {
-		h := &allCache[i]
-		isClipped := h.isClipped && staticEff > 0 && h.denom*staticEff > clippingCap
+		isClipped := allCache[i].isClipped && staticEff > 0 && allCache[i].denom*staticEff > clippingCap
 
 		// Skip curtailed, snowy, and clipped hours so that the hourly shading factors
 		// are learned from unconstrained and unblocked solar generation.
-		if h.isValid && !isClipped && h.denom > 0 {
-			if staticEff > 0 && (h.eff < h.minEffRatio*staticEff || h.eff > 1.5*staticEff) {
+		if allCache[i].isValid && !isClipped && allCache[i].denom > 0 {
+			if staticEff > 0 && (allCache[i].eff < allCache[i].minEffRatio*staticEff || allCache[i].eff > 1.5*staticEff) {
 				continue
 			}
 
-			hOfDay := h.hourOfDay
-			efficienciesByHourOfDay[hOfDay].solarKWH += h.solarKWH * h.recencyWeight
-			efficienciesByHourOfDay[hOfDay].denom += h.denom * h.recencyWeight
+			hOfDay := allCache[i].hourOfDay
+			efficienciesByHourOfDay[hOfDay].solarKWH += allCache[i].solarKWH * allCache[i].recencyWeight
+			efficienciesByHourOfDay[hOfDay].denom += allCache[i].denom * allCache[i].recencyWeight
 			efficienciesByHourOfDay[hOfDay].count++
 		}
 	}
@@ -613,7 +610,7 @@ func calibrateFromHistoricalCache(
 	}
 
 	var hourScaleFactors []hourScaleFactorLog
-	if includeLog && validHoursCount > 0 {
+	if validHoursCount > 0 {
 		hourScaleFactors = make([]hourScaleFactorLog, 0, validHoursCount)
 		for h := 0; h < 24; h++ {
 			if validMask[h] {
@@ -700,7 +697,6 @@ func calibrateFromHistoricalCache(
 		StdDevRatio:          stdDevRatio,
 		RegularizationWeight: w,
 		hourScaleFactors:     hourScaleFactors,
-		validHoursCount:      validHoursCount,
 		daylightHoursCount:   len(daylightRatios),
 	}
 }
@@ -718,7 +714,7 @@ func calibrateSolarScaleFactor(
 	// We calculate a preliminary static scale factor (staticEff) first.
 	// We'll use this static efficiency to perform the clipping detection,
 	// and as a fallback if hourly calibration doesn't have enough data points.
-	cacheByHour, allCache := buildHistoricalCache(now, timeLoc, weatherByHour, statsByHour, clippingCap, getIrradiance)
+	_, allCache := buildHistoricalCache(now, timeLoc, weatherByHour, statsByHour, clippingCap, getIrradiance)
 
 	// Find daylight hours to assess shading variation.
 	// We define daylight hours as any hour of day where irradiance is significant (>= 50 W/m2)
@@ -730,9 +726,7 @@ func calibrateSolarScaleFactor(
 		}
 	}
 
-	calib := calibrateFromHistoricalCache(allCache, daylightHours, clippingCap, true)
-	calib.cacheByHour = cacheByHour
-	return calib
+	return calibrateFromHistoricalCache(allCache, daylightHours, clippingCap)
 }
 
 // minSignificantCloudCoverPercent is the minimum cloud cover threshold required to trigger
@@ -812,16 +806,15 @@ func populateHistoricalCache(
 ) {
 	scratch.reset()
 	for i := range hist {
-		ih := &hist[i]
-		w := &indexedWeather[ih.weatherIdx]
-		gti := candidateGTI[ih.weatherIdx]
-		tempFactor := calculateTempFactor(w.hw.TemperatureC, gti)
-		snowFactor := w.snowFactor
+		wIdx := hist[i].weatherIdx
+		gti := candidateGTI[wIdx]
+		tempFactor := calculateTempFactor(indexedWeather[wIdx].hw.TemperatureC, gti)
+		snowFactor := indexedWeather[wIdx].snowFactor
 
 		denom := gti * tempFactor * snowFactor
 		var eff float64
 		if denom > 0 {
-			eff = ih.solarKWH / denom
+			eff = hist[i].solarKWH / denom
 		}
 
 		minEffRatio := 0.5
@@ -829,27 +822,27 @@ func populateHistoricalCache(
 			minEffRatio = 0.1
 		}
 
-		hOfDay := w.localHour
-		isValid := gti >= 25 && tempFactor > 0 && ih.baseValid
-		if isValid && !ih.matchesHomeLoad && gti >= unconstrainedBaselineMinGTI && ih.solarKWH > 0.1 {
+		hOfDay := indexedWeather[wIdx].localHour
+		isValid := gti >= 25 && tempFactor > 0 && hist[i].baseValid
+		if isValid && !hist[i].matchesHomeLoad && gti >= unconstrainedBaselineMinGTI && hist[i].solarKWH > 0.1 {
 			scratch.byHour[hOfDay] = append(scratch.byHour[hOfDay], eff)
 			scratch.allUnconstrain = append(scratch.allUnconstrain, eff)
 		}
 
 		dst[i] = historicalHourCache{
-			ts:              ih.ts,
+			ts:              hist[i].ts,
 			hourOfDay:       hOfDay,
 			gti:             gti,
-			cloudCover:      w.hw.CloudCoverPercent,
-			solarKWH:        ih.solarKWH,
+			cloudCover:      indexedWeather[wIdx].hw.CloudCoverPercent,
+			solarKWH:        hist[i].solarKWH,
 			tempFactor:      tempFactor,
 			snowFactor:      snowFactor,
-			recencyWeight:   ih.recencyWeight,
+			recencyWeight:   hist[i].recencyWeight,
 			denom:           denom,
 			eff:             eff,
 			minEffRatio:     minEffRatio,
-			isClipped:       ih.isClipped,
-			matchesHomeLoad: ih.matchesHomeLoad,
+			isClipped:       hist[i].isClipped,
+			matchesHomeLoad: hist[i].matchesHomeLoad,
 			isValid:         isValid,
 		}
 	}
@@ -868,15 +861,14 @@ func populateHistoricalCache(
 	}
 
 	for i := range dst {
-		c := &dst[i]
-		refEff := refEffByHour[c.hourOfDay]
-		if refEff <= 0 && c.gti >= dcCurtailmentHighGTI {
+		refEff := refEffByHour[dst[i].hourOfDay]
+		if refEff <= 0 && dst[i].gti >= dcCurtailmentHighGTI {
 			refEff = globalRefEff
 		}
-		isHeavyOvercast := c.cloudCover >= dcCurtailmentOvercastCloudPercent && c.gti < dcCurtailmentHighGTI
-		if refEff > 0 && c.isValid && c.matchesHomeLoad &&
-			!isHeavyOvercast && c.eff < dcCurtailmentMaxEffRatio*refEff {
-			c.isValid = false
+		isHeavyOvercast := dst[i].cloudCover >= dcCurtailmentOvercastCloudPercent && dst[i].gti < dcCurtailmentHighGTI
+		if refEff > 0 && dst[i].isValid && dst[i].matchesHomeLoad &&
+			!isHeavyOvercast && dst[i].eff < dcCurtailmentMaxEffRatio*refEff {
+			dst[i].isValid = false
 		}
 	}
 }
@@ -905,9 +897,6 @@ func CalculateWeatherSolar(
 			timeLoc = l
 		}
 	}
-
-	logger := log.Ctx(ctx)
-	debugEnabled := logger.Enabled(ctx, slog.LevelDebug)
 
 	clippingCap := calculateSolarClippingCap(ctx, history)
 
@@ -943,15 +932,15 @@ func CalculateWeatherSolar(
 	}
 	useGTI := anyGTI || !anyGHI
 
-	// Pre-compute localHour, snowFactor, 4 intra-hour sun positions (+7m30s, +22m30s, +37m30s, +52m30s),
-	// and flat horizontal GTI once per unique weather hour.
+	// Pre-compute localHour, snowFactor, 4 intra-hour sun positions (+7m30s, +22m30s, +37m30s, +52m30s)
+	// for all unique forecast hours so sunrise and sunset hours blend across the hour rather than relying
+	// on a single midpoint, and pre-compute flat horizontal GTI once per unique weather hour.
 	for i := range indexedWeather {
-		w := &indexedWeather[i]
-		w.localHour = w.hw.TSHourStart.In(timeLoc).Hour()
-		w.snowFactor = calculateSnowFactor(w.hw.SnowDepthCM)
-		if w.hw.DNI != 0 || w.hw.DHI != 0 {
-			w.sunPos = calculateHourlyPositions(w.hw.TSHourStart, locInfo.Latitude, locInfo.Longitude)
-			w.horizGTI = calculateHourlyGTI(w.hw.DNI, w.hw.DHI, w.sunPos, 0.0, 0.0)
+		indexedWeather[i].localHour = indexedWeather[i].hw.TSHourStart.In(timeLoc).Hour()
+		indexedWeather[i].snowFactor = calculateSnowFactor(indexedWeather[i].hw.SnowDepthCM)
+		if indexedWeather[i].hw.DNI != 0 || indexedWeather[i].hw.DHI != 0 {
+			indexedWeather[i].sunPos = calculateHourlyPositions(indexedWeather[i].hw.TSHourStart, locInfo.Latitude, locInfo.Longitude)
+			indexedWeather[i].horizGTI = calculateHourlyGTI(indexedWeather[i].hw.DNI, indexedWeather[i].hw.DHI, indexedWeather[i].sunPos, 0.0, 0.0)
 		}
 	}
 
@@ -997,7 +986,6 @@ func CalculateWeatherSolar(
 			needsSortOrDedup = true
 		}
 		prevHistTS = ts
-		w := &indexedWeather[wIdx]
 		matchedHistory = append(matchedHistory, indexedHistoryHour{
 			ts:              ts,
 			weatherIdx:      wIdx,
@@ -1005,7 +993,7 @@ func CalculateWeatherSolar(
 			recencyWeight:   calculateRecencyWeight(ts, now),
 			isClipped:       clippingCap > 0 && st.SolarKWH >= clippingCap-clippingEps,
 			matchesHomeLoad: isMatchingHomeLoad(st),
-			baseValid:       st.SolarKWH > 0.02 && !isSolarCurtailed(st) && w.hw.SnowDepthCM <= 0.2,
+			baseValid:       st.SolarKWH > 0.02 && !isSolarCurtailed(st) && indexedWeather[wIdx].hw.SnowDepthCM <= 0.2,
 		})
 	}
 	if needsSortOrDedup {
@@ -1059,10 +1047,12 @@ func CalculateWeatherSolar(
 		matchesHomeLoad bool
 	}
 	evalHours := make([]evalHourPoint, 0, len(searchHist))
-	unconstrainedHorizEffsByHour := &unconstrainedScratch.byHour
 
 	// Pass 1: Collect candidate-independent daylight hours into evalHours and record each hour's
 	// horizontal efficiency (horizEff = SolarKWH / horizDenom, using flat tilt=0 irradiance).
+	// Even though we don't know the roof's true tilt/azimuth yet, at any fixed localHour of the day
+	// the sun's position is consistent across days, so comparing horizEff against the median horizEff
+	// at that same localHour reliably identifies hours where production collapsed.
 	for _, he := range history {
 		if usePriorOnly && !he.TSHourStart.Before(todayMidnight) {
 			continue
@@ -1075,30 +1065,35 @@ func CalculateWeatherSolar(
 			continue
 		}
 		wIdx, ok := weatherIdxByTS[ts]
-		if !ok {
+		if !ok || indexedWeather[wIdx].hw.SnowDepthCM > 0.2 {
 			continue
 		}
-		w := &indexedWeather[wIdx]
-		if w.hw.SnowDepthCM > 0.2 {
-			continue
-		}
-		horizGTI := w.horizGTI
+		// Filter using candidate-independent horizontal irradiance (tilt=0) so every
+		// candidate azimuth/tilt is evaluated across the exact same set of daylight hours,
+		// and orientations that point away from the sun during active production hours are penalized.
+		horizGTI := indexedWeather[wIdx].horizGTI
 		if horizGTI < 25 {
 			continue
 		}
 		if isSolarCurtailed(he) {
 			continue
 		}
-		snowFactor := w.snowFactor
-		horizDenom := horizGTI * calculateTempFactor(w.hw.TemperatureC, horizGTI) * snowFactor
+		snowFactor := indexedWeather[wIdx].snowFactor
+		// horizDenom is the temperature- and snow-adjusted horizontal irradiance (at tilt=0).
+		horizDenom := horizGTI * calculateTempFactor(indexedWeather[wIdx].hw.TemperatureC, horizGTI) * snowFactor
 		if horizDenom <= 0 {
 			continue
 		}
+		// horizEff is the effective system conversion ratio relative to horizontal irradiance.
 		horizEff := he.SolarKWH / horizDenom
-		localHour := w.localHour
+		localHour := indexedWeather[wIdx].localHour
+		// Check whether solar appeared to be tracking home load with near-zero grid/battery flow
+		// (requiring MaxBatterySOC >= 15% when SOC telemetry is present so empty-battery morning hours aren't flagged).
 		matchesHome := (he.MaxBatterySOC == 0 || he.MaxBatterySOC >= 15.0) && isMatchingHomeLoad(he)
+		// If this hour was NOT matching home load and had meaningful sunlight, include it in the
+		// unconstrained baseline for this hour of the day.
 		if !matchesHome && horizGTI >= unconstrainedBaselineMinGTI {
-			unconstrainedHorizEffsByHour[localHour] = append(unconstrainedHorizEffsByHour[localHour], horizEff)
+			unconstrainedScratch.byHour[localHour] = append(unconstrainedScratch.byHour[localHour], horizEff)
 		}
 		evalHours = append(evalHours, evalHourPoint{
 			weatherIdx:      wIdx,
@@ -1116,9 +1111,9 @@ func CalculateWeatherSolar(
 	// varies naturally by time of day.
 	var refHorizEffByHour [24]float64
 	for h := 0; h < 24; h++ {
-		if len(unconstrainedHorizEffsByHour[h]) >= 2 {
-			slices.Sort(unconstrainedHorizEffsByHour[h])
-			refHorizEffByHour[h] = unconstrainedHorizEffsByHour[h][len(unconstrainedHorizEffsByHour[h])/2]
+		if len(unconstrainedScratch.byHour[h]) >= 2 {
+			slices.Sort(unconstrainedScratch.byHour[h])
+			refHorizEffByHour[h] = unconstrainedScratch.byHour[h][len(unconstrainedScratch.byHour[h])/2]
 		}
 	}
 
@@ -1128,7 +1123,7 @@ func CalculateWeatherSolar(
 	nEval := 0
 	for _, pt := range evalHours {
 		refEff := refHorizEffByHour[pt.localHour]
-		hw := &indexedWeather[pt.weatherIdx].hw
+		hw := indexedWeather[pt.weatherIdx].hw
 		isHeavyOvercast := hw.CloudCoverPercent >= dcCurtailmentOvercastCloudPercent && hw.GTI < dcCurtailmentHighGTI
 		if refEff > 0 && pt.matchesHomeLoad && !isHeavyOvercast && pt.horizEff < dcCurtailmentEvalMaxHorizEffRatio*refEff {
 			continue
@@ -1145,9 +1140,27 @@ func CalculateWeatherSolar(
 	}
 
 	// minRegWeight tracks the lowest RegularizationWeight seen across all valid candidate orientations.
+	//
+	// Why this is needed:
+	// In calibrateSolarScaleFactor, RegularizationWeight (0.0 to 1.0) controls how much the model is
+	// allowed to vary efficiency hour-by-hour (HourlyEffs[h]) vs. using a single constant efficiency
+	// (StaticEff) for the entire day. It is computed from the coefficient of variation (CV) of the
+	// raw hourly efficiencies (SolarKWH / GTI).
+	//
+	// When we test the TRUE physical orientation of an unshaded array, the modeled GTI curve matches
+	// the panels' geometry all day, so SolarKWH / GTI is nearly constant across hours -> low CV ->
+	// low RegularizationWeight (close to 0.0, i.e., 1 degree of freedom).
+	// When we test a WRONG orientation (e.g., testing West or East-West split on a South roof), the
+	// geometric mismatch makes SolarKWH / GTI appear artificially high in the morning and low in the
+	// afternoon -> high CV -> high RegularizationWeight (up to 1.0, i.e., 24 per-hour degrees of freedom).
+	//
+	// Without capping, a wrong orientation with 24 per-hour multipliers can absorb its own geometric
+	// error and overfit the historical data to beat the true orientation (which only used 1 static
+	// multiplier). Capping every candidate at minRegWeight forces all orientations to compete using
+	// at most the hourly flexibility required by the cleanest-fitting orientation.
 	minRegWeight := 1.0
 
-	scoreCandidate := func(evalPts []evalCandidatePoint, calib *SolarCalibration, maxWeight float64) float64 {
+	scoreCandidate := func(evalPts []evalCandidatePoint, calib SolarCalibration, maxWeight float64) float64 {
 		effs := calib.HourlyEffs
 		// If this candidate calibrated with more hourly freedom (RegularizationWeight) than the
 		// tightest candidate seen so far (maxWeight = minRegWeight), shrink its hourly efficiency
@@ -1161,15 +1174,14 @@ func CalculateWeatherSolar(
 
 		var sumAbsErr float64
 		for i := range evalHours {
-			pt := &evalHours[i]
 			ep := evalPts[i]
-			eff := effs[pt.localHour]
+			eff := effs[evalHours[i].localHour]
 
-			pred := ep.gti * eff * ep.tempFactor * pt.snowFactor
+			pred := ep.gti * eff * ep.tempFactor * evalHours[i].snowFactor
 			if clippingCap > 0 && pred > clippingCap {
 				pred = clippingCap
 			}
-			sumAbsErr += math.Abs(pred - pt.solarKWH)
+			sumAbsErr += math.Abs(pred - evalHours[i].solarKWH)
 		}
 
 		return sumAbsErr / float64(len(evalHours))
@@ -1225,21 +1237,20 @@ func CalculateWeatherSolar(
 				}
 			} else {
 				for i := range indexedWeather {
-					w := &indexedWeather[i]
 					var gti float64
-					if w.hw.DNI != 0 || w.hw.DHI != 0 {
-						gti = calculateHourlyGTI(w.hw.DNI, w.hw.DHI, w.sunPos, testTilt, testAz)
+					if indexedWeather[i].hw.DNI != 0 || indexedWeather[i].hw.DHI != 0 {
+						gti = calculateHourlyGTI(indexedWeather[i].hw.DNI, indexedWeather[i].hw.DHI, indexedWeather[i].sunPos, testTilt, testAz)
 					}
 					currGTI[i] = gti
 					if gti >= 50 {
-						daylightHours[w.localHour] = true
+						daylightHours[indexedWeather[i].localHour] = true
 					}
 				}
 			}
 
 			currSearchCache := currCacheAll[:nSearchHist]
 			populateHistoricalCache(currSearchCache, searchHist, indexedWeather, currGTI, &unconstrainedScratch)
-			calib := calibrateFromHistoricalCache(currSearchCache, daylightHours, clippingCap, debugEnabled)
+			calib := calibrateFromHistoricalCache(currSearchCache, daylightHours, clippingCap)
 			if calib.StaticEff <= 0 {
 				return evalResult{mae: 99999.0, calib: calib, ok: false}
 			}
@@ -1258,17 +1269,17 @@ func CalculateWeatherSolar(
 			// bestMae and southMae under the stricter regularization cap so the comparison stays fair.
 			// Only allow a candidate to tighten minRegWeight if it had at least 4 valid daylight hours
 			// to actually measure hourly efficiency variation (rather than falling back to constant staticEff).
-			if calib.validHoursCount >= 4 && calib.daylightHoursCount >= 4 && calib.RegularizationWeight < minRegWeight {
+			if len(calib.hourScaleFactors) >= 4 && calib.daylightHoursCount >= 4 && calib.RegularizationWeight < minRegWeight {
 				minRegWeight = calib.RegularizationWeight
 				if gotCalib {
-					bestMae = scoreCandidate(bestEval, &bestCalib, minRegWeight)
+					bestMae = scoreCandidate(bestEval, bestCalib, minRegWeight)
 					if southCalib.StaticEff > 0 {
-						southMae = scoreCandidate(southEval, &southCalib, minRegWeight)
+						southMae = scoreCandidate(southEval, southCalib, minRegWeight)
 					}
 				}
 			}
 
-			mae := scoreCandidate(currEval, &calib, minRegWeight)
+			mae := scoreCandidate(currEval, calib, minRegWeight)
 			return evalResult{mae: mae, calib: calib, ok: true}
 		}
 
@@ -1333,6 +1344,11 @@ func CalculateWeatherSolar(
 		}
 
 		// Evaluate if the site has an East-West split configuration.
+		// We represent East-West split using a negative sentinel azimuth where the absolute value
+		// is the fraction of the array facing East (e.g. -0.5 represents 50% East / 50% West).
+		// To minimize CPU overhead, we first evaluate the symmetric 50/50 split (-0.5).
+		// If the 50/50 split is promising (within 5% of the best single direction or South), we evaluate
+		// asymmetric splits: -0.3 (30% East / 70% West) and -0.7 (70% East / 30% West).
 		acceptBestSplit := func(az float64, res evalResult) {
 			maeSplit = res.mae
 			bestSplitAzimuth = az
@@ -1354,7 +1370,7 @@ func CalculateWeatherSolar(
 					prevMinWeight := minRegWeight
 					res := evaluateAzimuth(-frac)
 					if minRegWeight < prevMinWeight {
-						maeSplit = scoreCandidate(bestSplitEval, &bestSplitCalib, minRegWeight)
+						maeSplit = scoreCandidate(bestSplitEval, bestSplitCalib, minRegWeight)
 					}
 					if res.ok && res.mae < maeSplit {
 						acceptBestSplit(-frac, res)
@@ -1367,7 +1383,7 @@ func CalculateWeatherSolar(
 		prevMinWeightFlat := minRegWeight
 		resFlat = evaluateAzimuthWithTilt(0.0, 0.0)
 		if hasEnoughSplit && minRegWeight < prevMinWeightFlat {
-			maeSplit = scoreCandidate(bestSplitEval, &bestSplitCalib, minRegWeight)
+			maeSplit = scoreCandidate(bestSplitEval, bestSplitCalib, minRegWeight)
 		}
 
 		// Choose the configuration with the absolute lowest MAE.
@@ -1392,22 +1408,20 @@ func CalculateWeatherSolar(
 		}
 	}
 
-	if debugEnabled {
-		logger.DebugContext(
-			ctx,
-			"determined best solar azimuth and tilt on-the-fly",
-			slog.Float64("bestAzimuth", bestAzimuth),
-			slog.Float64("bestTilt", bestTilt),
-			slog.Float64("bestMAE", bestMae),
-			slog.Float64("minRegWeight", minRegWeight),
-			slog.Float64("southMAE", southMae),
-			slog.Float64("splitMAE", maeSplit),
-			slog.Float64("bestSplitAzimuth", bestSplitAzimuth),
-			slog.Float64("flatMAE", resFlat.mae),
-			slog.Int("evalHoursCount", len(evalHours)),
-			slog.Float64("clippingCapKWH", clippingCap),
-		)
-	}
+	log.Ctx(ctx).DebugContext(
+		ctx,
+		"determined best solar azimuth and tilt on-the-fly",
+		slog.Float64("bestAzimuth", bestAzimuth),
+		slog.Float64("bestTilt", bestTilt),
+		slog.Float64("bestMAE", bestMae),
+		slog.Float64("minRegWeight", minRegWeight),
+		slog.Float64("southMAE", southMae),
+		slog.Float64("splitMAE", maeSplit),
+		slog.Float64("bestSplitAzimuth", bestSplitAzimuth),
+		slog.Float64("flatMAE", resFlat.mae),
+		slog.Int("evalHoursCount", len(evalHours)),
+		slog.Float64("clippingCapKWH", clippingCap),
+	)
 
 	getForecastIrr := func(hw types.HourlyWeather) float64 {
 		if useGTI {
@@ -1429,16 +1443,15 @@ func CalculateWeatherSolar(
 		}
 		var finalDaylightHours [24]bool
 		for i := range indexedWeather {
-			w := &indexedWeather[i]
 			var gti float64
-			if w.hw.DNI > 0 || w.hw.DHI > 0 {
-				gti = calculateHourlyGTI(w.hw.DNI, w.hw.DHI, w.sunPos, bestTilt, bestAzimuth)
+			if indexedWeather[i].hw.DNI > 0 || indexedWeather[i].hw.DHI > 0 {
+				gti = calculateHourlyGTI(indexedWeather[i].hw.DNI, indexedWeather[i].hw.DHI, indexedWeather[i].sunPos, bestTilt, bestAzimuth)
 			} else {
-				gti = getForecastIrr(w.hw)
+				gti = getForecastIrr(indexedWeather[i].hw)
 			}
 			finalGTI[i] = gti
 			if gti >= 50 {
-				finalDaylightHours[w.localHour] = true
+				finalDaylightHours[indexedWeather[i].localHour] = true
 			}
 		}
 
@@ -1451,32 +1464,30 @@ func CalculateWeatherSolar(
 			bucketBacking = pairBuf[nAllHist:]
 		}
 		populateHistoricalCache(finalCache, matchedHistory, indexedWeather, finalGTI, &unconstrainedScratch)
-		finalCalib = calibrateFromHistoricalCache(finalCache, finalDaylightHours, clippingCap, debugEnabled)
+		finalCalib = calibrateFromHistoricalCache(finalCache, finalDaylightHours, clippingCap)
 		hourlyEffs = finalCalib.HourlyEffs
 	} else if usePriorOnly && hasTodayDaylight {
 		// Calibrate across all history (including today's completed daylight hours) using the chosen orientation's GTI.
 		finalGTI = bestGTI
 		var finalDaylightHours [24]bool
 		for i := range indexedWeather {
-			w := &indexedWeather[i]
-			if w.hw.DNI <= 0 && w.hw.DHI <= 0 {
-				finalGTI[i] = getForecastIrr(w.hw)
+			if indexedWeather[i].hw.DNI <= 0 && indexedWeather[i].hw.DHI <= 0 {
+				finalGTI[i] = getForecastIrr(indexedWeather[i].hw)
 			}
 			if finalGTI[i] >= 50 {
-				finalDaylightHours[w.localHour] = true
+				finalDaylightHours[indexedWeather[i].localHour] = true
 			}
 		}
 		finalCache = currCacheAll[:nAllHist]
 		bucketBacking = bestCacheAll[:nAllHist]
 		populateHistoricalCache(finalCache, matchedHistory, indexedWeather, finalGTI, &unconstrainedScratch)
-		finalCalib = calibrateFromHistoricalCache(finalCache, finalDaylightHours, clippingCap, debugEnabled)
+		finalCalib = calibrateFromHistoricalCache(finalCache, finalDaylightHours, clippingCap)
 		hourlyEffs = finalCalib.HourlyEffs
 	} else {
 		finalGTI = bestGTI
 		for i := range indexedWeather {
-			w := &indexedWeather[i]
-			if w.hw.DNI <= 0 && w.hw.DHI <= 0 {
-				finalGTI[i] = getForecastIrr(w.hw)
+			if indexedWeather[i].hw.DNI <= 0 && indexedWeather[i].hw.DHI <= 0 {
+				finalGTI[i] = getForecastIrr(indexedWeather[i].hw)
 			}
 		}
 		finalCalib = bestCalib
@@ -1485,22 +1496,20 @@ func CalculateWeatherSolar(
 		bucketBacking = currCacheAll[:nSearchHist]
 	}
 
-	if debugEnabled {
-		logger.DebugContext(
-			ctx,
-			"calibrated per-hour scale factors",
-			slog.Any("hourlyEfficiencies", hourlyEffs),
-			slog.Float64("stdDevRatio", finalCalib.StdDevRatio),
-			slog.Float64("regularizationWeight", finalCalib.RegularizationWeight),
-			slog.Float64("staticEfficiency", finalCalib.StaticEff),
-			slog.Any("hourScaleFactors", finalCalib.hourScaleFactors),
-		)
-	}
+	log.Ctx(ctx).DebugContext(
+		ctx,
+		"calibrated per-hour scale factors",
+		slog.Any("hourlyEfficiencies", hourlyEffs),
+		slog.Float64("stdDevRatio", finalCalib.StdDevRatio),
+		slog.Float64("regularizationWeight", finalCalib.RegularizationWeight),
+		slog.Float64("staticEfficiency", finalCalib.StaticEff),
+		slog.Any("hourScaleFactors", finalCalib.hourScaleFactors),
+	)
 
 	// Build hour-of-day buckets once from a single contiguous backing slice for finalCalib.
 	var buckets [24][]historicalHourCache
-	hasCachedHours := len(finalCache) > 0
-	if hasCachedHours {
+	var bucketsPtr *[24][]historicalHourCache
+	if len(finalCache) > 0 {
 		var bucketCounts [24]int
 		for i := range finalCache {
 			bucketCounts[finalCache[i].hourOfDay]++
@@ -1516,24 +1525,24 @@ func CalculateWeatherSolar(
 			h := finalCache[i].hourOfDay
 			buckets[h] = append(buckets[h], finalCache[i])
 		}
+		bucketsPtr = &buckets
 	}
 
 	results := make(map[int64]WeatherSolar, nWeather)
 	for i := range indexedWeather {
-		w := &indexedWeather[i]
 		gti := finalGTI[i]
-		tempFactor := calculateTempFactor(w.hw.TemperatureC, gti)
-		snowDepth := w.hw.SnowDepthCM
-		snowFactor := w.snowFactor
+		tempFactor := calculateTempFactor(indexedWeather[i].hw.TemperatureC, gti)
+		snowDepth := indexedWeather[i].hw.SnowDepthCM
+		snowFactor := indexedWeather[i].snowFactor
 
 		var improved float64
 		if gti != 0 {
-			localHour := w.localHour
-			eff := calculateSimilarityEfficiencyByHour(gti, w.hw.CloudCoverPercent, &buckets, hasCachedHours, localHour, finalCalib.StaticEff, hourlyEffs[localHour])
+			localHour := indexedWeather[i].localHour
+			eff := calculateSimilarityEfficiency(gti, indexedWeather[i].hw.CloudCoverPercent, bucketsPtr, localHour, finalCalib.StaticEff, hourlyEffs[localHour])
 
 			unclipped := gti * eff * tempFactor * snowFactor
-			if cloudDeratePercent > 0 && w.hw.CloudCoverPercent >= minSignificantCloudCoverPercent {
-				cloudFactor := w.hw.CloudCoverPercent / 100.0
+			if cloudDeratePercent > 0 && indexedWeather[i].hw.CloudCoverPercent >= minSignificantCloudCoverPercent {
+				cloudFactor := indexedWeather[i].hw.CloudCoverPercent / 100.0
 				derateFactor := max(0.0, 1.0-(cloudDeratePercent/100.0)*cloudFactor)
 				unclipped *= derateFactor
 			}
@@ -1544,8 +1553,8 @@ func CalculateWeatherSolar(
 			}
 		}
 
-		results[w.ts] = WeatherSolar{
-			TSHourStart: w.ts,
+		results[indexedWeather[i].ts] = WeatherSolar{
+			TSHourStart: indexedWeather[i].ts,
 			SolarKWH:    improved,
 			SnowDepth:   snowDepth,
 			TempFactor:  tempFactor,
@@ -1638,50 +1647,15 @@ func interpolateHourlyEfficienciesArray(validEffs [24]float64, validMask [24]boo
 // harmless because the solar irradiance (DNI/DHI) at night is exactly 0.0, resulting in
 // 0.0 projected generation regardless.
 func interpolateHourlyEfficiencies(validHours map[int]float64) [24]float64 {
-	var result [24]float64
-	if len(validHours) == 0 {
-		return result
-	}
-
-	for h := 0; h < 24; h++ {
-		if val, ok := validHours[h]; ok {
-			result[h] = val
-			continue
-		}
-
-		// Find closest valid hour going backward (circularly)
-		var prevHour int
-		var prevDist int
-		for d := 1; d <= 24; d++ {
-			p := (h - d + 24) % 24
-			if _, ok := validHours[p]; ok {
-				prevHour = p
-				prevDist = d
-				break
-			}
-		}
-
-		// Find closest valid hour going forward (circularly)
-		var nextHour int
-		var nextDist int
-		for d := 1; d <= 24; d++ {
-			n := (h + d) % 24
-			if _, ok := validHours[n]; ok {
-				nextHour = n
-				nextDist = d
-				break
-			}
-		}
-
-		if prevDist > 0 && nextDist > 0 {
-			totalDist := float64(prevDist + nextDist)
-			valPrev := validHours[prevHour]
-			valNext := validHours[nextHour]
-			// Linear interpolation
-			result[h] = (float64(nextDist)*valPrev + float64(prevDist)*valNext) / totalDist
+	var validEffs [24]float64
+	var validMask [24]bool
+	for h, val := range validHours {
+		if h >= 0 && h < 24 {
+			validEffs[h] = val
+			validMask[h] = true
 		}
 	}
-	return result
+	return interpolateHourlyEfficienciesArray(validEffs, validMask)
 }
 
 // calculateSnowFactor returns the solar generation attenuation factor (0.0 to 1.0)
@@ -1773,8 +1747,8 @@ func buildHistoricalCache(
 	statsByHour map[int64]types.EnergyStats,
 	clippingCap float64,
 	getIrradiance func(types.HourlyWeather) float64,
-) (map[int][]historicalHourCache, []historicalHourCache) {
-	cacheByHour := make(map[int][]historicalHourCache)
+) ([24][]historicalHourCache, []historicalHourCache) {
+	var cacheByHour [24][]historicalHourCache
 	currentHourTs := now.Truncate(time.Hour).Unix()
 
 	// Sort matched historical timestamps in ascending order so floating-point accumulations
@@ -1969,12 +1943,12 @@ func computeSimilarityEfficiency(
 func calculateSimilarityEfficiency(
 	forecastIrr float64,
 	forecastCloud float64,
-	cacheByHour map[int][]historicalHourCache,
+	cacheByHour *[24][]historicalHourCache,
 	localHour int,
 	staticEff float64,
 	fallbackEff float64,
 ) float64 {
-	if solarIrradianceSimilarityScale <= 0 || len(cacheByHour) == 0 {
+	if solarIrradianceSimilarityScale <= 0 || cacheByHour == nil {
 		return fallbackEff
 	}
 
@@ -2012,47 +1986,5 @@ func calculateSimilarityEfficiency(
 	}
 
 	// 4. Ultimate fallback to calibrated hourly efficiency
-	return fallbackEff
-}
-
-func calculateSimilarityEfficiencyByHour(
-	forecastIrr float64,
-	forecastCloud float64,
-	buckets *[24][]historicalHourCache,
-	hasCachedHours bool,
-	localHour int,
-	staticEff float64,
-	fallbackEff float64,
-) float64 {
-	if solarIrradianceSimilarityScale <= 0 || !hasCachedHours {
-		return fallbackEff
-	}
-
-	eff, _ := computeSimilarityEfficiency(forecastIrr, forecastCloud, buckets[localHour], staticEff)
-	if eff > 0 {
-		return eff
-	}
-
-	prevHour := (localHour - 1 + 24) % 24
-	nextHour := (localHour + 1) % 24
-	eff1, count1 := computeSimilarityEfficiency(forecastIrr, forecastCloud, buckets[localHour], staticEff, buckets[prevHour], buckets[nextHour])
-	if count1 >= 3 {
-		return eff1
-	}
-
-	prev2 := (localHour - 2 + 24) % 24
-	next2 := (localHour + 2) % 24
-	eff2, count2 := computeSimilarityEfficiency(forecastIrr, forecastCloud, buckets[localHour], staticEff, buckets[prevHour], buckets[nextHour], buckets[prev2], buckets[next2])
-	if count2 >= 3 {
-		return eff2
-	}
-
-	if eff1 > 0 {
-		return eff1
-	}
-	if eff2 > 0 {
-		return eff2
-	}
-
 	return fallbackEff
 }
