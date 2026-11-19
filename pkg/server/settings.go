@@ -142,6 +142,14 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 	if err != nil {
 		settings.ESSAuthStatus.ConsecutiveFailures++
 		settings.ESSAuthStatus.LastAttempt = now
+		if updated {
+			log.Ctx(ctx).DebugContext(ctx, "credentials updated by ess system before error")
+			if enc, encErr := s.encryptCredentials(ctx, siteID, newCreds); encErr != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt credentials", slog.Any("error", encErr))
+			} else {
+				settings.EncryptedCredentials = enc
+			}
+		}
 		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		} else {
@@ -379,52 +387,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			changedESS = true
 			shouldBackfillHistory = true
 		}
-		switch newSettings.ESS {
-		case "franklin":
-			if req.Credentials != nil && req.Credentials.Franklin != nil {
-				changedESS = true
-				if existingCreds.Franklin == nil {
-					shouldBackfillHistory = true
-				}
-				existingCreds.Franklin = req.Credentials.Franklin
-			}
-			existingCreds.Mock = nil
-			existingCreds.Tesla = nil
-			existingCreds.Enphase = nil
-		case "enphase":
-			if req.Credentials != nil && req.Credentials.Enphase != nil {
-				changedESS = true
-				if existingCreds.Enphase == nil {
-					shouldBackfillHistory = true
-				}
-				existingCreds.Enphase = req.Credentials.Enphase
-			}
-			existingCreds.Franklin = nil
-			existingCreds.Mock = nil
-			existingCreds.Tesla = nil
-		case "mock":
-			if req.Credentials != nil && req.Credentials.Mock != nil {
-				changedESS = true
-				if existingCreds.Mock == nil {
-					shouldBackfillHistory = true
-				}
-				existingCreds.Mock = req.Credentials.Mock
-			}
-			existingCreds.Franklin = nil
-			existingCreds.Tesla = nil
-			existingCreds.Enphase = nil
-		case "tesla":
-			if req.Credentials != nil && req.Credentials.Tesla != nil {
-				changedESS = true
-				if existingCreds.Tesla == nil {
-					shouldBackfillHistory = true
-				}
-				existingCreds.Tesla = req.Credentials.Tesla
-			}
-			existingCreds.Franklin = nil
-			existingCreds.Mock = nil
-			existingCreds.Enphase = nil
+		origCreds := existingCreds
+		candidateCreds, credChanged, credBackfill := mergeSettingsCredentials(existingCreds, newSettings.ESS, req.Credentials)
+		if credChanged {
+			changedESS = true
 		}
+		if credBackfill {
+			shouldBackfillHistory = true
+		}
+		existingCreds = candidateCreds
 
 		// if the ess credentials changed, we need to verify them and potentially backfill history
 		log.Ctx(ctx).InfoContext(
@@ -451,13 +422,24 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			existing.ESSAuthStatus.ConsecutiveUserFailures = newSettings.ESSAuthStatus.ConsecutiveUserFailures
 
 			// Verify and update credentials
-			existingCreds, _, err = essSystem.Authenticate(ctx, existingCreds)
+			var credsUpdated bool
+			existingCreds, credsUpdated, err = essSystem.Authenticate(ctx, existingCreds)
 			now = s.now().UTC()
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
 
 				// purposefully store the existing settings with the auth status updated
-				// and NOT the new settings since the credentials were not verified
+				// and NOT the new settings since the credentials were not verified, while
+				// preserving preexisting credentials for another provider and saving any
+				// rotated credentials for the target provider.
+				if credsUpdated {
+					savedCreds := mergeUpdatedProviderCredentials(origCreds, existingCreds, newSettings.ESS)
+					if enc, encErr := s.encryptCredentials(ctx, siteID, savedCreds); encErr != nil {
+						log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated credentials", slog.Any("error", encErr))
+					} else {
+						existing.EncryptedCredentials = enc
+					}
+				}
 				existing.ESSAuthStatus.ConsecutiveFailures++
 				existing.ESSAuthStatus.ConsecutiveUserFailures++
 				existing.ESSAuthStatus.LastAttempt = now
@@ -723,15 +705,11 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	}
 	existing := existingSV.Settings
 
+	origCreds := existingCreds
 	switch req.ESS {
 	case "enphase":
 		if req.Credentials != nil && req.Credentials.Enphase != nil {
-			if existingCreds.Enphase == nil {
-				existingCreds.Enphase = &types.EnphaseCredentials{}
-			}
-			existingCreds.Enphase.Username = req.Credentials.Enphase.Username
-			existingCreds.Enphase.Password = req.Credentials.Enphase.Password
-			existingCreds.Enphase.Code = req.Credentials.Enphase.Code
+			existingCreds.Enphase = mergeEnphaseCredentials(existingCreds.Enphase, req.Credentials.Enphase)
 		}
 		existingCreds.Franklin = nil
 		existingCreds.Mock = nil
@@ -761,8 +739,17 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, err = essSystem.Authenticate(ctx, existingCreds)
+	newCreds, updated, err := essSystem.Authenticate(ctx, existingCreds)
 	now = s.now().UTC()
+	if updated {
+		savedCreds := mergeUpdatedProviderCredentials(origCreds, newCreds, req.ESS)
+		if enc, encErr := s.encryptCredentials(ctx, siteID, savedCreds); encErr != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated stage credentials", slog.Any("error", encErr))
+		} else {
+			existing.EncryptedCredentials = enc
+		}
+	}
+
 	// its expected that this returns needs next stage if there is one
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		existing.ESSAuthStatus.ConsecutiveFailures++
@@ -780,12 +767,15 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 
 	// Only reset failure counters when full stage authentication succeeds (err == nil),
 	// NOT when ErrNeedsNextStage is returned on stage 0 before OTP/password verification.
-	if err == nil && (existing.ESSAuthStatus.ConsecutiveFailures > 0 || existing.ESSAuthStatus.ConsecutiveSetFailures > 0 || existing.ESSAuthStatus.ConsecutiveUserFailures > 0) {
+	authReset := err == nil && (existing.ESSAuthStatus.ConsecutiveFailures > 0 || existing.ESSAuthStatus.ConsecutiveSetFailures > 0 || existing.ESSAuthStatus.ConsecutiveUserFailures > 0)
+	if authReset {
 		existing.ESSAuthStatus.ConsecutiveFailures = 0
 		existing.ESSAuthStatus.ConsecutiveSetFailures = 0
 		existing.ESSAuthStatus.ConsecutiveUserFailures = 0
 		existing.ESSAuthStatus.LastAttempt = now
 		existing.ESSAuthStatus.LastUserAttempt = now
+	}
+	if authReset || updated {
 		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
@@ -796,6 +786,186 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func mergeSettingsCredentials(existingCreds types.Credentials, essName string, reqCreds *types.Credentials) (types.Credentials, bool, bool) {
+	var changedESS bool
+	var shouldBackfill bool
+
+	switch essName {
+	case "franklin":
+		if reqCreds != nil && reqCreds.Franklin != nil {
+			changedESS = true
+			if existingCreds.Franklin == nil {
+				shouldBackfill = true
+			}
+			existingCreds.Franklin = mergeFranklinCredentials(existingCreds.Franklin, reqCreds.Franklin)
+		}
+		existingCreds.Mock = nil
+		existingCreds.Tesla = nil
+		existingCreds.Enphase = nil
+	case "enphase":
+		if reqCreds != nil && reqCreds.Enphase != nil {
+			changedESS = true
+			if existingCreds.Enphase == nil {
+				shouldBackfill = true
+			}
+			existingCreds.Enphase = mergeEnphaseCredentials(existingCreds.Enphase, reqCreds.Enphase)
+		}
+		existingCreds.Franklin = nil
+		existingCreds.Mock = nil
+		existingCreds.Tesla = nil
+	case "mock":
+		if reqCreds != nil && reqCreds.Mock != nil {
+			changedESS = true
+			if existingCreds.Mock == nil {
+				shouldBackfill = true
+			}
+			mockCopy := *reqCreds.Mock
+			if existingCreds.Mock != nil {
+				merged := *existingCreds.Mock
+				if mockCopy.Strategy != "" {
+					merged.Strategy = mockCopy.Strategy
+				}
+				if mockCopy.Location != "" {
+					merged.Location = mockCopy.Location
+				}
+				mockCopy = merged
+			}
+			existingCreds.Mock = &mockCopy
+		}
+		existingCreds.Franklin = nil
+		existingCreds.Tesla = nil
+		existingCreds.Enphase = nil
+	case "tesla":
+		if reqCreds != nil && reqCreds.Tesla != nil {
+			changedESS = true
+			if existingCreds.Tesla == nil {
+				shouldBackfill = true
+			}
+			existingCreds.Tesla = mergeTeslaCredentials(existingCreds.Tesla, reqCreds.Tesla)
+		}
+		existingCreds.Franklin = nil
+		existingCreds.Mock = nil
+		existingCreds.Enphase = nil
+	}
+
+	return existingCreds, changedESS, shouldBackfill
+}
+
+func mergeFranklinCredentials(existing, incoming *types.FranklinCredentials) *types.FranklinCredentials {
+	if existing == nil || (incoming.Username != "" && incoming.Username != existing.Username) {
+		cp := *incoming
+		return &cp
+	}
+	merged := *existing
+	if incoming.Username != "" {
+		merged.Username = incoming.Username
+	}
+	if incoming.Password != "" {
+		if incoming.Password != existing.Password {
+			merged.MD5Password = ""
+			merged.Token = ""
+		}
+		merged.Password = incoming.Password
+	}
+	if incoming.MD5Password != "" {
+		merged.MD5Password = incoming.MD5Password
+	}
+	if incoming.GatewayID != "" {
+		merged.GatewayID = incoming.GatewayID
+	}
+	if incoming.Token != "" {
+		merged.Token = incoming.Token
+	}
+	if incoming.UserType != "" {
+		merged.UserType = incoming.UserType
+	}
+	return &merged
+}
+
+func mergeEnphaseCredentials(existing, incoming *types.EnphaseCredentials) *types.EnphaseCredentials {
+	if existing == nil || (incoming.Username != "" && incoming.Username != existing.Username) {
+		cp := *incoming
+		return &cp
+	}
+	merged := *existing
+	if incoming.Username != "" {
+		merged.Username = incoming.Username
+	}
+	if incoming.Password != "" {
+		if incoming.Password != existing.Password {
+			merged.SessionID = ""
+			merged.ManagerToken = ""
+		}
+		merged.Password = incoming.Password
+	}
+	if incoming.Code != "" {
+		merged.Code = incoming.Code
+		merged.SessionID = ""
+		merged.ManagerToken = ""
+	}
+	if incoming.SessionID != "" {
+		merged.SessionID = incoming.SessionID
+	}
+	if incoming.ManagerToken != "" {
+		merged.ManagerToken = incoming.ManagerToken
+	}
+	if incoming.SystemID != 0 {
+		merged.SystemID = incoming.SystemID
+	}
+	if incoming.UserID != 0 {
+		merged.UserID = incoming.UserID
+	}
+	return &merged
+}
+
+func mergeTeslaCredentials(existing, incoming *types.TeslaCredentials) *types.TeslaCredentials {
+	if existing == nil {
+		cp := *incoming
+		return &cp
+	}
+	merged := *existing
+	if incoming.AuthCode != "" {
+		merged.AuthCode = incoming.AuthCode
+	}
+	if incoming.Region != "" {
+		merged.Region = incoming.Region
+	}
+	if incoming.AccessToken != "" {
+		merged.AccessToken = incoming.AccessToken
+	}
+	if incoming.RefreshToken != "" {
+		merged.RefreshToken = incoming.RefreshToken
+	}
+	if !incoming.Expiry.IsZero() {
+		merged.Expiry = incoming.Expiry
+	}
+	if incoming.SerialNumber != "" {
+		if incoming.SerialNumber != existing.SerialNumber && incoming.EnergySiteID == 0 {
+			merged.EnergySiteID = 0
+		}
+		merged.SerialNumber = incoming.SerialNumber
+	}
+	if incoming.EnergySiteID != 0 {
+		merged.EnergySiteID = incoming.EnergySiteID
+	}
+	return &merged
+}
+
+func mergeUpdatedProviderCredentials(base, updated types.Credentials, essName string) types.Credentials {
+	saved := base
+	switch essName {
+	case "franklin":
+		saved.Franklin = updated.Franklin
+	case "enphase":
+		saved.Enphase = updated.Enphase
+	case "mock":
+		saved.Mock = updated.Mock
+	case "tesla":
+		saved.Tesla = updated.Tesla
+	}
+	return saved
 }
 
 func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, siteID string, newSettings types.Settings) (float64, error) {

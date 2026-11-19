@@ -791,7 +791,7 @@ func TestEnphase(t *testing.T) {
 	})
 
 	t.Run("SetModes", func(t *testing.T) {
-		var lastPayload *enphaseBatterySchedulesPayload
+		var lastPayload *enphaseBatteryProfilePayload
 		var postCalled bool
 		var settingsChargeFromGrid bool
 		var settingsScheduleEnabled bool
@@ -914,8 +914,8 @@ func TestEnphase(t *testing.T) {
 					}
 					err := json.NewDecoder(r.Body).Decode(&body)
 					assert.NoError(t, err)
-					lastPayload = &enphaseBatterySchedulesPayload{
-						Usage:                   body.Profile,
+					lastPayload = &enphaseBatteryProfilePayload{
+						Profile:                 body.Profile,
 						BatteryBackupPercentage: body.BatteryBackupPercentage,
 					}
 					postCalled = true
@@ -946,7 +946,7 @@ func TestEnphase(t *testing.T) {
 		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
-			assert.Equal(t, "self-consumption", lastPayload.Usage)
+			assert.Equal(t, "self-consumption", lastPayload.Profile)
 		}
 		if assert.True(t, putCalled) {
 			assert.True(t, lastSettingsPut.ChargeFromGrid)
@@ -1076,7 +1076,7 @@ func TestEnphase(t *testing.T) {
 		assert.False(t, putCalled)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 30, lastPayload.BatteryBackupPercentage)
-			assert.Equal(t, "self-consumption", lastPayload.Usage)
+			assert.Equal(t, "self-consumption", lastPayload.Profile)
 		}
 	})
 
@@ -1160,7 +1160,7 @@ func TestEnphase(t *testing.T) {
 
 	t.Run("SetModes respects ChargeToSOC", func(t *testing.T) {
 		var postCalled bool
-		var lastPayload *enphaseBatterySchedulesPayload
+		var lastPayload *enphaseBatteryProfilePayload
 		var putCalled bool
 		var lastSettingsPut *enphaseBatterySettingsPayload
 
@@ -1235,8 +1235,8 @@ func TestEnphase(t *testing.T) {
 					}
 					err := json.NewDecoder(r.Body).Decode(&body)
 					assert.NoError(t, err)
-					lastPayload = &enphaseBatterySchedulesPayload{
-						Usage:                   body.Profile,
+					lastPayload = &enphaseBatteryProfilePayload{
+						Profile:                 body.Profile,
 						BatteryBackupPercentage: body.BatteryBackupPercentage,
 					}
 					postCalled = true
@@ -1262,7 +1262,7 @@ func TestEnphase(t *testing.T) {
 		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 85, lastPayload.BatteryBackupPercentage)
-			assert.Equal(t, "self-consumption", lastPayload.Usage)
+			assert.Equal(t, "self-consumption", lastPayload.Profile)
 		}
 		assert.True(t, putCalled)
 		if assert.NotNil(t, lastSettingsPut.ChargeFromGrid) {
@@ -2379,6 +2379,171 @@ func TestEnphase(t *testing.T) {
 		}
 		// ScheduleSupported=false warns and skips DTG schedule configuration instead of guessing settings fields
 		assert.False(t, settingsPut)
+	})
+
+	t.Run("Authenticate OTP Redemption Returns Updated Credentials When Validation Fails", func(t *testing.T) {
+		failData := true
+		var otpCalls int
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/validate_login_otp.json":
+				otpCalls++
+				json.NewEncoder(w).Encode(enphaseLoginResponse{
+					Message:      "success",
+					SessionID:    "otp_session_saved",
+					ManagerToken: "otp_manager_saved",
+					SystemID:     444555,
+				})
+			case "/app-api/444555/data.json":
+				if failData {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App:   enphaseApp{UserID: 777},
+					State: enphaseState{SiteID: 444555},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		origCreds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username: "user@example.com",
+				Code:     "999888",
+			},
+		}
+
+		savedCreds, changed, err := e.Authenticate(context.Background(), origCreds)
+		require.ErrorContains(t, err, "credential validation failed")
+		assert.True(t, changed, "redeemed single-use OTP session must report changed=true on validation failure")
+		assert.Empty(t, savedCreds.Enphase.Code)
+		assert.Equal(t, "otp_session_saved", savedCreds.Enphase.SessionID)
+		assert.Equal(t, "otp_manager_saved", savedCreds.Enphase.ManagerToken)
+		assert.Equal(t, 444555, savedCreds.Enphase.SystemID)
+		assert.Equal(t, "999888", origCreds.Enphase.Code, "caller input struct must not be mutated")
+
+		// Retry after data.json recovers succeeds without needing another single-use OTP code
+		failData = false
+		finalCreds, changed2, err := e.Authenticate(context.Background(), savedCreds)
+		require.NoError(t, err)
+		assert.True(t, changed2)
+		assert.Equal(t, 1, otpCalls)
+		assert.Equal(t, 777, finalCreds.Enphase.UserID)
+	})
+
+	t.Run("Authenticate 401 Re-Login Returns Updated Session When Post-Retry Validation Fails", func(t *testing.T) {
+		dataCalls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/444555/data.json":
+				dataCalls++
+				if dataCalls == 1 {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.WriteHeader(http.StatusServiceUnavailable)
+			case "/login/login.json":
+				json.NewEncoder(w).Encode(enphaseLoginResponse{
+					Message:      "success",
+					SessionID:    "relogin_session",
+					ManagerToken: "relogin_token",
+					SystemID:     444555,
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "user@example.com",
+				Password:     "secret",
+				SessionID:    "expired_session",
+				ManagerToken: "expired_token",
+				SystemID:     444555,
+			},
+		}
+
+		updatedCreds, changed, err := e.Authenticate(context.Background(), creds)
+		require.ErrorContains(t, err, "credential validation failed after retry")
+		assert.True(t, changed)
+		assert.Equal(t, "relogin_session", updatedCreds.Enphase.SessionID)
+		assert.Equal(t, "relogin_token", updatedCreds.Enphase.ManagerToken)
+	})
+
+	t.Run("getDataWithCache And getCSRFToken Caching", func(t *testing.T) {
+		var dataHits int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				dataHits++
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					State: enphaseState{SiteID: dataHits},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+
+		d1, err := e.getDataWithCache(context.Background(), false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, d1.State.SiteID)
+
+		d2, err := e.getDataWithCache(context.Background(), false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, d2.State.SiteID)
+		assert.Equal(t, 1, dataHits)
+
+		d3, err := e.getDataWithCache(context.Background(), true)
+		require.NoError(t, err)
+		assert.Equal(t, 2, d3.State.SiteID)
+		assert.Equal(t, 2, dataHits)
+
+		// CSRF token cached within 60s TTL and re-fetched once expired
+		fetchCalls := 0
+		path := "/service/batteryConfig/api/v1/schedules/123"
+		key := enphaseCSRFKey(path)
+		tok, err := e.getCSRFToken(context.Background(), path, func() error {
+			fetchCalls++
+			e.lastCSRFToken[key] = enphaseCSRFToken{Token: "csrf-1", CreatedAt: time.Now()}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "csrf-1", tok)
+		assert.Equal(t, 1, fetchCalls)
+
+		tok2, err := e.getCSRFToken(context.Background(), path+"/dtg", func() error {
+			fetchCalls++
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "csrf-1", tok2)
+		assert.Equal(t, 1, fetchCalls, "subpath under /schedules must share cached CSRF key")
+
+		e.lastCSRFToken[key] = enphaseCSRFToken{Token: "csrf-1", CreatedAt: time.Now().Add(-2 * time.Minute)}
+		tok3, err := e.getCSRFToken(context.Background(), path, func() error {
+			fetchCalls++
+			e.lastCSRFToken[key] = enphaseCSRFToken{Token: "csrf-2", CreatedAt: time.Now()}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "csrf-2", tok3)
+		assert.Equal(t, 2, fetchCalls)
 	})
 }
 

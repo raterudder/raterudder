@@ -284,4 +284,37 @@ func TestMockESS(t *testing.T) {
 
 		db.AssertExpectations(t)
 	})
+
+	t.Run("GetEnergyHistory Multi-Day Boundary Filtering", func(t *testing.T) {
+		db := new(mockStorage)
+		ConfigureMock(db)
+		m := newMock("test-site-history")
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		_, _, err = m.Authenticate(context.Background(), types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"},
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		todayMidnight := getMidnight(time.Now().In(loc))
+		day1 := todayMidnight.AddDate(0, 0, -3)
+		day2 := todayMidnight.AddDate(0, 0, -2)
+
+		state := types.ESSMockState{
+			BatterySOC: 60,
+			Timestamp:  day1,
+		}
+		db.On("GetESSMockState", ctx, "test-site-history").Return(state, nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site-history", mock.Anything).Return(nil).Once()
+
+		// Simulates from day1 through todayMidnight+, but filters strictly to day2 [00:00, 23:00]
+		daily, err := m.GetEnergyHistory(ctx, day2, day2.Add(23*time.Hour+59*time.Minute))
+		require.NoError(t, err)
+		require.Len(t, daily, 1)
+		assert.Equal(t, day2, daily[0].TSDayStart)
+		require.Len(t, daily[0].Hourly, 24)
+		assert.Equal(t, day2, daily[0].Hourly[0].TSHourStart)
+		assert.Equal(t, day2.Add(23*time.Hour), daily[0].Hourly[23].TSHourStart)
+	})
 }

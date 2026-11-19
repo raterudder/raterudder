@@ -13,7 +13,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4134,6 +4136,376 @@ func TestTesla(t *testing.T) {
 		assert.True(t, changed)
 		assert.Equal(t, 2, gridImportExportCalls)
 		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule, "Autonomous TOU mode should enable battery_ok when a BatteryModeExport period starts within 1 hour")
+	})
+
+	t.Run("Authenticate Refresh Forwards Regional Fleet API Audience And Saves Rotated Tokens On Error", func(t *testing.T) {
+		var observedAudience string
+		failSiteInfo := true
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/oauth2/v3/token":
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "refresh_token", r.Form.Get("grant_type"))
+				observedAudience = r.Form.Get("audience")
+				json.NewEncoder(w).Encode(map[string]any{
+					"access_token":  "rotated-access-token",
+					"refresh_token": "rotated-refresh-token",
+					"expires_in":    3600,
+				})
+			case "/api/1/energy_sites/5555/site_info":
+				if failSiteInfo {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					json.NewEncoder(w).Encode(map[string]any{"error": "upstream unavailable"})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "UTC",
+					},
+				})
+			case "/api/1/energy_sites/5555/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"percentage_charged": 65.0},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+
+		expectedBaseURL := "https://fleet-api.prd.na.vn.cloud.tesla.com"
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			keyPEM:       keyPEM,
+			pubPEM:       pubPEM,
+			baseURLs:     map[string]string{"NA": expectedBaseURL},
+			tokenURL:     "http://tesla.mock/oauth2/v3/token",
+			authURL:      "http://tesla.mock/oauth2/v3/authorize",
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		sys, err := m.Site(ctx, "site-refresh-audience", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+		teslaSys := sys.(*Tesla)
+		teslaSys.retryDelay1 = time.Millisecond
+		teslaSys.retryDelay2 = time.Millisecond
+
+		origCreds := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "expired-access",
+				RefreshToken: "single-use-refresh",
+				Expiry:       time.Now().Add(-10 * time.Minute),
+				EnergySiteID: 5555,
+			},
+		}
+
+		updatedCreds, changed, err := teslaSys.Authenticate(ctx, origCreds)
+		require.ErrorContains(t, err, "credential validation failed")
+		assert.Equal(t, expectedBaseURL, observedAudience, "refreshToken must send regional Fleet API baseURL as audience")
+		assert.True(t, changed, "rotated OAuth tokens must report changed=true even when site_info fails")
+		assert.Equal(t, "rotated-access-token", updatedCreds.Tesla.AccessToken)
+		assert.Equal(t, "rotated-refresh-token", updatedCreds.Tesla.RefreshToken)
+		assert.Equal(t, "expired-access", origCreds.Tesla.AccessToken, "caller input struct must not be mutated in place")
+
+		// Retry after upstream recovers succeeds with the saved rotated tokens without refreshing again
+		failSiteInfo = false
+		observedAudience = ""
+		finalCreds, changed2, err := teslaSys.Authenticate(ctx, updatedCreds)
+		require.NoError(t, err)
+		assert.False(t, changed2)
+		assert.Empty(t, observedAudience)
+		assert.Equal(t, "rotated-access-token", finalCreds.Tesla.AccessToken)
+	})
+
+	t.Run("Authenticate Single Use AuthCode Exchange Persists On Site Discovery Failure And Retries Cleanly", func(t *testing.T) {
+		failProducts := true
+		var exchangeCalls int
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/oauth2/v3/token":
+				exchangeCalls++
+				json.NewEncoder(w).Encode(map[string]any{
+					"access_token":  "exchanged-access",
+					"refresh_token": "exchanged-refresh",
+					"expires_in":    3600,
+				})
+			case "/api/1/products":
+				if failProducts {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": []map[string]any{
+						{
+							"energy_site_id": 7777,
+							"device_type":    "energy",
+							"resource_type":  "battery",
+							"components":     map[string]any{"battery": true},
+						},
+					},
+				})
+			case "/api/1/energy_sites/7777/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "UTC",
+					},
+				})
+			case "/api/1/energy_sites/7777/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"percentage_charged": 50.0},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			keyPEM:       keyPEM,
+			pubPEM:       pubPEM,
+			baseURLs:     map[string]string{"NA": "https://fleet-api.prd.na.vn.cloud.tesla.com"},
+			tokenURL:     "http://tesla.mock/oauth2/v3/token",
+			authURL:      "http://tesla.mock/oauth2/v3/authorize",
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		sys, err := m.Site(ctx, "site-code-exchange", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+
+		creds := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AuthCode: "NA_single_use_code",
+			},
+		}
+
+		savedCreds, changed, err := sys.Authenticate(ctx, creds)
+		require.ErrorContains(t, err, "failed to get default site id")
+		assert.True(t, changed)
+		assert.Empty(t, savedCreds.Tesla.AuthCode)
+		assert.Equal(t, "exchanged-access", savedCreds.Tesla.AccessToken)
+		assert.Equal(t, "exchanged-refresh", savedCreds.Tesla.RefreshToken)
+		assert.Equal(t, int64(0), savedCreds.Tesla.EnergySiteID)
+
+		// Retry with saved credentials resolves EnergySiteID without exchanging another auth code
+		failProducts = false
+		finalCreds, changed2, err := sys.Authenticate(ctx, savedCreds)
+		require.NoError(t, err)
+		assert.True(t, changed2)
+		assert.Equal(t, 1, exchangeCalls)
+		assert.Equal(t, int64(7777), finalCreds.Tesla.EnergySiteID)
+	})
+
+	t.Run("Concurrent Authenticate And VerifyBackupReserve Retry Is Race Safe", func(t *testing.T) {
+		var retryCalls atomic.Int32
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/site_info"):
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 50.0, // mismatches expected 20.0 -> forces retry POST
+						"installation_time_zone": "UTC",
+					},
+				})
+			case strings.HasSuffix(r.URL.Path, "/live_status"):
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 75.0,
+						"battery_power":      500.0,
+					},
+				})
+			case strings.HasSuffix(r.URL.Path, "/backup"):
+				retryCalls.Add(1)
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			keyPEM:       keyPEM,
+			pubPEM:       pubPEM,
+			baseURLs:     map[string]string{"NA": "http://tesla.mock"},
+			tokenURL:     "http://tesla.mock/oauth2/v3/token",
+			authURL:      "http://tesla.mock/oauth2/v3/authorize",
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		sys, err := m.Site(ctx, "site-race-verify", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+		teslaSys := sys.(*Tesla)
+		teslaSys.verifyDelay = 2 * time.Millisecond
+		teslaSys.energySiteID = 1234
+		teslaSys.token = "initial-token"
+		teslaSys.baseURL = "http://tesla.mock"
+
+		var wg sync.WaitGroup
+		for i := 0; i < 6; i++ {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				teslaSys.verifyBackupReserve(ctx, types.BatteryModeLoad, 20.0, teslaLiveStatusResponse{PercentageCharged: 70.0})
+			}()
+			go func(iter int) {
+				defer wg.Done()
+				_, _, authErr := teslaSys.Authenticate(ctx, types.Credentials{
+					Tesla: &types.TeslaCredentials{
+						Region:       "NA",
+						AccessToken:  fmt.Sprintf("tok-%d", iter),
+						Expiry:       time.Now().Add(time.Hour),
+						EnergySiteID: 1234,
+					},
+				})
+				assert.NoError(t, authErr)
+			}(i)
+		}
+		wg.Wait()
+		assert.GreaterOrEqual(t, retryCalls.Load(), int32(6))
+	})
+
+	t.Run("getSiteInfoWithCache And GetEnergyHistory Hour Boundary SOE", func(t *testing.T) {
+		var siteInfoCalls int
+		loc := time.UTC
+		yesterday := time.Now().In(loc).AddDate(0, 0, -1).Truncate(24 * time.Hour)
+		dayStr := yesterday.Format("2006-01-02")
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				siteInfoCalls++
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "UTC",
+					},
+				})
+			case "/api/1/energy_sites/1234/calendar_history":
+				kind := r.URL.Query().Get("kind")
+				startParam := r.URL.Query().Get("start_date")
+				if !strings.HasPrefix(startParam, dayStr) {
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"time_series": []any{}}})
+					return
+				}
+				if kind == "energy" {
+					// 10:00:00 covers preceding period 09:00-10:00; future timestamp skipped
+					futureTS := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"time_series": []map[string]any{
+								{
+									"timestamp":                           yesterday.Add(10 * time.Hour).Format(time.RFC3339),
+									"solar_energy_exported":               2000.0,
+									"consumer_energy_imported_from_solar": 2000.0,
+								},
+								{
+									"timestamp":             futureTS,
+									"solar_energy_exported": 9000.0,
+								},
+							},
+						},
+					})
+					return
+				}
+				if kind == "soe" {
+					// 09:15 -> 40%, 10:00 exact boundary -> 65% (updates both 09:00 and 10:00 buckets!), 11:30 -> 80% (SOE-only bucket)
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"time_series": []map[string]any{
+								{"timestamp": yesterday.Add(9*time.Hour + 15*time.Minute).Format(time.RFC3339), "soe": 40.0},
+								{"timestamp": yesterday.Add(10 * time.Hour).Format(time.RFC3339), "soe": 65.0},
+								{"timestamp": yesterday.Add(11*time.Hour + 30*time.Minute).Format(time.RFC3339), "soe": 80.0},
+							},
+						},
+					})
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+		})
+
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID: "test-client",
+			baseURLs: map[string]string{"NA": "http://tesla.mock"},
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		sys, err := m.Site(ctx, "site-cache-history", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+		teslaSys := sys.(*Tesla)
+		teslaSys.energySiteID = 1234
+		teslaSys.token = "tok"
+		teslaSys.baseURL = "http://tesla.mock"
+
+		// Cache miss -> hit -> force refresh
+		_, err = teslaSys.getSiteInfoWithCache(ctx, false)
+		require.NoError(t, err)
+		_, err = teslaSys.getSiteInfoWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, siteInfoCalls)
+		_, err = teslaSys.getSiteInfoWithCache(ctx, true)
+		require.NoError(t, err)
+		assert.Equal(t, 2, siteInfoCalls)
+
+		daily, err := teslaSys.GetEnergyHistory(ctx, yesterday, yesterday.Add(23*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, daily, 1)
+		require.Len(t, daily[0].Hourly, 3)
+		// 09:00 bucket has 40% at 09:15 and 65% at exact 10:00 boundary
+		assert.Equal(t, yesterday.Add(9*time.Hour), daily[0].Hourly[0].TSHourStart)
+		assert.Equal(t, 2.0, daily[0].Hourly[0].SolarKWH)
+		assert.Equal(t, 40.0, daily[0].Hourly[0].MinBatterySOC)
+		assert.Equal(t, 65.0, daily[0].Hourly[0].MaxBatterySOC)
+		// 10:00 bucket created from exact 10:00 boundary SOE
+		assert.Equal(t, yesterday.Add(10*time.Hour), daily[0].Hourly[1].TSHourStart)
+		assert.Equal(t, 65.0, daily[0].Hourly[1].MinBatterySOC)
+		assert.Equal(t, 65.0, daily[0].Hourly[1].MaxBatterySOC)
+		// 11:00 SOE-only bucket
+		assert.Equal(t, yesterday.Add(11*time.Hour), daily[0].Hourly[2].TSHourStart)
+		assert.Equal(t, 80.0, daily[0].Hourly[2].MinBatterySOC)
 	})
 }
 
