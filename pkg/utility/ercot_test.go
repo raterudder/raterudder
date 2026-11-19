@@ -1264,6 +1264,358 @@ func TestERCOT(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
+	t.Run("Completely Missing Earlier Hour Stops Contiguous Confirmation And Keeps Past Day Refreshable", func(t *testing.T) {
+		ctx := context.Background()
+		mockDB := &storagemock.MockDatabase{}
+
+		pastDay := time.Date(2026, time.October, 6, 0, 0, 0, 0, ctLocation)
+		dayEnd := pastDay.AddDate(0, 0, 1)
+		dayStr := pastDay.Format("2006-01-02")
+		// Next day at 02:00 CT (> 45m after both HE 5 and HE 24 ended)
+		currentNow := dayEnd.Add(2 * time.Hour)
+
+		var gapFilled atomic.Bool
+		var apiCalls atomic.Int32
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			apiCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			var entries []ercotSPPEntry
+			for dh := 1; dh <= 24; dh++ {
+				if dh == 5 && !gapFilled.Load() {
+					continue // Completely missing hour (0 intervals -> carry-forward placeholder)
+				}
+				priceMWh := 40.0
+				switch dh {
+				case 1, 2, 3:
+					priceMWh = 30.0
+				case 4:
+					priceMWh = 500.0 // Spike that carries forward into missing HE 5
+				case 5:
+					priceMWh = 70.0 // True settled price once HE 5 arrives
+				}
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         dh,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: priceMWh,
+					})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer apiServer.Close()
+
+		base := configuredERCOT(mockDB)
+		base.apiURL = apiServer.URL
+		base.client = apiServer.Client()
+		base.token = "mock-token"
+		base.nowFunc = func() time.Time { return currentNow }
+
+		// 1. With HE 5 completely missing (0 intervals) and HE 6..24 all complete (0x0f),
+		// latestPublishedEnd must stop at HE 5's start (04:00 CT) and not jump to dayEnd.
+		var firstUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				firstUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmed1, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", pastDay, dayEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), apiCalls.Load())
+		if assert.Len(t, confirmed1, 4, "confirmed prices must stop at missing HE 5 start and exclude carry-forward and subsequent hours") {
+			assert.Equal(t, pastDay, confirmed1[0].TSStart)
+			assert.Equal(t, pastDay.Add(4*time.Hour), confirmed1[3].TSEnd)
+			assert.InDelta(t, 0.500, confirmed1[3].DollarsPerKWH, 1e-6)
+		}
+		if assert.Len(t, firstUpsert, 24) {
+			for i := 0; i < 4; i++ {
+				assert.True(t, firstUpsert[i].Confirmed, "contiguous completed hour %d before gap must be confirmed", i)
+			}
+			// Carry-forward placeholder HE 5 (index 4) and subsequent complete hours HE 6..24 (indices 5..23) must NOT be confirmed
+			assert.InDelta(t, 0.500, firstUpsert[4].DollarsPerKWH, 1e-6, "missing HE 5 carries forward HE 4 price in raw slice")
+			for i := 4; i < 24; i++ {
+				assert.False(t, firstUpsert[i].Confirmed, "hour index %d at or after 0-interval gap must not be marked confirmed in DB", i)
+			}
+		}
+
+		// 2. Past day with a 0-interval gap must NOT become permanently immutable in memory:
+		// advancing past the 5-minute TTL triggers a fresh API lookup instead of serving stale cache forever.
+		currentNow = currentNow.Add(6 * time.Minute)
+		var secondUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return(firstUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				secondUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmed2, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", pastDay, dayEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), apiCalls.Load(), "past day with 0-interval gap must refresh after 5-minute TTL")
+		assert.Len(t, confirmed2, 4)
+
+		// 3. Once ERCOT backfills HE 5, the next refresh after TTL confirms all 24 hours contiguously and locks immutability.
+		gapFilled.Store(true)
+		currentNow = currentNow.Add(6 * time.Minute)
+		var thirdUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return(secondUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				thirdUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		confirmed3, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", pastDay, dayEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(3), apiCalls.Load())
+		if assert.Len(t, confirmed3, 24) {
+			assert.InDelta(t, 0.070, confirmed3[4].DollarsPerKWH, 1e-6, "backfilled HE 5 must replace carry-forward placeholder")
+		}
+		if assert.Len(t, thirdUpsert, 24) {
+			for i, ps := range thirdUpsert {
+				assert.True(t, ps.Confirmed, "hour index %d must be confirmed once gap is filled", i)
+			}
+		}
+
+		currentNow = currentNow.Add(10 * time.Minute)
+		confirmedCached, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", pastDay, dayEnd)
+		require.NoError(t, err)
+		assert.Len(t, confirmedCached, 24)
+		assert.Equal(t, int32(3), apiCalls.Load(), "past day must become immutable once contiguous through dayEnd")
+
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("Partial Earlier Hour Within Grace Window Holds Back Later Complete Hour Until Settled", func(t *testing.T) {
+		ctx := context.Background()
+		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		dayStr := dayStart.Format("2006-01-02")
+
+		// Path A: 4th interval of HE 10 arrives within the 45-minute grace window.
+		t.Run("Fourth Interval Arrives", func(t *testing.T) {
+			mockDB := &storagemock.MockDatabase{}
+			// 10:35 CT is 35 minutes after HE 10 (09:00-10:00) ended (< 45m grace window)
+			currentNow := dayStart.Add(10*time.Hour + 35*time.Minute)
+			var he10FourthArrived atomic.Bool
+
+			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				var entries []ercotSPPEntry
+				// HE 1..9 complete (4 intervals)
+				for dh := 1; dh <= 9; dh++ {
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         dayStr,
+							DeliveryHour:         dh,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: 30.0,
+						})
+					}
+				}
+				// HE 10 (09:00-10:00): partial (intervals 1..3 at $40/MWh) until 4th interval ($120/MWh -> avg $60/MWh) arrives
+				for interval := 1; interval <= 3; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         10,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 40.0,
+					})
+				}
+				if he10FourthArrived.Load() {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         10,
+						DeliveryInterval:     4,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 120.0,
+					})
+				}
+				// HE 11 (10:00-11:00): already has all 4 intervals (0x0f) at $50/MWh
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         11,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 50.0,
+					})
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+			}))
+			defer apiServer.Close()
+
+			base := configuredERCOT(mockDB)
+			base.apiURL = apiServer.URL
+			base.client = apiServer.Client()
+			base.token = "mock-token"
+			base.nowFunc = func() time.Time { return currentNow }
+
+			// 1. At 10:35 CT (< 45m after HE 10 ended), complete HE 11 must NOT jump latestPublishedEnd past partial HE 10.
+			var firstUpsert []types.PriceState
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+				Run(func(args mock.Arguments) {
+					firstUpsert = args.Get(2).([]types.PriceState)
+				}).Return(nil).Once()
+
+			confirmed1, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+			require.NoError(t, err)
+			if assert.Len(t, confirmed1, 9, "partial HE 10 must hold back confirmation even when HE 11 has all 4 intervals") {
+				assert.Equal(t, dayStart.Add(9*time.Hour), confirmed1[8].TSEnd)
+			}
+			if assert.Len(t, firstUpsert, 24) {
+				assert.True(t, firstUpsert[8].Confirmed, "HE 9 must be confirmed")
+				assert.False(t, firstUpsert[9].Confirmed, "partial HE 10 within 45m window must not be marked confirmed in DB")
+				assert.False(t, firstUpsert[10].Confirmed, "HE 11 must not be marked confirmed ahead of partial HE 10")
+			}
+
+			// 2. At 10:41 CT (still < 45m after HE 10 ended, after 5m cache TTL), HE 10's 4th interval arrives:
+			// latestPublishedEnd advances contiguously across both HE 10 and HE 11 (to 11:00 CT).
+			he10FourthArrived.Store(true)
+			currentNow = dayStart.Add(10*time.Hour + 41*time.Minute)
+
+			var secondUpsert []types.PriceState
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+				Run(func(args mock.Arguments) {
+					secondUpsert = args.Get(2).([]types.PriceState)
+				}).Return(nil).Once()
+
+			_, confirmedEnd, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
+			require.NoError(t, err)
+			assert.Equal(t, dayStart.Add(11*time.Hour), confirmedEnd, "both HE 10 and HE 11 must advance latestPublishedEnd contiguously once 4th sample arrives")
+			if assert.Len(t, secondUpsert, 24) {
+				assert.True(t, secondUpsert[9].Confirmed, "completed HE 10 must now be confirmed in DB")
+				assert.InDelta(t, 0.060, secondUpsert[9].DollarsPerKWH, 1e-6)
+			}
+
+			// At 11:00 CT (within 5m TTL of 10:41 CT -> memory hit? 19m > 5m -> refreshes cleanly), GetConfirmedPrices returns all 11 hours.
+			currentNow = dayStart.Add(11 * time.Hour)
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+
+			confirmed2, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+			require.NoError(t, err)
+			if assert.Len(t, confirmed2, 11, "both HE 10 and HE 11 must be returned contiguously") {
+				assert.InDelta(t, 0.060, confirmed2[9].DollarsPerKWH, 1e-6)
+				assert.InDelta(t, 0.050, confirmed2[10].DollarsPerKWH, 1e-6)
+			}
+
+			mockDB.AssertExpectations(t)
+		})
+
+		// Path B: HE 10 remains at 3 intervals, and once the 45-minute grace window elapses, both HE 10 and HE 11 confirm contiguously.
+		t.Run("Grace Window Elapses", func(t *testing.T) {
+			mockDB := &storagemock.MockDatabase{}
+			currentNow := dayStart.Add(10*time.Hour + 35*time.Minute) // 10:35 CT (35m after HE 10 ended)
+
+			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				var entries []ercotSPPEntry
+				for dh := 1; dh <= 9; dh++ {
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         dayStr,
+							DeliveryHour:         dh,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: 30.0,
+						})
+					}
+				}
+				// HE 10 permanently has only 3 intervals at $40/MWh
+				for interval := 1; interval <= 3; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         10,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 40.0,
+					})
+				}
+				// HE 11 already has all 4 intervals at $50/MWh
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         11,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 50.0,
+					})
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+			}))
+			defer apiServer.Close()
+
+			base := configuredERCOT(mockDB)
+			base.apiURL = apiServer.URL
+			base.client = apiServer.Client()
+			base.token = "mock-token"
+			base.nowFunc = func() time.Time { return currentNow }
+
+			// 1. At 10:35 CT (< 45m after HE 10 ended), latestPublishedEnd stops at 09:00 CT.
+			var firstUpsert []types.PriceState
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+				Run(func(args mock.Arguments) {
+					firstUpsert = args.Get(2).([]types.PriceState)
+				}).Return(nil).Once()
+
+			_, confirmedEnd1, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
+			require.NoError(t, err)
+			assert.Equal(t, dayStart.Add(9*time.Hour), confirmedEnd1)
+			if assert.Len(t, firstUpsert, 24) {
+				assert.False(t, firstUpsert[9].Confirmed)
+				assert.False(t, firstUpsert[10].Confirmed)
+			}
+
+			// 2. At 10:45 CT (exact 45-minute grace boundary after HE 10 ended, > 5m TTL),
+			// HE 10 settles via fallback and HE 11 (0x0f) immediately chains contiguously to 11:00 CT.
+			currentNow = dayStart.Add(10*time.Hour + 45*time.Minute)
+			var secondUpsert []types.PriceState
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+				Run(func(args mock.Arguments) {
+					secondUpsert = args.Get(2).([]types.PriceState)
+				}).Return(nil).Once()
+
+			_, confirmedEnd2, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
+			require.NoError(t, err)
+			assert.Equal(t, dayStart.Add(11*time.Hour), confirmedEnd2, "both HE 10 and HE 11 must advance latestPublishedEnd contiguously after 45m grace window")
+			if assert.Len(t, secondUpsert, 24) {
+				assert.True(t, secondUpsert[9].Confirmed, "HE 10 must settle after 45m grace window")
+			}
+
+			// At 11:00 CT, GetConfirmedPrices returns all 11 hours contiguously and DB marks both HE 10 and HE 11 Confirmed=true.
+			currentNow = dayStart.Add(11 * time.Hour)
+			var thirdUpsert []types.PriceState
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+				Run(func(args mock.Arguments) {
+					thirdUpsert = args.Get(2).([]types.PriceState)
+				}).Return(nil).Once()
+
+			confirmed, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+			require.NoError(t, err)
+			if assert.Len(t, confirmed, 11) {
+				assert.InDelta(t, 0.040, confirmed[9].DollarsPerKWH, 1e-6)
+				assert.InDelta(t, 0.050, confirmed[10].DollarsPerKWH, 1e-6)
+			}
+			if assert.Len(t, thirdUpsert, 24) {
+				assert.True(t, thirdUpsert[9].Confirmed)
+				assert.True(t, thirdUpsert[10].Confirmed)
+				assert.False(t, thirdUpsert[11].Confirmed)
+			}
+
+			mockDB.AssertExpectations(t)
+		})
+	})
+
 	t.Run("Concurrent Cache Refresh Returns Atomic Snapshot Of Prices And ConfirmedEnd", func(t *testing.T) {
 		ctx := context.Background()
 		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)

@@ -866,7 +866,7 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 				if hasAvg {
 					lastWholesaleDollarsPerKWH = avg / 1000.0
 				}
-				if acc.intervalMask == 0x0f || (hasAvg && !end.After(nowCT.Add(-45*time.Minute))) {
+				if latestPublishedEnd.Equal(start) && (acc.intervalMask == 0x0f || (hasAvg && !end.After(nowCT.Add(-45*time.Minute)))) {
 					latestPublishedEnd = end
 				}
 			}
