@@ -64,9 +64,10 @@ func TestERCOT(t *testing.T) {
 			return len(prices) == 24
 		}), 0).Return(nil).Once()
 
-		prices, err := base.getPricesForDate(ctx, nowCT, "LZ_HOUSTON")
+		prices, confirmedEnd, err := base.getPricesForDate(ctx, nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
 		require.Len(t, prices, 24)
+		assert.Equal(t, end, confirmedEnd)
 
 		// Verify hour 16 (HE 17) has 100% raw wholesale price ($2.50/kWh)
 		spikePrice := prices[16]
@@ -74,9 +75,10 @@ func TestERCOT(t *testing.T) {
 		assert.InDelta(t, 2.50, spikePrice.GenerationCreditDollarsPerKWH, 1e-6)
 
 		// 2. Second query: in-memory cache hit (no DB or API calls)
-		cachedPrices, err := base.getPricesForDate(ctx, nowCT, "LZ_HOUSTON")
+		cachedPrices, cachedConfirmedEnd, err := base.getPricesForDate(ctx, nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
 		assert.Equal(t, prices, cachedPrices)
+		assert.Equal(t, end, cachedConfirmedEnd)
 
 		mockDB.AssertExpectations(t)
 	})
@@ -118,7 +120,7 @@ func TestERCOT(t *testing.T) {
 		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
 		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
 
-		prices, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
+		prices, _, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
 		require.Len(t, prices, 24)
 
@@ -475,7 +477,7 @@ func TestERCOT(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "ercot load zone is required")
 
-		_, err = base.getPricesForDate(ctx, time.Now(), "")
+		_, _, err = base.getPricesForDate(ctx, time.Now(), "")
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "ercot load zone is required")
 
@@ -715,11 +717,11 @@ func TestERCOT(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			houstonPrices, houstonErr = base.getPricesForDate(ctx, testDate, "LZ_HOUSTON")
+			houstonPrices, _, houstonErr = base.getPricesForDate(ctx, testDate, "LZ_HOUSTON")
 		}()
 		go func() {
 			defer wg.Done()
-			northPrices, northErr = base.getPricesForDate(ctx, testDate, "LZ_NORTH")
+			northPrices, _, northErr = base.getPricesForDate(ctx, testDate, "LZ_NORTH")
 		}()
 		wg.Wait()
 
@@ -789,6 +791,144 @@ func TestERCOT(t *testing.T) {
 		h, ok := parseDAMHour(nil, 25)
 		assert.True(t, ok)
 		assert.Equal(t, 24, h)
+
+		// Spring-Forward RTM (March 8, 2026): ERCOT skips HE 3 and reports DeliveryHour 1, 2, 4..24
+		ctx := context.Background()
+		springEnd := springDay.AddDate(0, 0, 1)
+		springStr := springDay.Format("2006-01-02")
+		var springCalls atomic.Int32
+		springDB := &storagemock.MockDatabase{}
+		springServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			springCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			var entries []ercotSPPEntry
+			for dh := 1; dh <= 24; dh++ {
+				if dh == 3 {
+					continue // Skipped on spring-forward DST day
+				}
+				for interval := 1; interval <= 4; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         springStr,
+						DeliveryHour:         dh,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: float64(dh * 10), // $0.010 * dh per kWh
+					})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer springServer.Close()
+
+		currentSpringNow := springEnd.Add(2 * time.Hour) // March 9 02:00 CDT
+		baseSpring := configuredERCOT(springDB)
+		baseSpring.apiURL = springServer.URL
+		baseSpring.client = springServer.Client()
+		baseSpring.token = "mock-token"
+		baseSpring.nowFunc = func() time.Time { return currentSpringNow }
+
+		var springUpsert []types.PriceState
+		springDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", springDay, springEnd).Return([]types.PriceState{}, nil).Once()
+		springDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				springUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		springConfirmed, err := baseSpring.GetConfirmedPrices(ctx, "LZ_HOUSTON", springDay, springEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), springCalls.Load())
+		if assert.Len(t, springConfirmed, 23, "all 23 hours of spring-forward DST day must be confirmed") {
+			assert.InDelta(t, 0.010, springConfirmed[0].DollarsPerKWH, 1e-6)  // HE 1 (00:00-01:00 CST)
+			assert.InDelta(t, 0.020, springConfirmed[1].DollarsPerKWH, 1e-6)  // HE 2 (01:00 CST - 03:00 CDT)
+			assert.InDelta(t, 0.040, springConfirmed[2].DollarsPerKWH, 1e-6)  // HE 4 (03:00-04:00 CDT)
+			assert.InDelta(t, 0.240, springConfirmed[22].DollarsPerKWH, 1e-6) // HE 24 (23:00-00:00 CDT)
+			assert.Equal(t, springEnd, springConfirmed[22].TSEnd)
+		}
+		if assert.Len(t, springUpsert, 23) {
+			for i, ps := range springUpsert {
+				assert.True(t, ps.Confirmed, "spring-forward hour index %d must be marked confirmed", i)
+			}
+		}
+
+		// Past spring-forward day must be immutable in memory after 5-minute TTL (0 re-fetches)
+		currentSpringNow = currentSpringNow.Add(10 * time.Minute)
+		springConfirmedCached, err := baseSpring.GetConfirmedPrices(ctx, "LZ_HOUSTON", springDay, springEnd)
+		require.NoError(t, err)
+		assert.Len(t, springConfirmedCached, 23)
+		assert.Equal(t, int32(1), springCalls.Load(), "completed spring-forward past day must remain immutable in memory")
+		springDB.AssertExpectations(t)
+
+		// Fall-Back RTM (Nov 1, 2026): ERCOT repeats HE 2 with DSTFlag=true for the second 01:00-02:00 CST hour
+		fallEnd := fallDay.AddDate(0, 0, 1)
+		fallStr := fallDay.Format("2006-01-02")
+		var fallCalls atomic.Int32
+		fallDB := &storagemock.MockDatabase{}
+		fallServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fallCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			var rows [][]any
+			addHour := func(dh int, dst bool, priceMWh float64) {
+				for interval := 1; interval <= 4; interval++ {
+					rows = append(rows, []any{fallStr, dh, interval, "LZ_HOUSTON", priceMWh, dst})
+				}
+			}
+			addHour(1, false, 10.0)
+			addHour(2, false, 20.0) // 01:00-02:00 CDT
+			addHour(2, true, 250.0) // 01:00-02:00 CST (repeated hour)
+			for dh := 3; dh <= 24; dh++ {
+				addHour(dh, false, float64(dh*10))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"fields": []map[string]string{
+					{"name": "deliveryDate"},
+					{"name": "deliveryHour"},
+					{"name": "deliveryInterval"},
+					{"name": "settlementPoint"},
+					{"name": "settlementPointPrice"},
+					{"name": "DSTFlag"},
+				},
+				"data": rows,
+			})
+		}))
+		defer fallServer.Close()
+
+		currentFallNow := fallEnd.Add(2 * time.Hour) // Nov 2 02:00 CST
+		baseFall := configuredERCOT(fallDB)
+		baseFall.apiURL = fallServer.URL
+		baseFall.client = fallServer.Client()
+		baseFall.token = "mock-token"
+		baseFall.nowFunc = func() time.Time { return currentFallNow }
+
+		var fallUpsert []types.PriceState
+		fallDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", fallDay, fallEnd).Return([]types.PriceState{}, nil).Once()
+		fallDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				fallUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		fallConfirmed, err := baseFall.GetConfirmedPrices(ctx, "LZ_HOUSTON", fallDay, fallEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), fallCalls.Load())
+		if assert.Len(t, fallConfirmed, 25, "all 25 hours of fall-back DST day must be confirmed") {
+			assert.InDelta(t, 0.010, fallConfirmed[0].DollarsPerKWH, 1e-6)  // HE 1
+			assert.InDelta(t, 0.020, fallConfirmed[1].DollarsPerKWH, 1e-6)  // HE 2 CDT
+			assert.InDelta(t, 0.250, fallConfirmed[2].DollarsPerKWH, 1e-6)  // HE 2 CST (DSTFlag=true)
+			assert.InDelta(t, 0.030, fallConfirmed[3].DollarsPerKWH, 1e-6)  // HE 3 CST
+			assert.InDelta(t, 0.240, fallConfirmed[24].DollarsPerKWH, 1e-6) // HE 24 CST
+			assert.Equal(t, fallEnd, fallConfirmed[24].TSEnd)
+		}
+		if assert.Len(t, fallUpsert, 25) {
+			for i, ps := range fallUpsert {
+				assert.True(t, ps.Confirmed, "fall-back hour index %d must be marked confirmed", i)
+			}
+		}
+
+		currentFallNow = currentFallNow.Add(10 * time.Minute)
+		fallConfirmedCached, err := baseFall.GetConfirmedPrices(ctx, "LZ_HOUSTON", fallDay, fallEnd)
+		require.NoError(t, err)
+		assert.Len(t, fallConfirmedCached, 25)
+		assert.Equal(t, int32(1), fallCalls.Load(), "completed fall-back past day must remain immutable in memory")
+		fallDB.AssertExpectations(t)
 	})
 
 	t.Run("Token Expiry Buffer Underflow", func(t *testing.T) {
@@ -846,9 +986,10 @@ func TestERCOT(t *testing.T) {
 				capturedUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
 
-		prices, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
+		prices, confirmedEnd, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
 		assert.Len(t, prices, 24)
+		assert.Equal(t, start.Add(10*time.Hour), confirmedEnd)
 
 		require.NotEmpty(t, capturedUpsert)
 		// For hours ending before 10:30 AM (hours 0..9, ending up to 10:00 AM), Confirmed must be true.
@@ -995,6 +1136,227 @@ func TestERCOT(t *testing.T) {
 		}
 
 		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("Missing Earlier Interval Does Not Stall Confirmed Window Or Past Day Cache", func(t *testing.T) {
+		ctx := context.Background()
+		mockDB := &storagemock.MockDatabase{}
+
+		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		dayStr := dayStart.Format("2006-01-02")
+		currentNow := time.Date(2026, time.October, 7, 14, 25, 0, 0, ctLocation)
+
+		var fullDayPublished atomic.Bool
+		var apiCalls atomic.Int32
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			apiCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			var entries []ercotSPPEntry
+			maxCompleteHour := 13
+			if fullDayPublished.Load() {
+				maxCompleteHour = 24
+			}
+			for dh := 1; dh <= maxCompleteHour; dh++ {
+				for interval := 1; interval <= 4; interval++ {
+					if (dh == 5 && interval == 2) || (dh == 24 && interval == 4) {
+						continue // Permanently missing 15-minute interval in HE 5 and in final hour HE 24
+					}
+					priceMWh := 30.0
+					if dh == 5 {
+						priceMWh = 60.0
+					}
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         dh,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: priceMWh,
+					})
+				}
+			}
+			if !fullDayPublished.Load() {
+				// Frontier HE 14 (13:00-14:00) is still missing interval 4
+				for interval := 1; interval <= 3; interval++ {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         14,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 200.0,
+					})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer apiServer.Close()
+
+		base := configuredERCOT(mockDB)
+		base.apiURL = apiServer.URL
+		base.client = apiServer.Client()
+		base.token = "mock-token"
+		base.nowFunc = func() time.Time { return currentNow }
+
+		// 1. Intraday at 14:25 CT: HE 5 missing interval 2 does not block HE 6..13, while incomplete frontier HE 14 is still excluded
+		var intradayUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				intradayUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		intradayConfirmed, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), apiCalls.Load())
+		if assert.Len(t, intradayConfirmed, 13, "complete hours after an earlier missing interval must be confirmed while excluding partial frontier hour") {
+			assert.InDelta(t, 0.060, intradayConfirmed[4].DollarsPerKWH, 1e-6)
+			assert.Equal(t, dayStart.Add(13*time.Hour), intradayConfirmed[12].TSEnd)
+		}
+		if assert.Len(t, intradayUpsert, 24) {
+			assert.True(t, intradayUpsert[12].Confirmed, "completed HE 13 must be marked confirmed")
+			assert.False(t, intradayUpsert[13].Confirmed, "partial frontier HE 14 must not be marked confirmed")
+		}
+
+		// 2. Just after midnight (Oct 8 00:10 CT, < 45m after HE 24 ended): HE 24 missing interval 4 still waits
+		fullDayPublished.Store(true)
+		currentNow = dayEnd.Add(10 * time.Minute)
+
+		var midnightUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(intradayUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				midnightUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		midnightConfirmed, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), apiCalls.Load())
+		assert.Len(t, midnightConfirmed, 23, "partial HE 24 within 45 minutes of dayEnd must still wait for delayed sample")
+
+		// 3. Past 45-minute grace window (Oct 8 01:00 CT): even with HE 24 permanently missing interval 4, all 24 hours confirm and cache becomes immutable
+		currentNow = dayEnd.Add(time.Hour)
+
+		var nextDayUpsert []types.PriceState
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(midnightUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				nextDayUpsert = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+		fullConfirmed, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+		require.NoError(t, err)
+		assert.Equal(t, int32(3), apiCalls.Load())
+		assert.Len(t, fullConfirmed, 24)
+		if assert.Len(t, nextDayUpsert, 24) {
+			for i, ps := range nextDayUpsert {
+				assert.True(t, ps.Confirmed, "hour %d must be marked confirmed after 45-minute grace window", i)
+			}
+		}
+
+		// Advance past 5-minute TTL on next day -> immutable cache hit (0 extra API/DB calls)
+		currentNow = currentNow.Add(10 * time.Minute)
+		cachedConfirmed, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
+		require.NoError(t, err)
+		assert.Len(t, cachedConfirmed, 24)
+		assert.Equal(t, int32(3), apiCalls.Load(), "past day with missing interval must become immutable once dayEnd is reached")
+
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("Concurrent Cache Refresh Returns Atomic Snapshot Of Prices And ConfirmedEnd", func(t *testing.T) {
+		ctx := context.Background()
+		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)
+		dayStr := dayStart.Format("2006-01-02")
+		dateKey := "LZ_HOUSTON_" + dayStart.Format("20060102")
+		nowCT := time.Date(2026, time.October, 7, 14, 10, 0, 0, ctLocation)
+
+		// Pre-populate cache with HE 1..13 confirmed ($0.030/kWh) and HE 14 partial ($0.040/kWh, 3-interval average)
+		stalePrices := make([]types.Price, 24)
+		for h := 0; h < 24; h++ {
+			start := dayStart.Add(time.Duration(h) * time.Hour)
+			price := 0.030
+			if h >= 13 {
+				price = 0.040 // Stale 3-interval average on HE 14 (carried forward)
+			}
+			stalePrices[h] = types.Price{
+				Provider:                      "ercot",
+				TSStart:                       start,
+				TSEnd:                         start.Add(time.Hour),
+				DollarsPerKWH:                 price,
+				SeparateGenerationCredit:      true,
+				GenerationCreditDollarsPerKWH: price,
+			}
+		}
+
+		// API returns complete 4-interval HE 14 with full mean $0.080/kWh
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			var entries []ercotSPPEntry
+			for dh := 1; dh <= 14; dh++ {
+				for interval := 1; interval <= 4; interval++ {
+					priceMWh := 30.0
+					if dh == 14 {
+						priceMWh = 80.0
+					}
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         dh,
+						DeliveryInterval:     interval,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: priceMWh,
+					})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+		}))
+		defer apiServer.Close()
+
+		var nowNanos atomic.Int64
+		nowNanos.Store(nowCT.UnixNano())
+
+		base := &baseERCOT{
+			apiURL: apiServer.URL,
+			token:  "mock-token",
+			client: apiServer.Client(),
+			nowFunc: func() time.Time {
+				return time.Unix(0, nowNanos.Load()).In(ctLocation)
+			},
+			cachedPrices: map[string][]types.Price{
+				dateKey: stalePrices,
+			},
+			cachedPricesTime: map[string]time.Time{
+				// 1ms before 5-minute TTL expiration so initial readers hit fresh cache while concurrent clock advance triggers refresh
+				dateKey: nowCT.Add(-5*time.Minute + time.Millisecond),
+			},
+			cachedConfirmedEnd: map[string]time.Time{
+				dateKey: dayStart.Add(13 * time.Hour),
+			},
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < 20; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				if idx == 5 {
+					// Expire TTL mid-flight to trigger concurrent cache refresh
+					nowNanos.Store(nowCT.Add(2 * time.Millisecond).UnixNano())
+				}
+				got, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, nowCT)
+				require.NoError(t, err)
+				switch len(got) {
+				case 13:
+					assert.Equal(t, dayStart.Add(13*time.Hour), got[12].TSEnd)
+				case 14:
+					// If HE 14 is returned as confirmed, it MUST carry the refreshed 4-interval average ($0.080), never the stale $0.040 slice
+					assert.InDelta(t, 0.080, got[13].DollarsPerKWH, 1e-6, "must never pair new confirmedEnd with stale 3-interval prices slice")
+				default:
+					t.Errorf("unexpected confirmed length: %d", len(got))
+				}
+			}(i)
+		}
+		wg.Wait()
 	})
 
 	t.Run("Integration Real API", func(t *testing.T) {

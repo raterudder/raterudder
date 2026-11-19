@@ -301,6 +301,7 @@ type ercotSPPEntry struct {
 	DeliveryInterval     int     `json:"deliveryInterval"`
 	SettlementPoint      string  `json:"settlementPoint"`
 	SettlementPointPrice float64 `json:"settlementPointPrice"`
+	DSTFlag              any     `json:"dstFlag"`
 }
 
 type ercotAPIResponse struct {
@@ -381,6 +382,7 @@ func parseERCOTRTMResponse(bodyBytes []byte) ([]ercotSPPEntry, error) {
 		intervalIdx, hasInterval := fieldMap["deliveryinterval"]
 		pointIdx, hasPoint := fieldMap["settlementpoint"]
 		priceIdx, hasPrice := fieldMap["settlementpointprice"]
+		dstIdx, hasDST := fieldMap["dstflag"]
 
 		if hasPoint && hasPrice {
 			entries := make([]ercotSPPEntry, 0, len(columnar.Data))
@@ -396,6 +398,9 @@ func parseERCOTRTMResponse(bodyBytes []byte) ([]ercotSPPEntry, error) {
 				}
 				if hasInterval {
 					entry.DeliveryInterval = getRowInt(row, intervalIdx)
+				}
+				if hasDST && dstIdx >= 0 && dstIdx < len(row) {
+					entry.DSTFlag = row[dstIdx]
 				}
 				entries = append(entries, entry)
 			}
@@ -416,9 +421,14 @@ func parseERCOTRTMResponse(bodyBytes []byte) ([]ercotSPPEntry, error) {
 	return nil, fmt.Errorf("failed to parse ercot api response: unrecognized json structure")
 }
 
-func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZone string) ([]types.Price, error) {
+type rtmDateResult struct {
+	prices       []types.Price
+	confirmedEnd time.Time
+}
+
+func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZone string) ([]types.Price, time.Time, error) {
 	if loadZone == "" {
-		return nil, fmt.Errorf("ercot load zone is required")
+		return nil, time.Time{}, fmt.Errorf("ercot load zone is required")
 	}
 	dateCT := date.In(ctLocation)
 	dateStr := dateCT.Format("20060102")
@@ -447,8 +457,9 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		}
 		// Past days with full coverage are immutable once cached; incomplete or today's cache is valid for 5 minutes (or if pre-seeded)
 		if isCacheFresh(cachedAt, confirmedEnd) {
+			copied := copyPrices(prices)
 			c.mu.Unlock()
-			return copyPrices(prices), nil
+			return copied, confirmedEnd, nil
 		}
 	}
 	c.mu.Unlock()
@@ -466,8 +477,12 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 				confirmedEnd = c.cachedConfirmedEnd[key]
 			}
 			if isCacheFresh(cachedAt, confirmedEnd) {
+				copied := copyPrices(prices)
 				c.mu.Unlock()
-				return prices, nil
+				return rtmDateResult{
+					prices:       copied,
+					confirmedEnd: confirmedEnd,
+				}, nil
 			}
 		}
 		c.mu.Unlock()
@@ -502,15 +517,19 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 						c.cachedPrices = make(map[string][]types.Price)
 					}
 					c.cachedPrices[key] = prices
-					if c.cachedPricesTime != nil {
-						c.cachedPricesTime[key] = c.now()
+					if c.cachedPricesTime == nil {
+						c.cachedPricesTime = make(map[string]time.Time)
 					}
+					c.cachedPricesTime[key] = c.now()
 					if c.cachedConfirmedEnd == nil {
 						c.cachedConfirmedEnd = make(map[string]time.Time)
 					}
 					c.cachedConfirmedEnd[key] = end
 					c.mu.Unlock()
-					return prices, nil
+					return rtmDateResult{
+						prices:       prices,
+						confirmedEnd: end,
+					}, nil
 				}
 			}
 		}
@@ -582,13 +601,85 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		if !ok {
 			return nil, fmt.Errorf("no ercot rtm data available for %s in zone %s", dateStr, loadZone)
 		}
-		return prices, nil
+		return rtmDateResult{
+			prices:       prices,
+			confirmedEnd: fetched.confirmedEndByZone[loadZone],
+		}, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	prices := res.([]types.Price)
-	return copyPrices(prices), nil
+	out := res.(rtmDateResult)
+	return copyPrices(out.prices), out.confirmedEnd, nil
+}
+
+func parseDSTFlag(raw any) bool {
+	switch v := raw.(type) {
+	case bool:
+		return v
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "y", "yes", "1":
+			return true
+		}
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	}
+	return false
+}
+
+// ercotRTMHourIndex maps an ERCOT 1-based DeliveryHour (plus DSTFlag) to the 0-based elapsed
+// hour index [0, numHours) of dayStart:
+//   - Standard 24-hour day: DeliveryHour 1..24 -> 0..23.
+//   - Spring-forward 23-hour DST day: ERCOT skips Hour Ending 3 (02:00-03:00) and reports
+//     DeliveryHour 1, 2, 4..24 -> 0, 1, 2..22 (or 1..23 -> 0..22 if sequential).
+//   - Fall-back 25-hour DST day: ERCOT repeats Hour Ending 2 with DSTFlag=true for the second
+//     01:00-02:00 CST hour (DeliveryHour 1 -> 0, 2 !DSTFlag -> 1, 2 DSTFlag -> 2, 3..24 -> 3..24),
+//     or if synthetic 1..25 sequential numbering is used (hasHour25), maps 1..25 -> 0..24.
+func ercotRTMHourIndex(deliveryHour int, dstFlag bool, numHours int, sequential23 bool, hasHour25 bool) (int, bool) {
+	switch numHours {
+	case 23:
+		if sequential23 {
+			if deliveryHour >= 1 && deliveryHour <= 23 {
+				return deliveryHour - 1, true
+			}
+			return 0, false
+		}
+		switch {
+		case deliveryHour == 1 || deliveryHour == 2:
+			return deliveryHour - 1, true
+		case deliveryHour >= 4 && deliveryHour <= 24:
+			return deliveryHour - 2, true
+		default:
+			return 0, false
+		}
+	case 25:
+		if hasHour25 {
+			if deliveryHour >= 1 && deliveryHour <= 25 {
+				return deliveryHour - 1, true
+			}
+			return 0, false
+		}
+		switch {
+		case deliveryHour == 1:
+			return 0, true
+		case deliveryHour == 2 && !dstFlag:
+			return 1, true
+		case deliveryHour == 2 && dstFlag:
+			return 2, true
+		case deliveryHour >= 3 && deliveryHour <= 24:
+			return deliveryHour, true
+		default:
+			return 0, false
+		}
+	default:
+		if deliveryHour >= 1 && deliveryHour <= numHours {
+			return deliveryHour - 1, true
+		}
+		return 0, false
+	}
 }
 
 type rtmFetchResult struct {
@@ -693,6 +784,32 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 		}
 		return 0, false
 	}
+	nowCT := c.now().In(ctLocation)
+	dayStart := truncateDay(dateCT)
+	numHours := hoursInDay(dayStart)
+	sequential23 := false
+	if numHours == 23 {
+		hasHour3, hasHour24 := false, false
+		for _, entry := range parsedData {
+			if entry.DeliveryHour == 3 {
+				hasHour3 = true
+			}
+			if entry.DeliveryHour == 24 {
+				hasHour24 = true
+			}
+		}
+		sequential23 = hasHour3 && !hasHour24
+	}
+	hasHour25 := false
+	if numHours == 25 {
+		for _, entry := range parsedData {
+			if entry.DeliveryHour == 25 {
+				hasHour25 = true
+				break
+			}
+		}
+	}
+
 	hourlyByZone := make(map[string]map[int]*hourlyAccumulator)
 
 	for _, entry := range parsedData {
@@ -700,9 +817,8 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 		if zone == "" {
 			continue
 		}
-		// ERCOT deliveryHour is 1-based (Hour Ending 1..25)
-		h := entry.DeliveryHour - 1
-		if h < 0 || h > 24 {
+		h, ok := ercotRTMHourIndex(entry.DeliveryHour, parseDSTFlag(entry.DSTFlag), numHours, sequential23, hasHour25)
+		if !ok {
 			continue
 		}
 		if _, ok := hourlyByZone[zone]; !ok {
@@ -729,8 +845,6 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 
 	byZone := make(map[string][]types.Price)
 	confirmedEndByZone := make(map[string]time.Time)
-	dayStart := truncateDay(dateCT)
-	numHours := hoursInDay(dayStart)
 
 	for zone, hourlyMap := range hourlyByZone {
 		var lastWholesaleDollarsPerKWH float64
@@ -748,10 +862,11 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 			end := start.Add(time.Hour)
 
 			if acc, ok := hourlyMap[h]; ok {
-				if avg, hasAvg := avgMWh(acc); hasAvg {
+				avg, hasAvg := avgMWh(acc)
+				if hasAvg {
 					lastWholesaleDollarsPerKWH = avg / 1000.0
 				}
-				if acc.intervalMask == 0x0f && latestPublishedEnd.Equal(start) {
+				if acc.intervalMask == 0x0f || (hasAvg && !end.After(nowCT.Add(-45*time.Minute))) {
 					latestPublishedEnd = end
 				}
 			}
@@ -1112,7 +1227,7 @@ func (c *baseERCOT) GetCurrentPrice(ctx context.Context, loadZone string) (types
 	now := c.now().In(ctLocation)
 
 	// 1. Try Real-Time Market (RTM) first
-	prices, err := c.getPricesForDate(ctx, now, loadZone)
+	prices, _, err := c.getPricesForDate(ctx, now, loadZone)
 	if err == nil {
 		for _, p := range prices {
 			if p.Contains(now) {
@@ -1269,18 +1384,10 @@ func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, sta
 	confirmed := make([]types.Price, 0)
 	for curr.Before(endCT) {
 		dayDate := truncateDay(curr)
-		prices, err := c.getPricesForDate(ctx, dayDate, loadZone)
+		prices, confirmedEnd, err := c.getPricesForDate(ctx, dayDate, loadZone)
 		if err != nil {
 			return nil, err
 		}
-
-		dateKey := fmt.Sprintf("%s_%s", loadZone, dayDate.Format("20060102"))
-		var confirmedEnd time.Time
-		c.mu.Lock()
-		if c.cachedConfirmedEnd != nil {
-			confirmedEnd = c.cachedConfirmedEnd[dateKey]
-		}
-		c.mu.Unlock()
 
 		for _, p := range prices {
 			if !p.TSStart.Before(curr) && !p.TSEnd.After(endCT) && (confirmedEnd.IsZero() || !p.TSEnd.After(confirmedEnd)) {
