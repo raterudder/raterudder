@@ -1,4 +1,5 @@
 import React from 'react';
+import { hasOnlyBackgroundPreloadInFlight } from '../utils/routePreload';
 
 const RELOAD_STORAGE_KEY = 'raterudder:chunk-preload-reload';
 const RELOAD_COOLDOWN_MS = 15_000;
@@ -67,8 +68,11 @@ export class ChunkErrorBoundary extends React.Component<
     };
 
     private handleVitePreloadError = (event: Event) => {
+        const pathname = typeof window !== 'undefined' ? window.location.pathname || '/' : '/';
+        if (hasOnlyBackgroundPreloadInFlight(pathname)) {
+            return;
+        }
         event.preventDefault();
-        const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
         if (shouldAttemptAutoReload(pathname)) {
             this.triggerReload();
         } else {

@@ -1,3 +1,41 @@
+const inFlightBackgroundPreloads = new Map<string, number>();
+
+function normalizeRoutePath(path: string): string {
+    const withoutQueryOrHash = path.split(/[?#]/)[0] || '/';
+    if (withoutQueryOrHash.length > 1 && withoutQueryOrHash.endsWith('/')) {
+        return withoutQueryOrHash.slice(0, -1);
+    }
+    return withoutQueryOrHash;
+}
+
+function incrementBackgroundPreload(path: string): void {
+    inFlightBackgroundPreloads.set(path, (inFlightBackgroundPreloads.get(path) ?? 0) + 1);
+}
+
+function decrementBackgroundPreload(path: string): void {
+    const remaining = (inFlightBackgroundPreloads.get(path) ?? 1) - 1;
+    if (remaining <= 0) {
+        inFlightBackgroundPreloads.delete(path);
+    } else {
+        inFlightBackgroundPreloads.set(path, remaining);
+    }
+}
+
+function trackCompanionBackgroundImport<T>(path: string, factory: () => Promise<T>): Promise<T> {
+    if (!inFlightBackgroundPreloads.has(path)) {
+        return factory();
+    }
+    incrementBackgroundPreload(path);
+    try {
+        return factory().finally(() => {
+            decrementBackgroundPreload(path);
+        });
+    } catch (err) {
+        decrementBackgroundPreload(path);
+        throw err;
+    }
+}
+
 export const routeImporters = {
     '/dashboard': () => import('../pages/Dashboard'),
     '/settings': () => import('../pages/Settings'),
@@ -13,24 +51,49 @@ export const routeImporters = {
     '/how-it-works': () => import('../pages/HowItWorksPage'),
     '/getting-started': () => import('../pages/GettingStartedPage'),
     '/changelog': () => import('../pages/ChangelogPage'),
-    '/utilities': () =>
-        Promise.all([
-            import('../pages/SupportedUtilitiesPage'),
-            import('./utilitiesPrefetch').then((p) => p.prefetchSupportedUtilities()),
-        ]).then(([m]) => m),
+    '/utilities': () => {
+        void trackCompanionBackgroundImport('/utilities', () => import('./utilitiesPrefetch'))
+            .then((p) => p.prefetchSupportedUtilities())
+            .catch(() => {
+                // Ignore background prefetch errors; SupportedUtilitiesPage fetches directly if needed
+            });
+        return import('../pages/SupportedUtilitiesPage');
+    },
     '/callback/tesla': () => import('../pages/TeslaCallback'),
     '/oauth/authorize': () => import('../pages/OAuthAuthorizePage'),
 } as const;
 
 export type LazyRoutePath = keyof typeof routeImporters;
 
+export function hasOnlyBackgroundPreloadInFlight(pathname: string): boolean {
+    if (inFlightBackgroundPreloads.size === 0) {
+        return false;
+    }
+    const currentPath = normalizeRoutePath(pathname);
+    return !inFlightBackgroundPreloads.has(currentPath);
+}
+
+export function resetRoutePreloadState(): void {
+    inFlightBackgroundPreloads.clear();
+}
+
 export function preloadRoute(path: string): void {
-    const cleanPath = path.split('?')[0] as LazyRoutePath;
+    const cleanPath = normalizeRoutePath(path) as LazyRoutePath;
     const importer = routeImporters[cleanPath];
-    if (importer) {
-        void importer().catch(() => {
-            // Swallow transient preload errors on hover/focus; actual navigation handles recovery
-        });
+    if (!importer) {
+        return;
+    }
+    incrementBackgroundPreload(cleanPath);
+    try {
+        void importer()
+            .catch(() => {
+                // Swallow transient preload errors on hover/focus; actual navigation handles recovery
+            })
+            .finally(() => {
+                decrementBackgroundPreload(cleanPath);
+            });
+    } catch {
+        decrementBackgroundPreload(cleanPath);
     }
 }
 
