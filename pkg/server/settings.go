@@ -799,7 +799,8 @@ func mergeSettingsCredentials(existingCreds types.Credentials, essName string, r
 			if existingCreds.Franklin == nil {
 				shouldBackfill = true
 			}
-			existingCreds.Franklin = mergeFranklinCredentials(existingCreds.Franklin, reqCreds.Franklin)
+			cp := *reqCreds.Franklin
+			existingCreds.Franklin = &cp
 		}
 		existingCreds.Mock = nil
 		existingCreds.Tesla = nil
@@ -853,37 +854,6 @@ func mergeSettingsCredentials(existingCreds types.Credentials, essName string, r
 	return existingCreds, changedESS, shouldBackfill
 }
 
-func mergeFranklinCredentials(existing, incoming *types.FranklinCredentials) *types.FranklinCredentials {
-	if existing == nil || (incoming.Username != "" && incoming.Username != existing.Username) {
-		cp := *incoming
-		return &cp
-	}
-	merged := *existing
-	if incoming.Username != "" {
-		merged.Username = incoming.Username
-	}
-	if incoming.Password != "" {
-		if incoming.Password != existing.Password {
-			merged.MD5Password = ""
-			merged.Token = ""
-		}
-		merged.Password = incoming.Password
-	}
-	if incoming.MD5Password != "" {
-		merged.MD5Password = incoming.MD5Password
-	}
-	if incoming.GatewayID != "" {
-		merged.GatewayID = incoming.GatewayID
-	}
-	if incoming.Token != "" {
-		merged.Token = incoming.Token
-	}
-	if incoming.UserType != "" {
-		merged.UserType = incoming.UserType
-	}
-	return &merged
-}
-
 func mergeEnphaseCredentials(existing, incoming *types.EnphaseCredentials) *types.EnphaseCredentials {
 	if existing == nil || (incoming.Username != "" && incoming.Username != existing.Username) {
 		cp := *incoming
@@ -921,14 +891,14 @@ func mergeEnphaseCredentials(existing, incoming *types.EnphaseCredentials) *type
 }
 
 func mergeTeslaCredentials(existing, incoming *types.TeslaCredentials) *types.TeslaCredentials {
-	if existing == nil {
+	// A fresh AuthCode authorizes a potentially new Tesla account/battery, so start
+	// from incoming credentials (clearing any previously saved EnergySiteID/tokens)
+	// while preserving saved tokens and site selection on retries without AuthCode.
+	if existing == nil || incoming.AuthCode != "" {
 		cp := *incoming
 		return &cp
 	}
 	merged := *existing
-	if incoming.AuthCode != "" {
-		merged.AuthCode = incoming.AuthCode
-	}
 	if incoming.Region != "" {
 		merged.Region = incoming.Region
 	}

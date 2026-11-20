@@ -165,6 +165,90 @@ func TestEnphase(t *testing.T) {
 		assert.Equal(t, 3, calls) // 1st data.json (401), 2nd login.json, 3rd data.json (200)
 	})
 
+	t.Run("Authenticate login with missing default system ID", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/login/login.json" {
+				res := enphaseLoginResponse{
+					Message:      "success",
+					SessionID:    "session123",
+					ManagerToken: "token123",
+					SystemID:     0,
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username: "test@example.com",
+				Password: "password123",
+			},
+		}
+
+		updatedCreds, changed, err := e.Authenticate(context.Background(), creds)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "no enphase default system found")
+		assert.False(t, changed)
+		if assert.NotNil(t, updatedCreds.Enphase) {
+			assert.Empty(t, updatedCreds.Enphase.SessionID)
+			assert.Equal(t, 0, updatedCreds.Enphase.SystemID)
+		}
+	})
+
+	t.Run("Authenticate retry login on 401 with missing default system ID", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123456789/data.json" {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte("unauthorized"))
+				return
+			}
+			if r.URL.Path == "/login/login.json" {
+				res := enphaseLoginResponse{
+					Message:      "success",
+					SessionID:    "new_session",
+					ManagerToken: "new_token",
+					SystemID:     0,
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "test@example.com",
+				Password:     "password123",
+				SessionID:    "old_session",
+				ManagerToken: "old_token",
+				SystemID:     123456789,
+			},
+		}
+
+		updatedCreds, changed, err := e.Authenticate(context.Background(), creds)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "no enphase default system found")
+		assert.False(t, changed)
+		if assert.NotNil(t, updatedCreds.Enphase) {
+			assert.Equal(t, "old_session", updatedCreds.Enphase.SessionID)
+			assert.Equal(t, 123456789, updatedCreds.Enphase.SystemID)
+		}
+	})
+
 	t.Run("GetEnergyHistory", func(t *testing.T) {
 		today := time.Now().UTC()
 		todayStr := today.Format("2006-01-02")

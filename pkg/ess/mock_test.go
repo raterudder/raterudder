@@ -291,15 +291,18 @@ func TestMockESS(t *testing.T) {
 		m := newMock("test-site-history")
 		loc, err := time.LoadLocation("America/Chicago")
 		require.NoError(t, err)
+		m.nowFunc = func() time.Time {
+			return time.Date(2026, 6, 17, 12, 0, 0, 0, loc)
+		}
 		_, _, err = m.Authenticate(context.Background(), types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"},
 		})
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		todayMidnight := getMidnight(time.Now().In(loc))
-		day1 := todayMidnight.AddDate(0, 0, -3)
-		day2 := todayMidnight.AddDate(0, 0, -2)
+		day1 := time.Date(2026, 6, 15, 0, 0, 0, 0, loc)
+		day2 := time.Date(2026, 6, 16, 0, 0, 0, 0, loc)
+		day2End := time.Date(2026, 6, 16, 23, 59, 0, 0, loc)
 
 		state := types.ESSMockState{
 			BatterySOC: 60,
@@ -308,13 +311,86 @@ func TestMockESS(t *testing.T) {
 		db.On("GetESSMockState", ctx, "test-site-history").Return(state, nil).Once()
 		db.On("UpdateESSMockState", ctx, "test-site-history", mock.Anything).Return(nil).Once()
 
-		// Simulates from day1 through todayMidnight+, but filters strictly to day2 [00:00, 23:00]
-		daily, err := m.GetEnergyHistory(ctx, day2, day2.Add(23*time.Hour+59*time.Minute))
+		// Simulates from day1 through 2026-06-17, but filters strictly to ordinary 24-hour day2 [00:00, 23:00]
+		daily, err := m.GetEnergyHistory(ctx, day2, day2End)
 		require.NoError(t, err)
 		require.Len(t, daily, 1)
 		assert.Equal(t, day2, daily[0].TSDayStart)
 		require.Len(t, daily[0].Hourly, 24)
 		assert.Equal(t, day2, daily[0].Hourly[0].TSHourStart)
-		assert.Equal(t, day2.Add(23*time.Hour), daily[0].Hourly[23].TSHourStart)
+		assert.Equal(t, time.Date(2026, 6, 16, 23, 0, 0, 0, loc), daily[0].Hourly[23].TSHourStart)
+	})
+
+	t.Run("GetEnergyHistory Spring Forward DST Day", func(t *testing.T) {
+		db := new(mockStorage)
+		ConfigureMock(db)
+		m := newMock("test-site-dst-spring")
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		m.nowFunc = func() time.Time {
+			return time.Date(2026, 3, 9, 12, 0, 0, 0, loc)
+		}
+		_, _, err = m.Authenticate(context.Background(), types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"},
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		dayBefore := time.Date(2026, 3, 7, 0, 0, 0, 0, loc)
+		springDay := time.Date(2026, 3, 8, 0, 0, 0, 0, loc)
+		springDayEnd := time.Date(2026, 3, 8, 23, 59, 0, 0, loc)
+
+		state := types.ESSMockState{
+			BatterySOC: 60,
+			Timestamp:  dayBefore,
+		}
+		db.On("GetESSMockState", ctx, "test-site-dst-spring").Return(state, nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site-dst-spring", mock.Anything).Return(nil).Once()
+
+		daily, err := m.GetEnergyHistory(ctx, springDay, springDayEnd)
+		require.NoError(t, err)
+		require.Len(t, daily, 1)
+		assert.Equal(t, springDay, daily[0].TSDayStart)
+		require.Len(t, daily[0].Hourly, 23)
+		assert.Equal(t, springDay, daily[0].Hourly[0].TSHourStart)
+		assert.Equal(t, time.Date(2026, 3, 8, 23, 0, 0, 0, loc), daily[0].Hourly[22].TSHourStart)
+	})
+
+	t.Run("GetEnergyHistory Fall Back DST Day", func(t *testing.T) {
+		db := new(mockStorage)
+		ConfigureMock(db)
+		m := newMock("test-site-dst-fall")
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		m.nowFunc = func() time.Time {
+			return time.Date(2026, 11, 2, 12, 0, 0, 0, loc)
+		}
+		_, _, err = m.Authenticate(context.Background(), types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"},
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		dayBefore := time.Date(2026, 10, 31, 0, 0, 0, 0, loc)
+		fallDay := time.Date(2026, 11, 1, 0, 0, 0, 0, loc)
+		fallDayEnd := time.Date(2026, 11, 1, 23, 59, 0, 0, loc)
+
+		state := types.ESSMockState{
+			BatterySOC: 60,
+			Timestamp:  dayBefore,
+		}
+		db.On("GetESSMockState", ctx, "test-site-dst-fall").Return(state, nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site-dst-fall", mock.Anything).Return(nil).Once()
+
+		daily, err := m.GetEnergyHistory(ctx, fallDay, fallDayEnd)
+		require.NoError(t, err)
+		require.Len(t, daily, 1)
+		assert.Equal(t, fallDay, daily[0].TSDayStart)
+		require.Len(t, daily[0].Hourly, 25)
+		assert.Equal(t, fallDay, daily[0].Hourly[0].TSHourStart)
+		// Both 01:00 CDT (-05:00) and 01:00 CST (-06:00) are preserved distinctly
+		assert.Equal(t, fallDay.Add(1*time.Hour), daily[0].Hourly[1].TSHourStart)
+		assert.Equal(t, fallDay.Add(2*time.Hour), daily[0].Hourly[2].TSHourStart)
+		assert.Equal(t, time.Date(2026, 11, 1, 23, 0, 0, 0, loc), daily[0].Hourly[24].TSHourStart)
 	})
 }

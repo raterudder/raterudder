@@ -1683,6 +1683,28 @@ const Settings = ({
         }
     };
 
+    const clearOneTimeCredentials = () => {
+        const provider = essProviders.find(p => p.id.toLowerCase() === settings?.ess?.toLowerCase());
+        const oneTimeFields = new Set<string>(['authCode']);
+        if (provider) {
+            const fields = (provider.credentials || [])
+                .filter(c => c.oneTime)
+                .map(c => c.field);
+            fields.forEach(f => oneTimeFields.add(f));
+            if (provider.oAuthKey && provider.oAuthKey.oneTime) {
+                oneTimeFields.add(provider.oAuthKey.field);
+            }
+        }
+
+        setEssCredentials(prev => {
+            const next = { ...prev };
+            oneTimeFields.forEach(field => {
+                delete next[field];
+            });
+            return next;
+        });
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!settings || savingRef.current) return;
@@ -1820,26 +1842,7 @@ const Settings = ({
                 setError(formatESSRateLimitError(errMsg));
             }
             setOauthStatus('idle');
-
-            const provider = essProviders.find(p => p.id.toLowerCase() === settings.ess?.toLowerCase());
-            const oneTimeFields = new Set<string>(['authCode']);
-            if (provider) {
-                const fields = (provider.credentials || [])
-                    .filter(c => c.oneTime)
-                    .map(c => c.field);
-                fields.forEach(f => oneTimeFields.add(f));
-                if (provider.oAuthKey && provider.oAuthKey.oneTime) {
-                    oneTimeFields.add(provider.oAuthKey.field);
-                }
-            }
-
-            setEssCredentials(prev => {
-                const next = { ...prev };
-                oneTimeFields.forEach(field => {
-                    delete next[field];
-                });
-                return next;
-            });
+            clearOneTimeCredentials();
         } finally {
             savingRef.current = false;
             setIsSaving(false);
@@ -1861,7 +1864,7 @@ const Settings = ({
         e.preventDefault();
         if (!settings || savingRef.current) return;
 
-        if (step === 3 && editESS && maxStage > currentStage) {
+        if (step === 3 && maxStage > currentStage) {
             handleESSContinue(e);
             return;
         }
@@ -1968,7 +1971,16 @@ const Settings = ({
             if (attemptedESSAuth && isESSAuthFailureError(errMsg)) {
                 recordInteractiveESSAuthResult(false);
             }
-            setError(formatESSRateLimitError(errMsg));
+            if (errMsg.toLowerCase().includes("authorization code is invalid") || errMsg.toLowerCase().includes("code is invalid")) {
+                setError("The authorization code expired. Please click 'Login to link account' again and save immediately.");
+                setEditESS(true);
+            } else {
+                setError(formatESSRateLimitError(errMsg));
+            }
+            setOauthStatus('idle');
+            if (attemptedESSAuth) {
+                clearOneTimeCredentials();
+            }
         } finally {
             if (!success) {
                 savingRef.current = false;
@@ -2348,6 +2360,8 @@ const Settings = ({
                                     handleOAuthLogin={handleOAuthLogin}
                                     handleESSContinue={handleESSContinue}
                                     isWizard={true}
+                                    editESS={editESS}
+                                    setEditESS={setEditESS}
                                     essAuthStatus={localEssAuthStatus ?? settings.essAuthStatus}
                                 />
                             </div>
@@ -2375,7 +2389,7 @@ const Settings = ({
                                         Saving...
                                     </>
                                 ) : (
-                                    wizardStep === 3 ? 'Complete Setup' : 'Save & Continue'
+                                    wizardStep === 3 ? (maxStage > currentStage ? 'Continue' : 'Complete Setup') : 'Save & Continue'
                                 )}
                             </button>
                         </div>

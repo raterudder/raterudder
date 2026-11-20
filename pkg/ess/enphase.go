@@ -154,17 +154,19 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	enphaseCreds := *creds.Enphase
 	creds.Enphase = &enphaseCreds
 
-	needLogin := e.needsLogin(*creds.Enphase)
-	changed, err := e.loginOrRestoreSession(ctx, creds.Enphase, needLogin)
+	changed, err := e.loginOrRestoreSession(ctx, creds.Enphase)
 	if err != nil {
 		return creds, changed, err
 	}
 
+	// Ensure cookies are in the jar
 	e.syncCookies()
 
+	// Validate by fetching data.json
 	res, err := e.getDataWithCache(ctx, true)
 	if err != nil {
-		if !needLogin && errors.Is(err, errEnphaseUnauthorized) {
+		// If we didn't just login and we got a 401, try to login and retry
+		if !changed && errors.Is(err, errEnphaseUnauthorized) {
 			retryChanged, retryErr := e.retryExpiredSession(ctx, creds.Enphase)
 			if retryChanged {
 				changed = true
@@ -202,8 +204,8 @@ func (e *Enphase) needsLogin(c types.EnphaseCredentials) bool {
 	return c.Code != ""
 }
 
-func (e *Enphase) loginOrRestoreSession(ctx context.Context, c *types.EnphaseCredentials, needLogin bool) (bool, error) {
-	if !needLogin {
+func (e *Enphase) loginOrRestoreSession(ctx context.Context, c *types.EnphaseCredentials) (bool, error) {
+	if !e.needsLogin(*c) {
 		log.Ctx(ctx).DebugContext(ctx, "restoring enphase credentials from cache")
 		if e.systemID != c.SystemID {
 			e.pelExpiry = time.Time{}
@@ -241,6 +243,11 @@ func (e *Enphase) loginOrRestoreSession(ctx context.Context, c *types.EnphaseCre
 		return false, ErrNeedsNextStage
 	}
 
+	if res.SystemID == 0 {
+		// TODO: should we instead search for a system?
+		return false, errors.New("no enphase default system found")
+	}
+
 	if e.systemID != res.SystemID {
 		e.pelExpiry = time.Time{}
 	}
@@ -250,19 +257,11 @@ func (e *Enphase) loginOrRestoreSession(ctx context.Context, c *types.EnphaseCre
 	e.managerToken = res.ManagerToken
 	e.systemID = res.SystemID
 
-	var changed bool
-	if res.SessionID != "" || res.ManagerToken != "" || res.SystemID != 0 {
-		c.SessionID = res.SessionID
-		c.ManagerToken = res.ManagerToken
-		c.SystemID = res.SystemID
-		changed = true
-	}
+	c.SessionID = res.SessionID
+	c.ManagerToken = res.ManagerToken
+	c.SystemID = res.SystemID
 
-	if res.SystemID == 0 {
-		return changed, errors.New("no enphase default system found")
-	}
-
-	return changed, nil
+	return true, nil
 }
 
 func (e *Enphase) retryExpiredSession(ctx context.Context, c *types.EnphaseCredentials) (bool, error) {
@@ -275,6 +274,9 @@ func (e *Enphase) retryExpiredSession(ctx context.Context, c *types.EnphaseCrede
 	res, err := e.login(ctx, e.username, e.password)
 	if err != nil {
 		return false, err
+	}
+	if res.SystemID == 0 {
+		return false, errors.New("no enphase default system found")
 	}
 
 	e.sessionID = res.SessionID
@@ -668,6 +670,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return false, errors.New("enphase today stats missing battery details in SetModes")
 	}
 
+	// Fetch current battery settings (chargeFromGrid, schedule, etc.)
 	settingsData, err := e.getBatterySettings(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to get battery settings: %w", err)
@@ -851,25 +854,33 @@ func (e *Enphase) computeEnphaseTargetReserveSOC(
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	newReserveSOC := currentReserveSOC
+	var newReserveSOC float64
 	switch bat {
 	case types.BatteryModeChargeAny:
+		// If they want to charge the battery, set the backup reserve SOC to 100% to
+		// force it to charge.
 		targetSOC := 100
 		if opts.ChargeToSOC != 0 {
 			targetSOC = opts.ChargeToSOC
 		}
 		newReserveSOC = float64(targetSOC)
 	case types.BatteryModeLoad, types.BatteryModeExport:
+		// Set the reserve SOC to the configured minimum battery SOC to begin discharging
+		// and covering home loads (or exporting during DTG window).
 		newReserveSOC = minSOC
 	case types.BatteryModeStandby:
+		// Set reserve SOC to the floored current SOC to prevent discharging further,
+		// without setting it higher which would force a charge.
 		newReserveSOC = max(math.Floor(currentSOC), minSOC)
 	case types.BatteryModeNoChange:
+		// Keep existing values
 		return currentReserveSOC, nil
 	default:
 		return 0, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
 	newReserveSOC = min(max(newReserveSOC, minAllowedSOC), 100)
+	// if enphase overshot our reserve SOC by less than 1 percent, ignore it
 	if math.Abs(newReserveSOC-currentReserveSOC) <= 1.0 {
 		newReserveSOC = currentReserveSOC
 	}

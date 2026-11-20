@@ -2987,6 +2987,239 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NotNil(t, finalCreds.Enphase)
 		assert.Equal(t, "enphase-sess-1", finalCreds.Enphase.SessionID)
 	})
+
+	t.Run("Update Settings - Franklin Blank GatewayID Clears Existing Gateway And Triggers Re-Discovery", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockFranklin := &mockESS{MockName: "franklin"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockFranklin)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingCreds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:  "owner@example.com",
+				Password:  "old-pass",
+				Token:     "cached-tok",
+				GatewayID: "GW-OLD",
+			},
+		}
+		encExisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "franklin",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			CustomGridSettings:       true,
+			EncryptedCredentials:     encExisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockFranklin.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "franklin"
+		})).Return(nil).Once()
+
+		discoveredCreds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:  "owner@example.com",
+				Password:  "new-pass",
+				Token:     "fresh-tok",
+				GatewayID: "GW-AUTO",
+			},
+		}
+		// Blank GatewayID with the same username must NOT preserve GW-OLD or cached-tok, so Authenticate auto-discovers GW-AUTO.
+		mockFranklin.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Franklin != nil &&
+				c.Franklin.Username == "owner@example.com" &&
+				c.Franklin.Password == "new-pass" &&
+				c.Franklin.GatewayID == "" &&
+				c.Franklin.Token == ""
+		})).Return(discoveredCreds, true, nil).Once()
+
+		var savedSettings types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return s.ESS == "franklin"
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "franklin",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:  "owner@example.com",
+					Password:  "new-pass",
+					GatewayID: "",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody)), "admin@example.com", true)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		savedCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedSettings.EncryptedCredentials)
+		require.NoError(t, err)
+		if assert.NotNil(t, savedCreds.Franklin) {
+			assert.Equal(t, "GW-AUTO", savedCreds.Franklin.GatewayID)
+			assert.Equal(t, "fresh-tok", savedCreds.Franklin.Token)
+		}
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockFranklin.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Tesla Fresh AuthCode Resets Saved EnergySiteID While Retry Preserves It", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockTesla := &mockESS{MockName: "tesla"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockTesla)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		// Previously linked Tesla account had site 11111 and SN-OLD
+		existingCreds := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AccessToken:  "old-access",
+				RefreshToken: "old-refresh",
+				EnergySiteID: 11111,
+				SerialNumber: "SN-OLD",
+			},
+		}
+		encExisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "tesla",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			CustomGridSettings:       true,
+			EncryptedCredentials:     encExisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockTesla.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "tesla"
+		})).Return(nil)
+
+		// Attempt 1: Fresh OAuth AuthCode without SerialNumber must clear old EnergySiteID/SerialNumber/tokens so Authenticate discovers site 22222.
+		redeemedTesla := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AccessToken:  "new-access",
+				RefreshToken: "new-refresh",
+				EnergySiteID: 22222,
+			},
+		}
+		mockTesla.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Tesla != nil &&
+				c.Tesla.AuthCode == "fresh-oauth-code" &&
+				c.Tesla.EnergySiteID == 0 &&
+				c.Tesla.SerialNumber == "" &&
+				c.Tesla.AccessToken == "" &&
+				c.Tesla.RefreshToken == ""
+		})).Return(redeemedTesla, true, fmt.Errorf("upstream status 503")).Once()
+
+		var savedOnFailure types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnFailure = s
+			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody1, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode: "fresh-oauth-code",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req1 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody1)), "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+
+		// Attempt 2: Retry without AuthCode preserves newly redeemed tokens and discovered EnergySiteID 22222.
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(savedOnFailure, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockTesla.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Tesla != nil &&
+				c.Tesla.AuthCode == "" &&
+				c.Tesla.AccessToken == "new-access" &&
+				c.Tesla.RefreshToken == "new-refresh" &&
+				c.Tesla.EnergySiteID == 22222
+		})).Return(redeemedTesla, false, nil).Once()
+
+		var savedOnSuccess types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnSuccess = s
+			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody2, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{},
+			},
+		})
+		require.NoError(t, err)
+
+		req2 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody2)), "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		finalCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedOnSuccess.EncryptedCredentials)
+		require.NoError(t, err)
+		if assert.NotNil(t, finalCreds.Tesla) {
+			assert.Equal(t, int64(22222), finalCreds.Tesla.EnergySiteID)
+			assert.Equal(t, "new-access", finalCreds.Tesla.AccessToken)
+		}
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockTesla.AssertExpectations(t))
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {

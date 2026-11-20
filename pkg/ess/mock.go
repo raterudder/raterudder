@@ -46,6 +46,14 @@ type MockESS struct {
 	siteID   string
 	location *time.Location
 	strategy string
+	nowFunc  func() time.Time
+}
+
+func (m *MockESS) now() time.Time {
+	if m.nowFunc != nil {
+		return m.nowFunc()
+	}
+	return time.Now()
 }
 
 func newMock(siteID string) *MockESS {
@@ -333,7 +341,7 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
-	now := time.Now().In(m.location)
+	now := m.now().In(m.location)
 	batteryKW, solarKW, homeKW, gridKW := m.advanceState(&state, now)
 
 	if err := mockDB.UpdateESSMockState(ctx, m.siteID, state); err != nil {
@@ -369,7 +377,7 @@ func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	changed := state.BatteryMode != bat || state.SolarMode != sol || state.ChargeToSOC != opts.ChargeToSOC || (opts.MinimumSOC != 0 && state.MinimumSOC != opts.MinimumSOC)
 
 	// advance time to now with current modes before switching
-	m.advanceState(&state, time.Now())
+	m.advanceState(&state, m.now())
 
 	// now set the modes so the next time we can apply them
 	state.BatteryMode = bat
@@ -396,7 +404,7 @@ func (m *MockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 	}
 
 	rawHourlyStatsMap := make(map[string]types.EnergyStats)
-	now := time.Now().In(m.location)
+	now := m.now().In(m.location)
 
 	if state.Timestamp.IsZero() {
 		// Start from the beginning of the first requested day

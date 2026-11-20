@@ -71,6 +71,11 @@ const (
 	// Special runtime overlay mode IDs reported in RuntimeData.TOUID (JSON "mode"):
 	franklinOverlayModeStormHedge franklinWorkMode = 6 // Storm Hedge active override (grid charge, 100% reserve SOC)
 	franklinOverlayModeVPP        franklinWorkMode = 9 // Virtual Power Plant (VPP) demand response event active
+
+	// WorkMode aliases:
+	franklinWorkModeStormHedge    = franklinOverlayModeStormHedge
+	franklinWorkModeVPP           = franklinOverlayModeVPP
+	franklinWorkModeSmartDispatch = franklinWorkModeSmartEnergyDispatch
 )
 
 func (m franklinWorkMode) String() string {
@@ -1629,8 +1634,8 @@ func (f *Franklin) computeFranklinModePlan(
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	targetMode := modes.selfConsumption
-	newReserveSOC := modes.selfConsumption.ReserveSOC
+	var targetMode franklinMode
+	var newReserveSOC float64
 
 	if needsExport {
 		targetMode = modes.touMode
@@ -1691,6 +1696,8 @@ func (f *Franklin) computeFranklinNonExportTarget(
 		if gridChargeDisabled {
 			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control", slog.Any("opts", opts))
 		}
+		// note: since we're not setting emergency backup mode solar will still be
+		// used to power the home first then spill over into the battery
 		if !sc.CanEditReserveSOC {
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return franklinMode{}, 0, errors.New("cannot edit reserve SOC")
@@ -1701,12 +1708,19 @@ func (f *Franklin) computeFranklinNonExportTarget(
 		}
 		return sc, float64(targetSOC), nil
 	case types.BatteryModeLoad, types.BatteryModeExport:
+		// we set the SOC to the minimum battery SOC to ensure we start discharging
+		// if we're somehow less than this soc, we'll charge from the solar, unless
+		// solar is unavailable then it'll charge from the grid
+		// it seems like this accepts an int value
 		return sc, minSOC, nil
 	case types.BatteryModeStandby:
+		// we floor the SOC to ensure we don't set it to a value that would cause the
+		// battery to charge
 		if !sc.CanEditReserveSOC {
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return franklinMode{}, 0, errors.New("cannot edit reserve SOC")
 		}
+		// make sure we don't set it to less than the minimum battery SOC
 		return sc, max(math.Floor(currentSOC), minSOC), nil
 	case types.BatteryModeNoChange:
 		return modes.currentMode, sc.ReserveSOC, nil
@@ -1829,6 +1843,10 @@ func (f *Franklin) applyFranklinModeUpdates(
 	}
 
 	if scheduleChanged && f.touDispatchDelay > 0 {
+		// Calling saveTouDispatch causes the FranklinWH gateway to reload its TOU dispatch
+		// package ("Package settings are taking effect, please check later"). Sending
+		// updateSocV2 or updateTouModeV2 immediately after saveTouDispatch can cause the
+		// gateway to delay or ignore the reserve SOC / operating mode change.
 		log.Ctx(ctx).DebugContext(
 			ctx,
 			"waiting after saving franklin tou schedule before updating mode/soc",
@@ -1913,6 +1931,8 @@ func (f *Franklin) postFranklinModeUpdate(ctx context.Context, targetMode frankl
 	params.Set("electricityType", fmt.Sprint(targetMode.ElectricityType))
 	params.Set("oldIndex", fmt.Sprint(targetMode.OldIndex))
 	params.Set("stromEn", fmt.Sprint(stormHedgeEnabled))
+	// round to the nearest integer to minimize the chance of the battery charging
+	// or discharging when we don't want it to
 	params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
 
 	req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", params)
@@ -2356,24 +2376,34 @@ type franklinBatteryInfo struct {
 type franklinOffGridFlag int
 
 const (
-	franklinOffGridFlagOnGrid franklinOffGridFlag = 0
+	franklinOffGridFlagOnGrid  franklinOffGridFlag = 0
+	franklinOffGridFlagOffGrid franklinOffGridFlag = 1
 )
 
 type franklinRunStatus int
 
 const (
-	franklinRunStatusFault franklinRunStatus = 3
+	franklinRunStatusStandby            franklinRunStatus = 0
+	franklinRunStatusCharging           franklinRunStatus = 1
+	franklinRunStatusDischarging        franklinRunStatus = 2
+	franklinRunStatusFault              franklinRunStatus = 3
+	franklinRunStatusOffGridStandby     franklinRunStatus = 5
+	franklinRunStatusOffGridCharging    franklinRunStatus = 6
+	franklinRunStatusOffGridDischarging franklinRunStatus = 7
+	franklinRunStatusDebug              franklinRunStatus = 8
 )
 
 type franklinGridMaxFlag int
 
 const (
-	franklinGridMaxFlagChargeFromGrid franklinGridMaxFlag = 2
+	franklinGridMaxFlagNoChargeFromGrid franklinGridMaxFlag = 1
+	franklinGridMaxFlagChargeFromGrid   franklinGridMaxFlag = 2
 )
 
 type franklinGridFeedMaxFlag int
 
 const (
+	franklinGridFeedMaxFlagNoExport        franklinGridFeedMaxFlag = 3
 	franklinGridFeedMaxFlagSolarOnly       franklinGridFeedMaxFlag = 1
 	franklinGridFeedMaxFlagBatteryAndSolar franklinGridFeedMaxFlag = 2
 )
@@ -2381,11 +2411,13 @@ const (
 type franklinDispatchID int
 
 const (
-	franklinDispatchAPowerToHome          franklinDispatchID = 1 // aPower supplies home, solar exported to grid (code F)
-	franklinDispatchAPowerOnStandby       franklinDispatchID = 2 // aPower on standby, excess solar exported to grid (code B)
-	franklinDispatchSelfConsumption       franklinDispatchID = 6 // Home load priority: solar, aPower, grid (code D)
-	franklinDispatchAPowerToHomeAndGrid   franklinDispatchID = 7 // aPower supplies home & battery exports to grid, solar exported to grid (code H)
-	franklinDispatchAPowerChargesFromGrid franklinDispatchID = 8 // Solar and grid charge aPower, grid supplies home (code G)
+	franklinDispatchAPowerToHome           franklinDispatchID = 1 // aPower supplies home, solar exported to grid (code F)
+	franklinDispatchAPowerOnStandby        franklinDispatchID = 2 // aPower on standby, excess solar exported to grid (code B)
+	franklinDispatchAPowerChargesFromSolar franklinDispatchID = 3 // Solar charges aPower, grid supplies home (code E)
+	franklinDispatchSelfConsumption        franklinDispatchID = 6 // Home load priority: solar, aPower, grid (code D)
+	franklinDispatchAPowerToHomeAndGrid    franklinDispatchID = 7 // aPower supplies home & battery exports to grid, solar exported to grid (code H)
+	franklinDispatchAPowerChargesFromGrid  franklinDispatchID = 8 // Solar and grid charge aPower, grid supplies home (code G)
+	franklinDispatchZeroImport             franklinDispatchID = 9 // Zero import: home runs on battery (code I)
 )
 
 type franklinGetPowerControlSettingResult struct {
