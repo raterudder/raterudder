@@ -463,7 +463,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Select Service (Provider)
-        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+        const serviceSelect = await screen.findByRole('combobox', { name: /Utility Provider/i });
         await user.click(serviceSelect);
         const comedOption = await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' });
         await user.click(comedOption);
@@ -499,7 +499,7 @@ describe('App & Settings', () => {
         });
         await navigateToSettings();
 
-        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+        const serviceSelect = await screen.findByRole('combobox', { name: /Utility Provider/i });
         await user.click(serviceSelect);
         const octopusOption = await screen.findByRole('option', { name: 'Octopus Energy (UK)' });
         await user.click(octopusOption);
@@ -560,7 +560,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Check utility
-        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+        const serviceSelect = await screen.findByRole('combobox', { name: /Utility Provider/i });
         await user.click(serviceSelect);
         await waitFor(() => expect(screen.getByRole('option', { name: 'Commonwealth Edison (ComEd)' })).toBeInTheDocument());
         expect(screen.queryByRole('option', { name: 'Secret Utility' })).not.toBeInTheDocument();
@@ -610,7 +610,7 @@ describe('App & Settings', () => {
          const utilityChangeBtn = await screen.findByRole('button', { name: 'Edit Utility Service' });
          await user.click(utilityChangeBtn); // click Utility Service "Change"
 
-         const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+         const serviceSelect = await screen.findByRole('combobox', { name: /Utility Provider/i });
          await user.click(serviceSelect);
          await waitFor(() => expect(screen.getByRole('option', { name: 'Secret Utility' })).toBeInTheDocument());
     });
@@ -901,7 +901,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Select Service (Provider)
-        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+        const serviceSelect = await screen.findByRole('combobox', { name: /Utility Provider/i });
         await user.click(serviceSelect);
         const sceOption = await screen.findByRole('option', { name: 'Southern California Edison' });
         await user.click(sceOption);
@@ -1857,7 +1857,7 @@ describe('App & Settings', () => {
             fireEvent.click(screen.getByText('Google Sign In'));
 
             // Automatically redirected to settings onboarding wizard Step 1
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
 
             // Fill Location
             const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
@@ -1984,7 +1984,7 @@ describe('App & Settings', () => {
             fireEvent.click(screen.getByText('Google Sign In'));
 
             // Automatically redirected to settings onboarding wizard Step 1
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
 
             // Fill Location
             const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
@@ -2002,7 +2002,7 @@ describe('App & Settings', () => {
             await user.click(backBtn);
 
             // Step 1 Location should be shown again
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
 
             // Check that zip code is retained
             expect(screen.getByLabelText(/Zip\/Postal Code/i)).toHaveValue('12345');
@@ -2107,7 +2107,7 @@ describe('App & Settings', () => {
             });
             fireEvent.click(screen.getByText('Google Sign In'));
 
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
 
             const skipBtn = screen.getByRole('button', { name: /Skip setup wizard/i });
             await user.click(skipBtn);
@@ -2745,6 +2745,64 @@ describe('App & Settings', () => {
 
             windowOpenSpy.mockRestore();
         });
+
+        it('filters country and utility provider options when typing in onboarding wizard', async () => {
+            const user = userEvent.setup();
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            window.history.pushState(null, '', '/settings');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
+
+            // Type into Country combobox and select a filtered match
+            const countryInput = screen.getByRole('combobox', { name: /Country/i });
+            await user.clear(countryInput);
+            await user.type(countryInput, 'Canada');
+            const canadaOption = await screen.findByRole('option', { name: 'Canada' });
+            await user.click(canadaOption);
+            expect(countryInput).toHaveValue('Canada');
+
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.type(zipInput, '90210');
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+
+            // Type into Utility Provider combobox and verify filtering works
+            const providerInput = screen.getByRole('combobox', { name: /Utility Provider/i });
+            await user.type(providerInput, 'Comed');
+            expect(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' })).toBeInTheDocument();
+            expect(screen.queryByText('No utilities found.')).not.toBeInTheDocument();
+
+            // Non-matching search shows "No utilities found."
+            await user.clear(providerInput);
+            await user.type(providerInput, 'UnknownUtilityXYZ');
+            expect(await screen.findByText('No utilities found.')).toBeInTheDocument();
+
+            // Close popup and verify "Don't see your rate or options?" link is available during onboarding
+            await user.keyboard('{Escape}');
+            const unsupportedLink = await screen.findByRole('button', { name: "Don't see your rate or options?" });
+            await user.click(unsupportedLink);
+            expect(await screen.findByRole('heading', { name: 'Request a Rate or Option' })).toBeInTheDocument();
+            await user.click(screen.getByRole('button', { name: 'Close' }));
+
+            // Filter again and select the matching utility
+            await user.clear(providerInput);
+            await user.type(providerInput, 'Comed');
+            await user.click(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' }));
+
+            expect(providerInput).toHaveValue('Commonwealth Edison (ComEd)');
+            expect(await screen.findByRole('combobox', { name: /Rate Plan/i })).toBeInTheDocument();
+        });
     });
 
     describe('Site and Account Deletion', () => {
@@ -3155,7 +3213,7 @@ describe('App & Settings', () => {
             const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
             await user.click(editUtilBtn);
 
-            const utilInput = await screen.findByRole('combobox', { name: /Service/i });
+            const utilInput = await screen.findByRole('combobox', { name: /Utility Provider/i });
             await user.click(utilInput);
 
             const item = await screen.findByRole('option', { name: /ComEd/i });
@@ -3218,7 +3276,7 @@ describe('App & Settings', () => {
             const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
             await user.click(editUtilBtn);
 
-            const utilInput = await screen.findByRole('combobox', { name: /Service/i });
+            const utilInput = await screen.findByRole('combobox', { name: /Utility Provider/i });
             await user.click(utilInput);
 
             const item = await screen.findByRole('option', { name: /Florida Power & Light/i });

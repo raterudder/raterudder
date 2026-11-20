@@ -194,4 +194,24 @@ describe('BetaInterstitialPage Component', () => {
             });
         }
     });
+
+    it('filters utility provider options when typing in interest form', async () => {
+        const user = userEvent.setup();
+        (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
+        render(<BetaInterstitialPage />);
+
+        const utilityInput = await screen.findByRole('combobox', { name: /Utility Provider/i });
+        await user.type(utilityInput, 'Comed');
+        expect(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' })).toBeInTheDocument();
+        expect(screen.queryByText('No utilities found.')).not.toBeInTheDocument();
+
+        await user.clear(utilityInput);
+        await user.type(utilityInput, 'UnknownUtilityXYZ');
+        expect(await screen.findByText('No utilities found.')).toBeInTheDocument();
+
+        await user.clear(utilityInput);
+        await user.type(utilityInput, 'Comed');
+        await user.click(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' }));
+        expect(utilityInput).toHaveValue('Commonwealth Edison (ComEd)');
+    });
 });

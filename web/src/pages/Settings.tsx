@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
@@ -56,10 +56,10 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
             <Field.Root className="form-group">
                 <Field.Label htmlFor="countryCode">Country</Field.Label>
                 <Combobox.Root
-                    value={settings.countryCode || ''}
-                    onValueChange={(val) => onChange("countryCode", val as string)}
+                    value={countries.find(c => c.value === settings.countryCode) ?? null}
+                    onValueChange={(item) => onChange("countryCode", item?.value ?? '')}
                     items={countries}
-                    itemToStringLabel={(val) => countries.find(c => c.value === val)?.label || val}
+                    isItemEqualToValue={(item, val) => item.value === val.value}
                 >
                     <div className="combobox-input-wrapper select-trigger">
                         <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />
@@ -74,7 +74,7 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
                             <Combobox.Popup className="select-popup">
                                 <Combobox.List>
                                     {(item: { label: string, value: string }) => (
-                                        <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                        <Combobox.Item key={item.value} value={item} className="select-item">
                                             {item.label}
                                         </Combobox.Item>
                                     )}
@@ -154,23 +154,28 @@ const UtilityForm = ({
     setIsUtilityDirty,
     onUtilityChange
 }: UtilityFormProps) => {
-    const sortedUtilities = utilities
+    const sortedUtilities = useMemo(() => utilities
         .filter(u => !u.hidden || u.id === settings.utilityProvider)
         .map(u => ({ label: u.name, value: u.id }))
-        .sort((a, b) => a.label.localeCompare(b.label));
+        .sort((a, b) => a.label.localeCompare(b.label)), [utilities, settings.utilityProvider]);
+
+    const selectedUtility = useMemo(
+        () => sortedUtilities.find(u => u.value === settings.utilityProvider) ?? null,
+        [sortedUtilities, settings.utilityProvider]
+    );
 
     const renderFormFields = () => (
         <>
             <Field.Root className="form-group">
                 <Field.Label htmlFor={isWizard ? "wizardUtilityService" : "utilityService"}>
-                    {isWizard ? "Utility Provider" : "Service"}
+                    Utility Provider
                 </Field.Label>
                 <Combobox.Root
-                    value={settings.utilityProvider || ''}
-                    onValueChange={(value) => {
+                    value={selectedUtility}
+                    onValueChange={(item) => {
                         if (setEditUtility) setEditUtility(true);
                         if (setIsUtilityDirty) setIsUtilityDirty(true);
-                        const providerID = value as string;
+                        const providerID = item?.value ?? '';
                         const provider = utilities.find(u => u.id === providerID);
                         const newSettings = {
                             ...settings,
@@ -197,11 +202,11 @@ const UtilityForm = ({
                         }
                     }}
                     items={sortedUtilities}
-                    itemToStringLabel={(val) => utilities.find(u => u.id === val)?.name || val}
+                    isItemEqualToValue={(item, val) => item.value === val.value}
                 >
                     <div className="combobox-input-wrapper select-trigger">
                         <Combobox.Input
-                            placeholder="Select a service..."
+                            placeholder="Select a utility..."
                             id={isWizard ? "wizardUtilityService" : "utilityService"}
                             className="combobox-input"
                         />
@@ -215,11 +220,11 @@ const UtilityForm = ({
                         <Combobox.Positioner className="select-positioner">
                             <Combobox.Popup className="select-popup">
                                 <Combobox.Empty>
-                                    <div className="select-item" style={{ pointerEvents: 'none' }}>No services found.</div>
+                                    <div className="select-item" style={{ pointerEvents: 'none' }}>No utilities found.</div>
                                 </Combobox.Empty>
                                 <Combobox.List>
                                     {(item: { label: string, value: string }) => (
-                                        <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                        <Combobox.Item key={item.value} value={item} className="select-item">
                                             {item.label}
                                         </Combobox.Item>
                                     )}
@@ -373,32 +378,30 @@ const UtilityForm = ({
                 );
             })()}
 
-            {!isWizard && (
-                <div className="utility-rate-unsupported-link">
-                    <Dialog.Root>
-                        <Dialog.Trigger className="inline-link" type="button">
-                            Don't see your rate or options?
-                        </Dialog.Trigger>
-                        <Dialog.Portal>
-                            <Dialog.Backdrop className="dialog-backdrop" />
-                            <Dialog.Popup className="dialog-popup">
-                                <Dialog.Title className="dialog-title">Request a Rate or Option</Dialog.Title>
-                                <Dialog.Description className="dialog-description">
-                                    Let us know which utility provider, state, or rate plan options you need.
-                                </Dialog.Description>
-                                <InterestForm
-                                    utilitiesList={utilities}
-                                    hideBattery={true}
-                                    alwaysShowDetails={true}
-                                />
-                                <Dialog.Close className="btn btn-secondary dialog-close-btn" type="button">
-                                    Close
-                                </Dialog.Close>
-                            </Dialog.Popup>
-                        </Dialog.Portal>
-                    </Dialog.Root>
-                </div>
-            )}
+            <div className="utility-rate-unsupported-link">
+                <Dialog.Root>
+                    <Dialog.Trigger className="inline-link" type="button">
+                        Don't see your rate or options?
+                    </Dialog.Trigger>
+                    <Dialog.Portal>
+                        <Dialog.Backdrop className="dialog-backdrop" />
+                        <Dialog.Popup className="dialog-popup">
+                            <Dialog.Title className="dialog-title">Request a Rate or Option</Dialog.Title>
+                            <Dialog.Description className="dialog-description">
+                                Let us know which utility provider, state, or rate plan options you need.
+                            </Dialog.Description>
+                            <InterestForm
+                                utilitiesList={utilities}
+                                hideBattery={true}
+                                alwaysShowDetails={true}
+                            />
+                            <Dialog.Close className="btn btn-secondary dialog-close-btn" type="button">
+                                Close
+                            </Dialog.Close>
+                        </Dialog.Popup>
+                    </Dialog.Portal>
+                </Dialog.Root>
+            </div>
 
             {!isWizard && editUtility && setEditUtility && (
                 <button type="button" className="text-button cancel-button" onClick={() => setEditUtility(false)} aria-label="Finish editing Utility Service">Done</button>

@@ -5,7 +5,7 @@ import { analyzer } from 'vite-bundle-analyzer'
 import { buildSync } from 'esbuild'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { PUBLIC_PAGES_SEO, renderSubpageHtml } from './src/utils/seo'
+import { PUBLIC_PAGES_SEO, renderSubpageHtml } from './src/utils/seo.ts'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
