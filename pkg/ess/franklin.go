@@ -1566,8 +1566,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return false, err
 	}
 
-	if skip, handled := f.checkFranklinStormOrBackup(ctx, bat, rd, modes); handled {
-		return skip, nil
+	if handled := f.checkFranklinStormOrBackup(ctx, bat, rd, modes); handled {
+		return false, nil
 	}
 
 	if modes.selfConsumption == (franklinMode{}) {
@@ -1598,11 +1598,11 @@ func (f *Franklin) checkFranklinStormOrBackup(
 	bat types.BatteryMode,
 	rd franklinDeviceCompositeInfoResult,
 	modes availableModes,
-) (bool, bool) {
+) bool {
 	isStormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
 	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
 	if !isStormHedge && !isBackup {
-		return false, false
+		return false
 	}
 	if bat != types.BatteryModeNoChange {
 		log.Ctx(ctx).DebugContext(ctx, "storm hedge or backup active, skipping mode change",
@@ -1611,7 +1611,7 @@ func (f *Franklin) checkFranklinStormOrBackup(
 			slog.Bool("isBackup", isBackup),
 		)
 	}
-	return false, true
+	return true
 }
 
 func (f *Franklin) computeFranklinModePlan(

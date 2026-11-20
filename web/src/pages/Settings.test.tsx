@@ -1955,7 +1955,7 @@ describe('App & Settings', () => {
                     ],
                 },
             ]);
-            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+            (api.submitESSStage as any).mockResolvedValue({ success: true });
 
             await navigateToSettings();
 
