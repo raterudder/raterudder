@@ -151,3 +151,73 @@ func TestClassifyTOUScheduleTiers(t *testing.T) {
 		assert.Len(t, tierPeriods[touTierOnPeak], 1)
 	})
 }
+
+type failingApplySystem struct {
+	System
+	name string
+	err  error
+}
+
+func (f *failingApplySystem) Name() string {
+	return f.name
+}
+
+func (f *failingApplySystem) ApplySettings(_ context.Context, _ types.Settings) error {
+	return f.err
+}
+
+func TestSite(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Empty SiteID Uses SiteIDNone And Reuses Existing Instance", func(t *testing.T) {
+		m := NewMap()
+		sys1, err := m.Site(ctx, "", types.Settings{ESS: "mock", MinBatterySOC: 20})
+		require.NoError(t, err)
+		require.NotNil(t, sys1)
+		assert.Equal(t, "mock", sys1.Name())
+
+		// Empty ESS in settings reuses cached instance for SiteIDNone and applies updated settings
+		sys2, err := m.Site(ctx, types.SiteIDNone, types.Settings{ESS: "", MinBatterySOC: 35})
+		require.NoError(t, err)
+		assert.Same(t, sys1, sys2)
+		assert.Equal(t, 35.0, sys2.(*MockESS).settings.MinBatterySOC)
+	})
+
+	t.Run("Switches Provider When Settings ESS Changes", func(t *testing.T) {
+		m := NewMap()
+		m.baseTesla = &baseTesla{clientID: "test-client"}
+
+		franklinSys, err := m.Site(ctx, "site-1", types.Settings{ESS: "franklin"})
+		require.NoError(t, err)
+		assert.Equal(t, "franklin", franklinSys.Name())
+
+		enphaseSys, err := m.Site(ctx, "site-1", types.Settings{ESS: "enphase"})
+		require.NoError(t, err)
+		assert.Equal(t, "enphase", enphaseSys.Name())
+		assert.NotSame(t, franklinSys, enphaseSys)
+
+		teslaSys, err := m.Site(ctx, "site-1", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+		assert.Equal(t, "tesla", teslaSys.Name())
+		assert.NotSame(t, enphaseSys, teslaSys)
+	})
+
+	t.Run("Errors On Unknown ESS Or Unconfigured Tesla", func(t *testing.T) {
+		m := NewMap()
+
+		_, err := m.Site(ctx, "site-unknown", types.Settings{ESS: "nonexistent"})
+		require.ErrorContains(t, err, "unknown ESS system: nonexistent")
+
+		_, err = m.Site(ctx, "site-tesla", types.Settings{ESS: "tesla"})
+		require.ErrorContains(t, err, "tesla client is not configured")
+	})
+
+	t.Run("Propagates ApplySettings Error On Cached System", func(t *testing.T) {
+		m := NewMap()
+		expectedErr := assert.AnError
+		m.SetSystem("site-err", &failingApplySystem{name: "mock", err: expectedErr})
+
+		_, err := m.Site(ctx, "site-err", types.Settings{ESS: "mock"})
+		require.ErrorIs(t, err, expectedErr)
+	})
+}

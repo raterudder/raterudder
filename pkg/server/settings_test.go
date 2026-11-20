@@ -463,6 +463,52 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, testTime, savedSettings.ESSAuthStatus.LastAttempt, "LastAttempt should be updated to now")
 	})
 
+	t.Run("getESSSystem Saves Rotated Credentials When Authenticate Fails With Updated True", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		essMap := ess.NewMap()
+		mockES := &mockESS{MockName: "tesla"}
+		essMap.SetSystem("site1", mockES)
+
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+			nowFunc:       func() time.Time { return testTime },
+		}
+
+		rotated := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "rotated-access",
+				RefreshToken: "rotated-refresh",
+				EnergySiteID: 99,
+			},
+		}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(rotated, true, fmt.Errorf("validation failed")).Once()
+
+		var savedSettings types.Settings
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return s.ESSAuthStatus.ConsecutiveFailures == 1 && len(s.EncryptedCredentials) > 0
+		}), 1, mock.Anything).Return(testTime, nil).Once()
+
+		_, outSV, err := srv.getESSSystem(context.Background(), "site1", settingsWithVersion{
+			Settings: types.Settings{ESS: "tesla"},
+			version:  1,
+		}, types.Credentials{Tesla: &types.TeslaCredentials{AccessToken: "old-access"}})
+		require.ErrorContains(t, err, "validation failed")
+
+		decrypted, _, decErr := srv.decryptCredentials(context.Background(), "site1", savedSettings.EncryptedCredentials)
+		require.NoError(t, decErr)
+		require.NotNil(t, decrypted.Tesla)
+		assert.Equal(t, "rotated-access", decrypted.Tesla.AccessToken)
+		assert.Equal(t, "rotated-refresh", decrypted.Tesla.RefreshToken)
+		assert.Equal(t, testTime, outSV.updatedAt)
+	})
+
 	t.Run("getESSSystem Authentication Failure - Max Failures Reached", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
@@ -2801,6 +2847,379 @@ func TestHandleUpdateSettings(t *testing.T) {
 			assert.True(t, mockES.AssertExpectations(t))
 		})
 	})
+
+	t.Run("Update Settings - Failed Provider Switch Saves Rotated Target Credentials And Preserves Preexisting Provider", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockEnphase := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockEnphase)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		// Existing site uses Franklin with valid stored credentials
+		preexisting := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:  "owner@example.com",
+				Password:  "franklin-pass",
+				Token:     "franklin-session-tok",
+				GatewayID: "GW-001",
+			},
+		}
+		encPreexisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, preexisting)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "franklin",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			EncryptedCredentials:     encPreexisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		// Attempt 1: Switch to Enphase with single-use OTP code; OTP redeems (updated=true) but data.json fails
+		mockEnphase.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "enphase"
+		})).Return(nil)
+
+		redeemedEnphase := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				SessionID:    "enphase-sess-1",
+				ManagerToken: "enphase-mgr-1",
+				SystemID:     888,
+			},
+		}
+		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil && c.Enphase.Code == "112233" && c.Franklin == nil
+		})).Return(redeemedEnphase, true, fmt.Errorf("credential validation failed: upstream 503")).Once()
+
+		var savedOnFailure types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnFailure = s
+			return s.ESS == "franklin" && s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody1, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "enphase",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{
+					Username: "owner@example.com",
+					Code:     "112233",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req1 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody1)), "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+
+		// Verify BOTH preexisting Franklin credentials AND redeemed Enphase session tokens were saved!
+		savedCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedOnFailure.EncryptedCredentials)
+		require.NoError(t, err)
+		require.NotNil(t, savedCreds.Franklin, "preexisting Franklin credentials must be preserved when provider switch fails")
+		assert.Equal(t, "franklin-session-tok", savedCreds.Franklin.Token)
+		require.NotNil(t, savedCreds.Enphase, "redeemed Enphase session credentials must be saved on failure")
+		assert.Equal(t, "enphase-sess-1", savedCreds.Enphase.SessionID)
+
+		// Attempt 2: User clicks Save again without OTP code (cleared by UI); merged Enphase session tokens succeed!
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(savedOnFailure, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil && c.Enphase.SessionID == "enphase-sess-1" && c.Enphase.Code == "" && c.Franklin == nil
+		})).Return(redeemedEnphase, false, nil).Once()
+		mockEnphase.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
+		mockS.On("UpsertEnergyHistories", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentEnergyStatsVersion).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+		var savedOnSuccess types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnSuccess = s
+			return s.ESS == "enphase" && s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody2, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "enphase",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{
+					Username: "owner@example.com",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req2 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody2)), "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		finalCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedOnSuccess.EncryptedCredentials)
+		require.NoError(t, err)
+		assert.Nil(t, finalCreds.Franklin, "old provider credentials cleared once switch succeeds")
+		require.NotNil(t, finalCreds.Enphase)
+		assert.Equal(t, "enphase-sess-1", finalCreds.Enphase.SessionID)
+	})
+
+	t.Run("Update Settings - Franklin Blank GatewayID Clears Existing Gateway And Triggers Re-Discovery", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockFranklin := &mockESS{MockName: "franklin"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockFranklin)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingCreds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:  "owner@example.com",
+				Password:  "old-pass",
+				Token:     "cached-tok",
+				GatewayID: "GW-OLD",
+			},
+		}
+		encExisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "franklin",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			CustomGridSettings:       true,
+			EncryptedCredentials:     encExisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockFranklin.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "franklin"
+		})).Return(nil).Once()
+
+		discoveredCreds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:  "owner@example.com",
+				Password:  "new-pass",
+				Token:     "fresh-tok",
+				GatewayID: "GW-AUTO",
+			},
+		}
+		// Blank GatewayID with the same username must NOT preserve GW-OLD or cached-tok, so Authenticate auto-discovers GW-AUTO.
+		mockFranklin.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Franklin != nil &&
+				c.Franklin.Username == "owner@example.com" &&
+				c.Franklin.Password == "new-pass" &&
+				c.Franklin.GatewayID == "" &&
+				c.Franklin.Token == ""
+		})).Return(discoveredCreds, true, nil).Once()
+
+		var savedSettings types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return s.ESS == "franklin"
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "franklin",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:  "owner@example.com",
+					Password:  "new-pass",
+					GatewayID: "",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody)), "admin@example.com", true)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		savedCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedSettings.EncryptedCredentials)
+		require.NoError(t, err)
+		if assert.NotNil(t, savedCreds.Franklin) {
+			assert.Equal(t, "GW-AUTO", savedCreds.Franklin.GatewayID)
+			assert.Equal(t, "fresh-tok", savedCreds.Franklin.Token)
+		}
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockFranklin.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Tesla Fresh AuthCode Resets Saved EnergySiteID While Retry Preserves It", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockTesla := &mockESS{MockName: "tesla"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockTesla)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		// Previously linked Tesla account had site 11111 and SN-OLD
+		existingCreds := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AccessToken:  "old-access",
+				RefreshToken: "old-refresh",
+				EnergySiteID: 11111,
+				SerialNumber: "SN-OLD",
+			},
+		}
+		encExisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "tesla",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			CustomGridSettings:       true,
+			EncryptedCredentials:     encExisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockTesla.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "tesla"
+		})).Return(nil)
+
+		// Attempt 1: Fresh OAuth AuthCode without SerialNumber must clear old EnergySiteID/SerialNumber/tokens so Authenticate discovers site 22222.
+		redeemedTesla := types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AccessToken:  "new-access",
+				RefreshToken: "new-refresh",
+				EnergySiteID: 22222,
+			},
+		}
+		mockTesla.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Tesla != nil &&
+				c.Tesla.AuthCode == "fresh-oauth-code" &&
+				c.Tesla.EnergySiteID == 0 &&
+				c.Tesla.SerialNumber == "" &&
+				c.Tesla.AccessToken == "" &&
+				c.Tesla.RefreshToken == ""
+		})).Return(redeemedTesla, true, fmt.Errorf("upstream status 503")).Once()
+
+		var savedOnFailure types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnFailure = s
+			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody1, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode: "fresh-oauth-code",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req1 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody1)), "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+
+		// Attempt 2: Retry without AuthCode preserves newly redeemed tokens and discovered EnergySiteID 22222.
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(savedOnFailure, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockTesla.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Tesla != nil &&
+				c.Tesla.AuthCode == "" &&
+				c.Tesla.AccessToken == "new-access" &&
+				c.Tesla.RefreshToken == "new-refresh" &&
+				c.Tesla.EnergySiteID == 22222
+		})).Return(redeemedTesla, false, nil).Once()
+
+		var savedOnSuccess types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedOnSuccess = s
+			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody2, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{},
+			},
+		})
+		require.NoError(t, err)
+
+		req2 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody2)), "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		finalCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedOnSuccess.EncryptedCredentials)
+		require.NoError(t, err)
+		if assert.NotNil(t, finalCreds.Tesla) {
+			assert.Equal(t, int64(22222), finalCreds.Tesla.EnergySiteID)
+			assert.Equal(t, "new-access", finalCreds.Tesla.AccessToken)
+		}
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockTesla.AssertExpectations(t))
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {
@@ -3312,6 +3731,62 @@ func TestHandleESSStage(t *testing.T) {
 
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Stage saves rotated credentials on error while preserving preexisting provider", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		preexisting := types.Credentials{
+			Franklin: &types.FranklinCredentials{Username: "owner@example.com", Token: "frank-tok"},
+		}
+		encPreexisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, preexisting)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS:                  "franklin",
+			EncryptedCredentials: encPreexisting,
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		rotatedStage := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				SessionID:    "stage-sess",
+				ManagerToken: "stage-mgr",
+				SystemID:     555,
+			},
+		}
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil && c.Enphase.Code == "654321" && c.Franklin == nil
+		})).Return(rotatedStage, true, fmt.Errorf("validation failed")).Once()
+
+		var savedSettings types.Settings
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return s.ESS == "franklin" && s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		body, err := json.Marshal(map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "owner@example.com",
+					"code":     "654321",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req := withUser(httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(body)), "admin@example.com", true)
+		w := httptest.NewRecorder()
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+
+		decrypted, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedSettings.EncryptedCredentials)
+		require.NoError(t, err)
+		require.NotNil(t, decrypted.Franklin)
+		assert.Equal(t, "frank-tok", decrypted.Franklin.Token)
+		require.NotNil(t, decrypted.Enphase)
+		assert.Equal(t, "stage-sess", decrypted.Enphase.SessionID)
 	})
 }
 

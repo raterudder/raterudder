@@ -1955,7 +1955,7 @@ describe('App & Settings', () => {
                     ],
                 },
             ]);
-            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+            (api.submitESSStage as any).mockResolvedValue({ success: true });
 
             await navigateToSettings();
 
@@ -1992,6 +1992,121 @@ describe('App & Settings', () => {
 
             await waitFor(() => {
                 expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
+            });
+        });
+
+        it('clears consumed one-time code on onboarding wizard save failure so retry uses saved session', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false,
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true,
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {},
+                features: { enphaseExportSchedules: true },
+            });
+            (api.fetchESSList as any).mockResolvedValue([
+                ...defaultESSProviders,
+                {
+                    id: 'enphase',
+                    name: 'Enphase',
+                    credentials: [
+                        { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                        { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1, oneTime: true },
+                    ],
+                },
+            ]);
+            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+            await waitFor(() => expect(screen.getByText('Google Sign In')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Step 1: Location
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 2: Utility
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+            await user.click(screen.getByRole('combobox', { name: /Utility Provider/i }));
+            await user.click(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' }));
+            await user.click(screen.getByRole('combobox', { name: /Rate Plan/i }));
+            await user.click(await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' }));
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 3: ESS (Enphase)
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+            await user.click(screen.getByRole('combobox', { name: /System Type/i }));
+            await user.click(await screen.findByRole('option', { name: 'Enphase' }));
+
+            const emailInput = await screen.findByPlaceholderText(/Enter Email/i);
+            await user.type(emailInput, 'test@example.com');
+            await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+            const codeInput = await screen.findByPlaceholderText(/Enter Email Code/i);
+            await user.type(codeInput, '654321');
+
+            // First Complete Setup fails after OTP is redeemed
+            (updateSettings as any).mockRejectedValueOnce(new Error('credential validation failed: upstream 503'));
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('credential validation failed: upstream 503')).toBeInTheDocument();
+            });
+            expect(updateSettings).toHaveBeenCalledTimes(1);
+            expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+                ess: 'enphase',
+            }), expect.any(String), {
+                enphase: {
+                    username: 'test@example.com',
+                    code: '654321',
+                },
+            });
+
+            // One-time code input must be cleared so retry does not resend consumed OTP
+            expect(screen.getByPlaceholderText(/Enter Email Code/i)).toHaveValue('');
+
+            // Second Complete Setup succeeds without resending code
+            (updateSettings as any).mockResolvedValueOnce(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'enphase',
+                gridChargeBatteries: true,
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                manageTOUSchedules: true,
+                hasCredentials: { enphase: true },
+                features: { enphaseExportSchedules: true },
+            });
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+            });
+            expect(updateSettings).toHaveBeenCalledTimes(2);
+            expect(updateSettings).toHaveBeenNthCalledWith(2, expect.objectContaining({
+                ess: 'enphase',
+            }), expect.any(String), {
+                enphase: {
+                    username: 'test@example.com',
+                },
             });
         });
     });

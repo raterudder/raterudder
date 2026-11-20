@@ -151,116 +151,33 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	needLogin := creds.Enphase.SessionID == "" || creds.Enphase.ManagerToken == "" || creds.Enphase.SystemID == 0
-	if !needLogin && e.username != "" {
-		// Check if credentials changed
-		if e.username != creds.Enphase.Username {
-			needLogin = true
-		} else if creds.Enphase.Password != "" && e.password != creds.Enphase.Password {
-			needLogin = true
-		} else if creds.Enphase.Code != "" {
-			needLogin = true
-		}
-	}
+	enphaseCreds := *creds.Enphase
+	creds.Enphase = &enphaseCreds
 
-	var changed bool
-	if needLogin {
-		var res enphaseLoginResponse
-		var err error
-
-		if creds.Enphase.Code != "" {
-			log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with otp code")
-			res, err = e.loginWithOTP(ctx, creds.Enphase.Username, creds.Enphase.Code)
-			if err != nil {
-				return creds, false, err
-			}
-			// Clear the temporary Code field so we don't store it
-			creds.Enphase.Code = ""
-		} else if creds.Enphase.Password != "" {
-			log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with password")
-			res, err = e.login(ctx, creds.Enphase.Username, creds.Enphase.Password)
-			if err != nil {
-				return creds, false, err
-			}
-		} else {
-			// Trigger OTP generation
-			log.Ctx(ctx).DebugContext(ctx, "triggering enphase otp email code generation")
-			err = e.generateOTP(ctx, creds.Enphase.Username)
-			if err != nil {
-				return creds, false, err
-			}
-			return creds, false, ErrNeedsNextStage
-		}
-
-		if e.systemID != res.SystemID {
-			e.pelExpiry = time.Time{}
-		}
-		e.username = creds.Enphase.Username
-		e.password = creds.Enphase.Password
-		e.sessionID = res.SessionID
-		e.managerToken = res.ManagerToken
-		e.systemID = res.SystemID
-
-		if res.SystemID == 0 {
-			// TODO: should we instead search for a system?
-			return creds, false, errors.New("no enphase default system found")
-		}
-
-		creds.Enphase.SessionID = res.SessionID
-		creds.Enphase.ManagerToken = res.ManagerToken
-		creds.Enphase.SystemID = res.SystemID
-		changed = true
-	} else {
-		log.Ctx(ctx).DebugContext(ctx, "restoring enphase credentials from cache")
-		if e.systemID != creds.Enphase.SystemID {
-			e.pelExpiry = time.Time{}
-		}
-		e.username = creds.Enphase.Username
-		e.password = creds.Enphase.Password
-		e.sessionID = creds.Enphase.SessionID
-		e.managerToken = creds.Enphase.ManagerToken
-		e.systemID = creds.Enphase.SystemID
-		e.userID = creds.Enphase.UserID
+	changed, err := e.loginOrRestoreSession(ctx, creds.Enphase)
+	if err != nil {
+		return creds, changed, err
 	}
 
 	// Ensure cookies are in the jar
 	e.syncCookies()
 
 	// Validate by fetching data.json
-	if res, err := e.getDataWithCache(ctx, true); err != nil {
+	res, err := e.getDataWithCache(ctx, true)
+	if err != nil {
 		// If we didn't just login and we got a 401, try to login and retry
-		if !needLogin && errors.Is(err, errEnphaseUnauthorized) {
-			if e.password != "" {
-				log.Ctx(ctx).DebugContext(ctx, "enphase session expired, retrying login")
-				res, err := e.login(ctx, e.username, e.password)
-				if err != nil {
-					return creds, false, err
-				}
-
-				e.sessionID = res.SessionID
-				e.managerToken = res.ManagerToken
-				e.systemID = res.SystemID
-				e.syncCookies()
-
-				creds.Enphase.SessionID = res.SessionID
-				creds.Enphase.ManagerToken = res.ManagerToken
-				creds.Enphase.SystemID = res.SystemID
+		if !changed && errors.Is(err, errEnphaseUnauthorized) {
+			retryChanged, retryErr := e.retryExpiredSession(ctx, creds.Enphase)
+			if retryChanged {
 				changed = true
-
-				// Retry fetching data
-				_, err = e.getDataWithCache(ctx, true)
-				if err != nil {
-					return creds, false, fmt.Errorf("credential validation failed after retry: %w", err)
-				}
-			} else {
-				log.Ctx(ctx).WarnContext(ctx, "enphase session expired, cannot retry login without password")
-				return creds, false, err
 			}
-		} else {
-			log.Ctx(ctx).WarnContext(ctx, "enphase credential validation failed", slog.Any("error", err))
-			return creds, false, fmt.Errorf("credential validation failed: %w", err)
+			return creds, changed, retryErr
 		}
-	} else if res.App.UserID != 0 {
+		log.Ctx(ctx).WarnContext(ctx, "enphase credential validation failed", slog.Any("error", err))
+		return creds, changed, fmt.Errorf("credential validation failed: %w", err)
+	}
+
+	if res.App.UserID != 0 {
 		e.userID = res.App.UserID
 		if creds.Enphase.UserID != res.App.UserID {
 			creds.Enphase.UserID = res.App.UserID
@@ -269,6 +186,112 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	}
 
 	return creds, changed, nil
+}
+
+func (e *Enphase) needsLogin(c types.EnphaseCredentials) bool {
+	if c.SessionID == "" || c.ManagerToken == "" || c.SystemID == 0 {
+		return true
+	}
+	if e.username == "" {
+		return c.Code != ""
+	}
+	if e.username != c.Username {
+		return true
+	}
+	if c.Password != "" && e.password != c.Password {
+		return true
+	}
+	return c.Code != ""
+}
+
+func (e *Enphase) loginOrRestoreSession(ctx context.Context, c *types.EnphaseCredentials) (bool, error) {
+	if !e.needsLogin(*c) {
+		log.Ctx(ctx).DebugContext(ctx, "restoring enphase credentials from cache")
+		if e.systemID != c.SystemID {
+			e.pelExpiry = time.Time{}
+		}
+		e.username = c.Username
+		e.password = c.Password
+		e.sessionID = c.SessionID
+		e.managerToken = c.ManagerToken
+		e.systemID = c.SystemID
+		e.userID = c.UserID
+		return false, nil
+	}
+
+	var res enphaseLoginResponse
+	var err error
+	if c.Code != "" {
+		log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with otp code")
+		res, err = e.loginWithOTP(ctx, c.Username, c.Code)
+		if err != nil {
+			return false, err
+		}
+		// Clear the temporary single-use Code field immediately once redeemed.
+		c.Code = ""
+	} else if c.Password != "" {
+		log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with password")
+		res, err = e.login(ctx, c.Username, c.Password)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		log.Ctx(ctx).DebugContext(ctx, "triggering enphase otp email code generation")
+		if err := e.generateOTP(ctx, c.Username); err != nil {
+			return false, err
+		}
+		return false, ErrNeedsNextStage
+	}
+
+	if res.SystemID == 0 {
+		// TODO: should we instead search for a system?
+		return false, errors.New("no enphase default system found")
+	}
+
+	if e.systemID != res.SystemID {
+		e.pelExpiry = time.Time{}
+	}
+	e.username = c.Username
+	e.password = c.Password
+	e.sessionID = res.SessionID
+	e.managerToken = res.ManagerToken
+	e.systemID = res.SystemID
+
+	c.SessionID = res.SessionID
+	c.ManagerToken = res.ManagerToken
+	c.SystemID = res.SystemID
+
+	return true, nil
+}
+
+func (e *Enphase) retryExpiredSession(ctx context.Context, c *types.EnphaseCredentials) (bool, error) {
+	if e.password == "" {
+		log.Ctx(ctx).WarnContext(ctx, "enphase session expired, cannot retry login without password")
+		return false, errEnphaseUnauthorized
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "enphase session expired, retrying login")
+	res, err := e.login(ctx, e.username, e.password)
+	if err != nil {
+		return false, err
+	}
+	if res.SystemID == 0 {
+		return false, errors.New("no enphase default system found")
+	}
+
+	e.sessionID = res.SessionID
+	e.managerToken = res.ManagerToken
+	e.systemID = res.SystemID
+	e.syncCookies()
+
+	c.SessionID = res.SessionID
+	c.ManagerToken = res.ManagerToken
+	c.SystemID = res.SystemID
+
+	if _, err := e.getDataWithCache(ctx, true); err != nil {
+		return true, fmt.Errorf("credential validation failed after retry: %w", err)
+	}
+	return true, nil
 }
 
 // GridSettings returns the grid-related capabilities reported by Enphase.
@@ -559,6 +582,69 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return status, nil
 }
 
+type enphaseEffectiveConfig struct {
+	chargeFromGrid                bool
+	chargeFromGridScheduleEnabled bool
+	reserveSOC                    float64
+	profile                       string
+	dtgEnabled                    bool
+	severeWeatherWatchActive      bool
+	isBackup                      bool
+}
+
+type enphaseModePlan struct {
+	newProfile            string
+	newReserveSOC         float64
+	newChargeFromGrid     bool
+	wantDTG               bool
+	dtgWindow             *enphaseDTGWindow
+	updatedSOC            bool
+	updatedProfile        bool
+	updatedChargeFromGrid bool
+	disableSchedule       bool
+}
+
+func resolveEnphaseEffectiveConfig(data enphaseDataResult, settingsData enphaseBatterySettingsResponse) enphaseEffectiveConfig {
+	eff := enphaseEffectiveConfig{
+		chargeFromGrid:                settingsData.ChargeFromGrid,
+		chargeFromGridScheduleEnabled: settingsData.ChargeFromGridScheduleEnabled,
+		reserveSOC:                    float64(settingsData.BatteryBackupPercentage),
+		profile:                       settingsData.Profile,
+		severeWeatherWatchActive:      data.State.BatteryConfig.SevereWeatherWatch == "active",
+		isBackup:                      settingsData.Profile == "backup_only" || settingsData.RequestedConfig.Profile == "backup_only",
+	}
+	if settingsData.DTGControl != nil {
+		eff.dtgEnabled = settingsData.DTGControl.Enabled
+	}
+	if settingsData.RequestedConfig.ChargeFromGrid != nil {
+		eff.chargeFromGrid = *settingsData.RequestedConfig.ChargeFromGrid
+	}
+	if settingsData.RequestedConfig.ChargeFromGridScheduleEnabled != nil {
+		eff.chargeFromGridScheduleEnabled = *settingsData.RequestedConfig.ChargeFromGridScheduleEnabled
+	}
+	if settingsData.RequestedConfig.BatteryBackupPercentage != nil {
+		eff.reserveSOC = float64(*settingsData.RequestedConfig.BatteryBackupPercentage)
+	}
+	if settingsData.RequestedConfig.Profile != "" {
+		eff.profile = settingsData.RequestedConfig.Profile
+	}
+	if settingsData.RequestedConfig.DTGControl != nil {
+		eff.dtgEnabled = settingsData.RequestedConfig.DTGControl.Enabled
+	}
+	return eff
+}
+
+func resolveEnphaseTimezone(tz string) (string, *time.Location) {
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+	return tz, loc
+}
+
 func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	e.mu.Lock()
@@ -573,26 +659,16 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return false, err
 	}
 
-	tz := data.App.Timezone
-	if tz == "" {
-		tz = "UTC"
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		loc = time.UTC
-	}
+	tz, loc := resolveEnphaseTimezone(data.App.Timezone)
 	now := time.Now().In(loc)
 
 	todayStatsRaw, err := e.getToday(ctx, now, true)
 	if err != nil {
 		return false, fmt.Errorf("failed to get enphase today stats in SetModes: %w", err)
 	}
-
 	if todayStatsRaw.BatteryDetails == nil {
 		return false, errors.New("enphase today stats missing battery details in SetModes")
 	}
-
-	currentSOC := todayStatsRaw.BatteryDetails.AggregateSOC
 
 	// Fetch current battery settings (chargeFromGrid, schedule, etc.)
 	settingsData, err := e.getBatterySettings(ctx)
@@ -600,133 +676,185 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return false, fmt.Errorf("failed to get battery settings: %w", err)
 	}
 
-	currentChargeFromGrid := settingsData.ChargeFromGrid
-	currentChargeFromGridScheduleEnabled := settingsData.ChargeFromGridScheduleEnabled
-	currentReserveSOC := float64(settingsData.BatteryBackupPercentage)
-	currentProfile := settingsData.Profile
-	var currentDTGEnabled bool
-	if settingsData.DTGControl != nil {
-		currentDTGEnabled = settingsData.DTGControl.Enabled
-	}
-
-	if settingsData.RequestedConfig.ChargeFromGrid != nil {
-		currentChargeFromGrid = *settingsData.RequestedConfig.ChargeFromGrid
-	}
-	if settingsData.RequestedConfig.ChargeFromGridScheduleEnabled != nil {
-		currentChargeFromGridScheduleEnabled = *settingsData.RequestedConfig.ChargeFromGridScheduleEnabled
-	}
-	if settingsData.RequestedConfig.BatteryBackupPercentage != nil {
-		currentReserveSOC = float64(*settingsData.RequestedConfig.BatteryBackupPercentage)
-	}
-	if settingsData.RequestedConfig.Profile != "" {
-		currentProfile = settingsData.RequestedConfig.Profile
-	}
-	if settingsData.RequestedConfig.DTGControl != nil {
-		currentDTGEnabled = settingsData.RequestedConfig.DTGControl.Enabled
-	}
-
-	severeWeatherWatchActive := data.State.BatteryConfig.SevereWeatherWatch == "active"
-	isBackupCurrent := settingsData.Profile == "backup_only"
-	isBackupPending := settingsData.RequestedConfig.Profile == "backup_only"
-	isBackup := isBackupCurrent || isBackupPending
-
-	if severeWeatherWatchActive || isBackup {
-		if bat == types.BatteryModeNoChange {
-			return false, nil
-		}
-		var targetChargeFromGrid bool
-		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby, types.BatteryModeExport:
-			targetChargeFromGrid = e.settings.GridChargeBatteries
-		default:
-			return false, fmt.Errorf("unknown battery mode: %v", bat)
-		}
-
-		updatedChargeFromGrid := targetChargeFromGrid != currentChargeFromGrid
-		disableSchedule := currentChargeFromGridScheduleEnabled
-
-		if updatedChargeFromGrid || disableSchedule {
-			if e.settings.DryRun {
-				log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings in storm/backup mode",
-					slog.Bool("chargeFromGrid", targetChargeFromGrid),
-					slog.Bool("chargeFromGridScheduleEnabled", false),
-					slog.Bool("severeWeatherWatchActive", severeWeatherWatchActive),
-					slog.Bool("isBackup", isBackup),
-				)
-			} else {
-				log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings in storm/backup mode",
-					slog.Bool("chargeFromGrid", targetChargeFromGrid),
-					slog.Bool("chargeFromGridScheduleEnabled", false),
-					slog.Bool("severeWeatherWatchActive", severeWeatherWatchActive),
-					slog.Bool("isBackup", isBackup),
-				)
-				cfgScheduleDisabled := false
-				payload := enphaseBatterySettingsPayload{
-					ChargeFromGrid:                &targetChargeFromGrid,
-					ChargeFromGridScheduleEnabled: &cfgScheduleDisabled,
-				}
-				if err := e.updateBatterySettings(ctx, payload); err != nil {
-					return false, err
-				}
-				return true, nil
-			}
-		} else {
-			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode",
-				slog.Bool("chargeFromGrid", targetChargeFromGrid),
-			)
-		}
-		return false, nil
+	eff := resolveEnphaseEffectiveConfig(data, settingsData)
+	if eff.severeWeatherWatchActive || eff.isBackup {
+		return e.handleEnphaseStormOrBackup(ctx, bat, eff)
 	}
 
 	enphaseSchedules := ffEnphaseExportSchedules.Enabled(ctx)
 	manageSchedules := enphaseSchedules && e.settings.ManageTOUSchedules
-	var changed bool
-	var tariffHasPeakNow bool
+	changed, tariffHasPeakNow := e.syncEnphaseExportTariffIfNeeded(ctx, sol, opts, now, settingsData.IsBatteryChangePending, manageSchedules)
 
-	// Sync TOU tariff before modifying battery profile or settings so tariff-ms
-	// does not reject edits with error 934 ("active profile request pending").
-	if manageSchedules && (opts.Schedule != nil || sol == types.SolarModeExport) {
-		tariffChanged, hasPeakNow, err := e.ensureTOUTariffSynced(ctx, opts.Schedule, now, sol == types.SolarModeExport, settingsData.IsBatteryChangePending)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to check/sync enphase TOU tariff", slog.Any("error", err))
-		} else {
-			tariffHasPeakNow = hasPeakNow
-			if tariffChanged {
-				changed = true
-			}
-		}
+	plan, err := e.computeEnphaseModePlan(ctx, bat, sol, opts, now, todayStatsRaw.BatteryDetails.AggregateSOC, settingsData, eff, enphaseSchedules, manageSchedules, tariffHasPeakNow)
+	if err != nil {
+		return false, err
 	}
 
+	return e.applyEnphaseModeUpdates(ctx, tz, loc, eff, plan, enphaseSchedules, changed)
+}
+
+func (e *Enphase) handleEnphaseStormOrBackup(ctx context.Context, bat types.BatteryMode, eff enphaseEffectiveConfig) (bool, error) {
+	if bat == types.BatteryModeNoChange {
+		return false, nil
+	}
+	var targetChargeFromGrid bool
+	switch bat {
+	case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby, types.BatteryModeExport:
+		targetChargeFromGrid = e.settings.GridChargeBatteries
+	default:
+		return false, fmt.Errorf("unknown battery mode: %v", bat)
+	}
+
+	updatedChargeFromGrid := targetChargeFromGrid != eff.chargeFromGrid
+	disableSchedule := eff.chargeFromGridScheduleEnabled
+	if !updatedChargeFromGrid && !disableSchedule {
+		log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode",
+			slog.Bool("chargeFromGrid", targetChargeFromGrid),
+		)
+		return false, nil
+	}
+
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings in storm/backup mode",
+			slog.Bool("chargeFromGrid", targetChargeFromGrid),
+			slog.Bool("chargeFromGridScheduleEnabled", false),
+			slog.Bool("severeWeatherWatchActive", eff.severeWeatherWatchActive),
+			slog.Bool("isBackup", eff.isBackup),
+		)
+		return false, nil
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings in storm/backup mode",
+		slog.Bool("chargeFromGrid", targetChargeFromGrid),
+		slog.Bool("chargeFromGridScheduleEnabled", false),
+		slog.Bool("severeWeatherWatchActive", eff.severeWeatherWatchActive),
+		slog.Bool("isBackup", eff.isBackup),
+	)
+	cfgScheduleDisabled := false
+	payload := enphaseBatterySettingsPayload{
+		ChargeFromGrid:                &targetChargeFromGrid,
+		ChargeFromGridScheduleEnabled: &cfgScheduleDisabled,
+	}
+	if err := e.updateBatterySettings(ctx, payload); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Enphase) syncEnphaseExportTariffIfNeeded(
+	ctx context.Context,
+	sol types.SolarMode,
+	opts types.ModesOptions,
+	now time.Time,
+	isBatteryChangePending bool,
+	manageSchedules bool,
+) (bool, bool) {
+	// Sync TOU tariff before modifying battery profile or settings so tariff-ms
+	// does not reject edits with error 934 ("active profile request pending").
+	if !manageSchedules || (opts.Schedule == nil && sol != types.SolarModeExport) {
+		return false, false
+	}
+	tariffChanged, hasPeakNow, err := e.ensureTOUTariffSynced(ctx, opts.Schedule, now, sol == types.SolarModeExport, isBatteryChangePending)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to check/sync enphase TOU tariff", slog.Any("error", err))
+		return false, false
+	}
+	return tariffChanged, hasPeakNow
+}
+
+func (e *Enphase) computeEnphaseModePlan(
+	ctx context.Context,
+	bat types.BatteryMode,
+	sol types.SolarMode,
+	opts types.ModesOptions,
+	now time.Time,
+	currentSOC float64,
+	settingsData enphaseBatterySettingsResponse,
+	eff enphaseEffectiveConfig,
+	enphaseSchedules bool,
+	manageSchedules bool,
+	tariffHasPeakNow bool,
+) (enphaseModePlan, error) {
 	minAllowedSOC := max(float64(settingsData.BatteryBackupPercentageMin), float64(settingsData.VeryLowSOC))
 	if minAllowedSOC <= 0 {
 		minAllowedSOC = 10
 	}
 
-	newReserveSOC := currentReserveSOC
-	newChargeFromGrid := currentChargeFromGrid
-	if enphaseSchedules {
-		if bat != types.BatteryModeNoChange {
-			newChargeFromGrid = bat == types.BatteryModeChargeAny && e.settings.GridChargeBatteries
-		}
-	} else if e.settings.GridChargeBatteries && !currentChargeFromGrid {
-		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on enphase, enabling grid charge to match site settings")
-		newChargeFromGrid = true
+	newChargeFromGrid := e.computeEnphaseChargeFromGrid(ctx, bat, eff.chargeFromGrid, enphaseSchedules)
+	newProfile := computeEnphaseTargetProfile(ctx, sol, manageSchedules, tariffHasPeakNow)
+
+	newReserveSOC, err := e.computeEnphaseTargetReserveSOC(bat, opts, currentSOC, eff.reserveSOC, minAllowedSOC)
+	if err != nil {
+		return enphaseModePlan{}, err
 	}
 
+	wantDTG, dtgWindow := computeEnphaseDTGTarget(ctx, bat, opts, now, newReserveSOC, minAllowedSOC, settingsData.DTGControl, eff.dtgEnabled, enphaseSchedules, manageSchedules)
+
+	plan := enphaseModePlan{
+		newProfile:            newProfile,
+		newReserveSOC:         newReserveSOC,
+		newChargeFromGrid:     newChargeFromGrid,
+		wantDTG:               wantDTG,
+		dtgWindow:             dtgWindow,
+		updatedSOC:            math.Round(newReserveSOC) != math.Round(eff.reserveSOC),
+		updatedProfile:        (bat != types.BatteryModeNoChange || (manageSchedules && sol != types.SolarModeNoChange)) && eff.profile != "" && eff.profile != newProfile,
+		updatedChargeFromGrid: newChargeFromGrid != eff.chargeFromGrid,
+		disableSchedule:       eff.chargeFromGridScheduleEnabled,
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "computed enphase SetModes target",
+		slog.Bool("enphaseSchedules", enphaseSchedules),
+		slog.Bool("manageSchedules", manageSchedules),
+		slog.String("currentProfile", eff.profile),
+		slog.String("newProfile", plan.newProfile),
+		slog.Float64("currentReserveSOC", eff.reserveSOC),
+		slog.Float64("newReserveSOC", plan.newReserveSOC),
+		slog.Bool("currentChargeFromGrid", eff.chargeFromGrid),
+		slog.Bool("newChargeFromGrid", plan.newChargeFromGrid),
+		slog.Bool("currentDTGEnabled", eff.dtgEnabled),
+		slog.Bool("wantDTG", plan.wantDTG),
+		slog.Bool("tariffHasPeakNow", tariffHasPeakNow),
+	)
+	return plan, nil
+}
+
+func (e *Enphase) computeEnphaseChargeFromGrid(ctx context.Context, bat types.BatteryMode, currentChargeFromGrid, enphaseSchedules bool) bool {
+	if enphaseSchedules {
+		if bat != types.BatteryModeNoChange {
+			return bat == types.BatteryModeChargeAny && e.settings.GridChargeBatteries
+		}
+		return currentChargeFromGrid
+	}
+	if e.settings.GridChargeBatteries && !currentChargeFromGrid {
+		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on enphase, enabling grid charge to match site settings")
+		return true
+	}
+	return currentChargeFromGrid
+}
+
+func computeEnphaseTargetProfile(ctx context.Context, sol types.SolarMode, manageSchedules, tariffHasPeakNow bool) string {
+	if manageSchedules && sol == types.SolarModeExport {
+		if tariffHasPeakNow {
+			return "cost_savings"
+		}
+		log.Ctx(ctx).WarnContext(ctx, "skipping enphase cost_savings profile because active tariff does not cover current hour as peak")
+	}
+	return "self-consumption"
+}
+
+func (e *Enphase) computeEnphaseTargetReserveSOC(
+	bat types.BatteryMode,
+	opts types.ModesOptions,
+	currentSOC float64,
+	currentReserveSOC float64,
+	minAllowedSOC float64,
+) (float64, error) {
 	minSOC := e.settings.MinBatterySOC
 	if opts.MinimumSOC != 0 {
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	newProfile := "self-consumption"
-	if manageSchedules && sol == types.SolarModeExport {
-		if tariffHasPeakNow {
-			newProfile = "cost_savings"
-		} else {
-			log.Ctx(ctx).WarnContext(ctx, "skipping enphase cost_savings profile because active tariff does not cover current hour as peak")
-		}
-	}
-
+	var newReserveSOC float64
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// If they want to charge the battery, set the backup reserve SOC to 100% to
@@ -746,93 +874,75 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		newReserveSOC = max(math.Floor(currentSOC), minSOC)
 	case types.BatteryModeNoChange:
 		// Keep existing values
+		return currentReserveSOC, nil
 	default:
-		return false, fmt.Errorf("unknown battery mode: %v", bat)
+		return 0, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
-	if bat != types.BatteryModeNoChange {
-		if newReserveSOC < minAllowedSOC {
-			newReserveSOC = minAllowedSOC
-		}
-		if newReserveSOC > 100 {
-			newReserveSOC = 100
-		}
-		// if enphase overshot our reserve SOC by less than 1 percent, ignore it
-		if math.Abs(newReserveSOC-currentReserveSOC) <= 1.0 {
-			newReserveSOC = currentReserveSOC
-		}
+	newReserveSOC = min(max(newReserveSOC, minAllowedSOC), 100)
+	// if enphase overshot our reserve SOC by less than 1 percent, ignore it
+	if math.Abs(newReserveSOC-currentReserveSOC) <= 1.0 {
+		newReserveSOC = currentReserveSOC
 	}
+	return newReserveSOC, nil
+}
 
-	var wantDTG bool
-	var dtgWindow *enphaseDTGWindow
-	dtgSupported := enphaseSchedules && settingsData.DTGControl != nil && settingsData.DTGControl.Show &&
-		!settingsData.DTGControl.Locked && settingsData.DTGControl.ScheduleSupported
-	if enphaseSchedules {
-		if manageSchedules && bat == types.BatteryModeExport {
-			if dtgSupported {
-				wantDTG = true
-				dtgLimit := max(int(math.Round(newReserveSOC)), int(math.Round(minAllowedSOC)))
-				w := computeEnphaseDTGWindow(opts.Schedule, now, dtgLimit)
-				dtgWindow = &w
-			} else {
-				log.Ctx(ctx).WarnContext(ctx, "enphase DTG battery export requested but dtgControl is unavailable, locked, or schedule unsupported",
-					slog.Any("dtgControl", settingsData.DTGControl),
-				)
-			}
-		} else if bat == types.BatteryModeNoChange {
-			wantDTG = currentDTGEnabled
-		}
+func computeEnphaseDTGTarget(
+	ctx context.Context,
+	bat types.BatteryMode,
+	opts types.ModesOptions,
+	now time.Time,
+	newReserveSOC float64,
+	minAllowedSOC float64,
+	dtgControl *enphaseControlStatus,
+	currentDTGEnabled bool,
+	enphaseSchedules bool,
+	manageSchedules bool,
+) (bool, *enphaseDTGWindow) {
+	if !enphaseSchedules {
+		return false, nil
 	}
+	if manageSchedules && bat == types.BatteryModeExport {
+		dtgSupported := dtgControl != nil && dtgControl.Show && !dtgControl.Locked && dtgControl.ScheduleSupported
+		if !dtgSupported {
+			log.Ctx(ctx).WarnContext(ctx, "enphase DTG battery export requested but dtgControl is unavailable, locked, or schedule unsupported",
+				slog.Any("dtgControl", dtgControl),
+			)
+			return false, nil
+		}
+		dtgLimit := max(int(math.Round(newReserveSOC)), int(math.Round(minAllowedSOC)))
+		w := computeEnphaseDTGWindow(opts.Schedule, now, dtgLimit)
+		return true, &w
+	}
+	if bat == types.BatteryModeNoChange {
+		return currentDTGEnabled, nil
+	}
+	return false, nil
+}
 
-	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
-	updatedProfile := (bat != types.BatteryModeNoChange || (manageSchedules && sol != types.SolarModeNoChange)) &&
-		currentProfile != "" && currentProfile != newProfile
-	updatedChargeFromGrid := newChargeFromGrid != currentChargeFromGrid
-	disableSchedule := currentChargeFromGridScheduleEnabled
-
-	log.Ctx(ctx).DebugContext(ctx, "computed enphase SetModes target",
-		slog.Bool("enphaseSchedules", enphaseSchedules),
-		slog.Bool("manageSchedules", manageSchedules),
-		slog.String("currentProfile", currentProfile),
-		slog.String("newProfile", newProfile),
-		slog.Float64("currentReserveSOC", currentReserveSOC),
-		slog.Float64("newReserveSOC", newReserveSOC),
-		slog.Bool("currentChargeFromGrid", currentChargeFromGrid),
-		slog.Bool("newChargeFromGrid", newChargeFromGrid),
-		slog.Bool("currentDTGEnabled", currentDTGEnabled),
-		slog.Bool("wantDTG", wantDTG),
-		slog.Bool("tariffHasPeakNow", tariffHasPeakNow),
-	)
-
+func (e *Enphase) applyEnphaseModeUpdates(
+	ctx context.Context,
+	tz string,
+	loc *time.Location,
+	eff enphaseEffectiveConfig,
+	plan enphaseModePlan,
+	enphaseSchedules bool,
+	changed bool,
+) (bool, error) {
 	// Update batteryProfile first so lowering batteryBackupPercentage takes effect before DTG schedule validation.
-	if updatedSOC || updatedProfile {
-		if e.settings.DryRun {
-			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery profile",
-				slog.String("currentProfile", currentProfile),
-				slog.String("newProfile", newProfile),
-				slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
-			)
-		} else {
-			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery profile",
-				slog.String("currentProfile", currentProfile),
-				slog.String("newProfile", newProfile),
-				slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
-			)
-			payload := enphaseBatteryProfilePayload{
-				Profile:                 newProfile,
-				BatteryBackupPercentage: int(math.Round(newReserveSOC)),
-			}
-			if err := e.updateBatteryProfile(ctx, payload); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
-				return changed, err
-			}
+	if plan.updatedSOC || plan.updatedProfile {
+		profileChanged, err := e.applyEnphaseProfileUpdate(ctx, eff.profile, plan.newProfile, int(math.Round(plan.newReserveSOC)))
+		if err != nil {
+			return changed, err
+		}
+		if profileChanged {
 			changed = true
 		}
 	}
 
 	var dtgScheduleChanged bool
-	if wantDTG && dtgWindow != nil {
-		dtgChanged, err := e.ensureDTGSchedule(ctx, tz, loc, *dtgWindow)
+	if plan.wantDTG && plan.dtgWindow != nil {
+		dtgChanged, err := e.ensureDTGSchedule(ctx, tz, loc, *plan.dtgWindow)
 		if err != nil {
 			return changed, fmt.Errorf("failed to configure enphase DTG schedule: %w", err)
 		}
@@ -842,35 +952,13 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 	}
 
-	updatedDTG := enphaseSchedules && (wantDTG != currentDTGEnabled || (wantDTG && dtgScheduleChanged))
-	if updatedChargeFromGrid || disableSchedule || updatedDTG {
-		var payload enphaseBatterySettingsPayload
-		if updatedChargeFromGrid || disableSchedule {
-			cfgVal := newChargeFromGrid
-			schedDisabled := false
-			payload.ChargeFromGrid = &cfgVal
-			payload.ChargeFromGridScheduleEnabled = &schedDisabled
+	updatedDTG := enphaseSchedules && (plan.wantDTG != eff.dtgEnabled || (plan.wantDTG && dtgScheduleChanged))
+	if plan.updatedChargeFromGrid || plan.disableSchedule || updatedDTG {
+		settingsChanged, err := e.applyEnphaseSettingsUpdate(ctx, eff, plan, enphaseSchedules, updatedDTG)
+		if err != nil {
+			return changed, err
 		}
-		if enphaseSchedules && (wantDTG || currentDTGEnabled) && updatedDTG {
-			payload.DTGControl = &enphaseControlToggle{Enabled: wantDTG}
-		}
-
-		if e.settings.DryRun {
-			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings",
-				slog.Bool("chargeFromGrid", newChargeFromGrid),
-				slog.Bool("chargeFromGridScheduleEnabled", false),
-				slog.Bool("dtgEnabled", wantDTG),
-			)
-		} else if payload.ChargeFromGrid != nil || payload.ChargeFromGridScheduleEnabled != nil || payload.DTGControl != nil {
-			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings",
-				slog.Bool("chargeFromGrid", newChargeFromGrid),
-				slog.Bool("chargeFromGridScheduleEnabled", false),
-				slog.Bool("dtgEnabled", wantDTG),
-			)
-			if err := e.updateBatterySettings(ctx, payload); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
-				return changed, err
-			}
+		if settingsChanged {
 			changed = true
 		}
 	}
@@ -878,6 +966,75 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	e.dataExpiry = time.Time{}
 	e.todayCacheExpiry = time.Time{}
 	return changed, nil
+}
+
+func (e *Enphase) applyEnphaseProfileUpdate(ctx context.Context, currentProfile, newProfile string, backupPercent int) (bool, error) {
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery profile",
+			slog.String("currentProfile", currentProfile),
+			slog.String("newProfile", newProfile),
+			slog.Int("batteryBackupPercentage", backupPercent),
+		)
+		return false, nil
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "updating enphase battery profile",
+		slog.String("currentProfile", currentProfile),
+		slog.String("newProfile", newProfile),
+		slog.Int("batteryBackupPercentage", backupPercent),
+	)
+	payload := enphaseBatteryProfilePayload{
+		Profile:                 newProfile,
+		BatteryBackupPercentage: backupPercent,
+	}
+	if err := e.updateBatteryProfile(ctx, payload); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *Enphase) applyEnphaseSettingsUpdate(
+	ctx context.Context,
+	eff enphaseEffectiveConfig,
+	plan enphaseModePlan,
+	enphaseSchedules bool,
+	updatedDTG bool,
+) (bool, error) {
+	var payload enphaseBatterySettingsPayload
+	if plan.updatedChargeFromGrid || plan.disableSchedule {
+		cfgVal := plan.newChargeFromGrid
+		schedDisabled := false
+		payload.ChargeFromGrid = &cfgVal
+		payload.ChargeFromGridScheduleEnabled = &schedDisabled
+	}
+	if enphaseSchedules && (plan.wantDTG || eff.dtgEnabled) && updatedDTG {
+		payload.DTGControl = &enphaseControlToggle{Enabled: plan.wantDTG}
+	}
+
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings",
+			slog.Bool("chargeFromGrid", plan.newChargeFromGrid),
+			slog.Bool("chargeFromGridScheduleEnabled", false),
+			slog.Bool("dtgEnabled", plan.wantDTG),
+		)
+		return false, nil
+	}
+
+	if payload.ChargeFromGrid == nil && payload.ChargeFromGridScheduleEnabled == nil && payload.DTGControl == nil {
+		return false, nil
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings",
+		slog.Bool("chargeFromGrid", plan.newChargeFromGrid),
+		slog.Bool("chargeFromGridScheduleEnabled", false),
+		slog.Bool("dtgEnabled", plan.wantDTG),
+	)
+	if err := e.updateBatterySettings(ctx, payload); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+		return false, err
+	}
+	return true, nil
 }
 
 type enphaseControlStatus struct {
@@ -3432,13 +3589,6 @@ type enphaseDevice struct {
 type enphaseBatteryInfo struct {
 	NumberOfBatteries int `json:"no_of_batteries"`
 	TotalCapacityWH   int `json:"total_capacity"`
-}
-
-type enphaseBatterySchedulesPayload struct {
-	Usage                   string `json:"usage"`
-	BatteryBackupPercentage int    `json:"battery_backup_percentage"`
-	ChargeFromGrid          bool   `json:"charge_from_grid"`
-	BatteryGridMode         string `json:"battery_grid_mode,omitempty"`
 }
 
 type enphaseStormAlertMessage struct {
