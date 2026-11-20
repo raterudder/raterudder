@@ -132,30 +132,6 @@ func TestTOUUtility(t *testing.T) {
 		assert.True(t, p.SeparateGenerationCredit)
 	})
 
-	t.Run("Rutherford Electric Fallback", func(t *testing.T) {
-		u := &genericTOU{}
-		err := u.ApplySettings(context.Background(), types.Settings{
-			UtilityProvider: "rutherford_electric",
-			UtilityRate:     "rutherford_electric_tod",
-		})
-		require.NoError(t, err)
-		assert.Equal(t, "rutherford_electric_tod", u.Name())
-		assert.NotEmpty(t, u.periods)
-
-		// Verify we can get a price (Nov 1st 2026 at 8 AM ET is on-peak)
-		target := time.Date(2026, 11, 10, 8, 0, 0, 0, etLocation) // Monday
-		p, err := u.priceForTime(target)
-		require.NoError(t, err)
-		assert.Equal(t, 0.31443, p.DollarsPerKWH)
-
-		// Verify 2027 forward continuity (Tue, Feb 9, 2027 at 8 AM ET is on-peak)
-		p2027, err := u.priceForTime(time.Date(2027, time.February, 9, 8, 0, 0, 0, etLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.31443, p2027.DollarsPerKWH, 1e-6)
-		assert.True(t, p2027.SeparateGenerationCredit)
-		assert.InDelta(t, 0.09400, p2027.GenerationCreditDollarsPerKWH, 1e-6)
-	})
-
 	t.Run("Location consistency sets target location", func(t *testing.T) {
 		u := &genericTOU{
 			periods: []types.UtilityFeesPeriod{

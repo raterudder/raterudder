@@ -855,25 +855,69 @@ func TestComEd(t *testing.T) {
 			assert.InDelta(t, 0.03394, opecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 
-		// Verify 2027 BES and BEST schedule continuity through May 2027
-		for _, rateID := range []string{"comed_bes", "comed_best"} {
-			u := &genericTOU{}
-			require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
-				UtilityProvider:    "comed",
-				UtilityRate:        rateID,
-				UtilityRateOptions: opts,
-			}))
-			for _, checkTime := range []time.Time{
-				time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
-				time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
-				time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
-			} {
-				p, err := u.priceForTime(checkTime)
-				require.NoError(t, err, "priceForTime failed for %s at %v", rateID, checkTime)
-				assert.Greater(t, p.DollarsPerKWH, 0.0, "expected positive supply price for %s at %v", rateID, checkTime)
-				assert.Greater(t, p.GridUseDollarsPerKWH, 0.0, "expected positive delivery price for %s at %v", rateID, checkTime)
-			}
+		// Verify exact full BES and BEST supply (DollarsPerKWH) and delivery (GridUseDollarsPerKWH)
+		// totals from Oct 2026 through May 2027 so any missing rider or base charge is caught.
+		// Single-family non-electric heat delivery multiplier:
+		// 1.0090 (IDUF) + 0.06551 (TPAF) + 0.007668 (RBAFD) = 1.082178, plus $0.00062/kWh (DGRAD).
+		wantBESDeliveryDollarsPerKWH := 0.05698*1.082178 + 0.00062
+		wantBESTMidDayDeliveryDollarsPerKWH := 0.10712*1.082178 + 0.00062
+		wantBESTNightDeliveryDollarsPerKWH := 0.02984*1.082178 + 0.00062
+
+		uBES := &genericTOU{}
+		require.NoError(t, uBES.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider:    "comed",
+			UtilityRate:        "comed_bes",
+			UtilityRateOptions: opts,
+		}))
+
+		// Oct 2026 BES supply = 0.01723 (PSC) + 0.08241 (PEC) - 0.01551 (Oct PEA) = 0.08413
+		pBESOct, err := uBES.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.08413, pBESOct.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESOct.GridUseDollarsPerKWH, 1e-6)
+
+		// Nov 2026 through May 2027 BES supply = 0.01723 (PSC) + 0.08241 (PEC) + 0.03758 (Nov PEA & fallback) = 0.13722
+		for _, checkTime := range []time.Time{
+			time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
+			time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
+			time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
+		} {
+			p, err := uBES.priceForTime(checkTime)
+			require.NoError(t, err, "priceForTime failed for comed_bes at %v", checkTime)
+			assert.InDelta(t, 0.13722, p.DollarsPerKWH, 1e-6, "unexpected supply price for comed_bes at %v", checkTime)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, p.GridUseDollarsPerKWH, 1e-6, "unexpected delivery price for comed_bes at %v", checkTime)
 		}
+
+		uBEST := &genericTOU{}
+		require.NoError(t, uBEST.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider:    "comed",
+			UtilityRate:        "comed_best",
+			UtilityRateOptions: opts,
+		}))
+
+		// Oct 2026 BEST Mid-Day supply = 0.01875 (PJM) + 0.00110 (Oct TPEA) + 0.14700 (MDPPEC) = 0.16685
+		pBESTOct, err := uBEST.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.16685, pBESTOct.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTOct.GridUseDollarsPerKWH, 1e-6)
+
+		// Nov 2026 through May 2027 BEST Mid-Day supply = 0.01875 (PJM) + 0.00460 (Nov TPEA & fallback) + 0.14700 (MDPPEC) = 0.17035
+		for _, checkTime := range []time.Time{
+			time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
+			time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
+			time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
+		} {
+			p, err := uBEST.priceForTime(checkTime)
+			require.NoError(t, err, "priceForTime failed for comed_best at %v", checkTime)
+			assert.InDelta(t, 0.17035, p.DollarsPerKWH, 1e-6, "unexpected supply price for comed_best at %v", checkTime)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, p.GridUseDollarsPerKWH, 1e-6, "unexpected delivery price for comed_best at %v", checkTime)
+		}
+
+		// Overnight 2027 BEST supply = 0.01875 (PJM) + 0.00460 (Nov TPEA fallback) + 0.03394 (OPEC) = 0.05729
+		pBESTNight, err := uBEST.priceForTime(time.Date(2027, time.January, 15, 2, 0, 0, 0, ctLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.05729, pBESTNight.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, wantBESTNightDeliveryDollarsPerKWH, pBESTNight.GridUseDollarsPerKWH, 1e-6)
 	})
 
 	t.Run("GetCurrentPrice API Down Memory Fallback", func(t *testing.T) {
