@@ -233,6 +233,117 @@ func TestMap(t *testing.T) {
 		assert.Nil(t, u)
 		assert.ErrorContains(t, err, "unknown utility rate: unknown")
 	})
+
+	t.Run("Site with tesla_dynamic updates ERCOT load zone on TDU location change", func(t *testing.T) {
+		m := Configured(nil)
+		fixedNow := time.Date(2026, time.September, 15, 10, 0, 0, 0, ctLocation)
+		dateKey := fixedNow.Format("20060102")
+		m.baseERCOT = &baseERCOT{
+			nowFunc: func() time.Time { return fixedNow },
+			cachedPrices: map[string][]types.Price{
+				"LZ_HOUSTON_" + dateKey: {
+					{
+						Provider:                      "ercot",
+						TSStart:                       fixedNow,
+						TSEnd:                         fixedNow.Add(time.Hour),
+						DollarsPerKWH:                 0.020,
+						SeparateGenerationCredit:      true,
+						GenerationCreditDollarsPerKWH: 0.020,
+					},
+				},
+				"LZ_NORTH_" + dateKey: {
+					{
+						Provider:                      "ercot",
+						TSStart:                       fixedNow,
+						TSEnd:                         fixedNow.Add(time.Hour),
+						DollarsPerKWH:                 0.080,
+						SeparateGenerationCredit:      true,
+						GenerationCreditDollarsPerKWH: 0.080,
+					},
+				},
+			},
+		}
+
+		// 1. Start on CenterPoint (LZ_HOUSTON)
+		u1, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "centerpoint",
+			},
+		})
+		require.NoError(t, err)
+		sf1, ok := u1.(*SiteFees)
+		require.True(t, ok)
+		z1, ok := sf1.base.(*baseERCOTZone)
+		require.True(t, ok)
+		assert.Equal(t, "LZ_HOUSTON", z1.loadZone)
+
+		p1, err := u1.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.020*0.90, p1.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// 2. Change TDU location to Oncor (LZ_NORTH) -> must rebuild with LZ_NORTH
+		u2, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+		})
+		require.NoError(t, err)
+		assert.NotSame(t, u1, u2)
+		sf2, ok := u2.(*SiteFees)
+		require.True(t, ok)
+		z2, ok := sf2.base.(*baseERCOTZone)
+		require.True(t, ok)
+		assert.Equal(t, "LZ_NORTH", z2.loadZone)
+
+		p2, err := u2.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.080*0.90, p2.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// 3. Change TDU location to TNMP (also LZ_NORTH) -> reuses cached provider and updates delivery fees
+		u3, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "tnmp",
+			},
+		})
+		require.NoError(t, err)
+		assert.Same(t, u2, u3)
+		p3, err := u3.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, texasTDUs["tnmp"].DeliveryDollarsPerKWH, p3.GridUseDollarsPerKWH, 1e-6)
+
+		// 4. Invalid TDU location returns error instead of reusing old zone
+		u4, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "invalid_tdu",
+			},
+		})
+		require.Error(t, err)
+		assert.Nil(t, u4)
+		assert.ErrorContains(t, err, "unknown TDU delivery utility")
+	})
+
+	t.Run("Site with eversource_ct_vpp returns VPP periods", func(t *testing.T) {
+		m := Configured(nil)
+		u, err := m.Site(ctx, "site-ct", types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+			UtilityRateOptions: types.UtilityRateOptions{
+				VPPProgram: "ess-passive",
+			},
+		})
+		require.NoError(t, err)
+		vppInfo, err := u.GetVPPInfo(ctx)
+		require.NoError(t, err)
+		assert.Len(t, vppInfo.Mandatory, 6)
+	})
 }
 
 func TestRatesCoverAllTime(t *testing.T) {

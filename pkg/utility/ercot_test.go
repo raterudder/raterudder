@@ -797,4 +797,39 @@ func TestERCOT(t *testing.T) {
 			assert.NotEmpty(t, futurePrices)
 		}
 	})
+
+	t.Run("baseERCOTZone settingsMatch", func(t *testing.T) {
+		base := &baseERCOT{}
+		houstonZone, err := base.Zone("LZ_HOUSTON")
+		require.NoError(t, err)
+
+		assert.True(t, houstonZone.settingsMatch(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "centerpoint",
+			},
+		}))
+		assert.False(t, houstonZone.settingsMatch(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+		}))
+		assert.False(t, houstonZone.settingsMatch(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "",
+			},
+		}))
+		assert.False(t, houstonZone.settingsMatch(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "unknown_tdu",
+			},
+		}))
+	})
 }

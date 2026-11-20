@@ -15,6 +15,7 @@ type SiteFees struct {
 	siteID  string
 	periods []types.UtilityFeesPeriod
 	name    string
+	vppInfo types.UtilityVPPInfo
 }
 
 // Name returns the name of the utility rate
@@ -41,6 +42,11 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	vppInfo, err := getUtilityVPPInfo(settings.UtilityRate, settings.UtilityRateOptions)
+	if err != nil {
+		return err
+	}
+
 	if settings.UtilityFeesPeriods != nil {
 		s.periods = settings.UtilityFeesPeriods
 	} else {
@@ -53,13 +59,16 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 		s.periods = fees
 		s.name = settings.UtilityRate
 	}
+	s.vppInfo = vppInfo
 
 	return nil
 }
 
-// GetVPPInfo implements the Utility interface. No VPP info is supported atm.
+// GetVPPInfo implements the Utility interface.
 func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
-	return types.UtilityVPPInfo{}, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vppInfo, nil
 }
 
 // GetPeriods implements the Utility interface, returning named import TOU periods when present.
