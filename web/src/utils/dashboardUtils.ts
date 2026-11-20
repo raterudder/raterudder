@@ -99,10 +99,13 @@ export interface WallClockParts {
     second: number;
 }
 
-export const getWallClockPartsInTimeZone = (date: Date, timeZone?: string): WallClockParts | null => {
-    if (!timeZone || isNaN(date.getTime())) return null;
-    try {
-        const parts = new Intl.DateTimeFormat('en-US', {
+const MAX_WALL_CLOCK_FORMATTERS = 64;
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+const getWallClockFormatter = (timeZone: string): Intl.DateTimeFormat => {
+    let formatter = wallClockFormatters.get(timeZone);
+    if (!formatter) {
+        formatter = new Intl.DateTimeFormat('en-US', {
             timeZone,
             year: 'numeric',
             month: '2-digit',
@@ -111,7 +114,22 @@ export const getWallClockPartsInTimeZone = (date: Date, timeZone?: string): Wall
             minute: '2-digit',
             second: '2-digit',
             hourCycle: 'h23',
-        }).formatToParts(date);
+        });
+        if (wallClockFormatters.size >= MAX_WALL_CLOCK_FORMATTERS) {
+            const oldestKey = wallClockFormatters.keys().next().value;
+            if (oldestKey !== undefined) {
+                wallClockFormatters.delete(oldestKey);
+            }
+        }
+        wallClockFormatters.set(timeZone, formatter);
+    }
+    return formatter;
+};
+
+export const getWallClockPartsInTimeZone = (date: Date, timeZone?: string): WallClockParts | null => {
+    if (!timeZone || isNaN(date.getTime())) return null;
+    try {
+        const parts = getWallClockFormatter(timeZone).formatToParts(date);
 
         let year = 0;
         let month = 0;
