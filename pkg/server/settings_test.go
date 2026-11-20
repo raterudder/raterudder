@@ -2930,6 +2930,13 @@ func TestHandleUpdateSettings(t *testing.T) {
 		w1 := httptest.NewRecorder()
 		srv.handleUpdateSettings(w1, req1)
 		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+		var errResp1 struct {
+			Error            string `json:"error"`
+			CredentialsSaved bool   `json:"credentialsSaved"`
+		}
+		require.NoError(t, json.NewDecoder(w1.Body).Decode(&errResp1))
+		assert.Contains(t, errResp1.Error, "upstream 503")
+		assert.True(t, errResp1.CredentialsSaved)
 
 		// Verify BOTH preexisting Franklin credentials AND redeemed Enphase session tokens were saved!
 		savedCreds, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedOnFailure.EncryptedCredentials)
@@ -3172,6 +3179,13 @@ func TestHandleUpdateSettings(t *testing.T) {
 		w1 := httptest.NewRecorder()
 		srv.handleUpdateSettings(w1, req1)
 		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+		var errResp1 struct {
+			Error            string `json:"error"`
+			CredentialsSaved bool   `json:"credentialsSaved"`
+		}
+		require.NoError(t, json.NewDecoder(w1.Body).Decode(&errResp1))
+		assert.Contains(t, errResp1.Error, "upstream status 503")
+		assert.True(t, errResp1.CredentialsSaved)
 
 		// Attempt 2: Retry without AuthCode preserves newly redeemed tokens and discovered EnergySiteID 22222.
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(savedOnFailure, types.CurrentSettingsVersion, time.Time{}, nil).Once()
@@ -3219,6 +3233,256 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockTesla.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - ErrNeedsNextStage Does Not Penalize Auth Failure Counters", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockEnphase := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockEnphase)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingSettings := types.Settings{
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockEnphase.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "enphase"
+		})).Return(nil).Once()
+		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil && c.Enphase.Username == "owner@example.com" && c.Enphase.Code == ""
+		})).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
+
+		reqBody, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "enphase",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+			},
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{
+					Username: "owner@example.com",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody)), "admin@example.com", true)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "A verification code was sent to your email")
+		mockS.AssertNotCalled(t, "SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockEnphase.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - CredentialsSaved Is False When Persistence Fails Or Creds Not Updated", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockTesla := &mockESS{MockName: "tesla"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockTesla)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingSettings := types.Settings{
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+		}
+		reqBody, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode: "oauth-code",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		// Case 1: credsUpdated == false (token exchange failed) -> credentialsSaved must be false
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockTesla.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
+		mockTesla.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("failed to exchange auth code")).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody)), "admin@example.com", true))
+		assert.Equal(t, http.StatusBadRequest, w1.Result().StatusCode)
+		var resp1 struct {
+			Error            string `json:"error"`
+			CredentialsSaved bool   `json:"credentialsSaved"`
+		}
+		require.NoError(t, json.NewDecoder(w1.Body).Decode(&resp1))
+		assert.False(t, resp1.CredentialsSaved)
+
+		// Case 2: credsUpdated == true but SetSettings fails -> credentialsSaved must be false
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockTesla.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
+		mockTesla.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Tesla: &types.TeslaCredentials{AccessToken: "tok", RefreshToken: "ref"},
+		}, true, fmt.Errorf("upstream 503")).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, fmt.Errorf("db write failed")).Once()
+
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody)), "admin@example.com", true))
+		assert.Equal(t, http.StatusBadRequest, w2.Result().StatusCode)
+		var resp2 struct {
+			Error            string `json:"error"`
+			CredentialsSaved bool   `json:"credentialsSaved"`
+		}
+		require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp2))
+		assert.False(t, resp2.CredentialsSaved)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockTesla.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Enphase Fresh Code Or Changed Password Clears Stale SystemID And UserID", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+
+		mockEnphase := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockEnphase)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingCreds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				Password:     "old-pass",
+				SessionID:    "old-sess",
+				ManagerToken: "old-mgr",
+				SystemID:     111,
+				UserID:       999,
+			},
+		}
+		encExisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		existingSettings := types.Settings{
+			ESS:                      "enphase",
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+			CustomGridSettings:       true,
+			EncryptedCredentials:     encExisting,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Twice()
+		mockEnphase.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "enphase"
+		})).Return(nil)
+
+		// 1. Fresh OTP Code for same username clears SessionID, ManagerToken, SystemID, and UserID
+		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil &&
+				c.Enphase.Username == "owner@example.com" &&
+				c.Enphase.Code == "778899" &&
+				c.Enphase.SessionID == "" &&
+				c.Enphase.ManagerToken == "" &&
+				c.Enphase.SystemID == 0 &&
+				c.Enphase.UserID == 0
+		})).Return(types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				SessionID:    "new-sess",
+				ManagerToken: "new-mgr",
+				SystemID:     222,
+				UserID:       555,
+			},
+		}, true, nil).Once()
+
+		// 2. Changed Password for same username also clears SessionID, ManagerToken, SystemID, and UserID
+		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil &&
+				c.Enphase.Username == "owner@example.com" &&
+				c.Enphase.Password == "new-pass" &&
+				c.Enphase.SessionID == "" &&
+				c.Enphase.ManagerToken == "" &&
+				c.Enphase.SystemID == 0 &&
+				c.Enphase.UserID == 0
+		})).Return(types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				Password:     "new-pass",
+				SessionID:    "pwd-sess",
+				ManagerToken: "pwd-mgr",
+				SystemID:     333,
+				UserID:       666,
+			},
+		}, true, nil).Once()
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Twice()
+
+		reqOTP, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: existingSettings,
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{
+					Username: "owner@example.com",
+					Code:     "778899",
+				},
+			},
+		})
+		require.NoError(t, err)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqOTP)), "admin@example.com", true))
+		assert.Equal(t, http.StatusOK, w1.Result().StatusCode)
+
+		reqPwd, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: existingSettings,
+			Credentials: &types.Credentials{
+				Enphase: &types.EnphaseCredentials{
+					Username: "owner@example.com",
+					Password: "new-pass",
+				},
+			},
+		})
+		require.NoError(t, err)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqPwd)), "admin@example.com", true))
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockEnphase.AssertExpectations(t))
 	})
 }
 
@@ -3787,6 +4051,50 @@ func TestHandleESSStage(t *testing.T) {
 		assert.Equal(t, "frank-tok", decrypted.Franklin.Token)
 		require.NotNil(t, decrypted.Enphase)
 		assert.Equal(t, "stage-sess", decrypted.Enphase.SessionID)
+	})
+
+	t.Run("Stage 0 clears expired Enphase session so fresh OTP can be requested", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		existingEnc, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				SessionID:    "expired-session",
+				ManagerToken: "expired-token",
+				SystemID:     555,
+			},
+		})
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS:                  "enphase",
+			EncryptedCredentials: existingEnc,
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil &&
+				c.Enphase.Username == "owner@example.com" &&
+				c.Enphase.SessionID == "" &&
+				c.Enphase.ManagerToken == "" &&
+				c.Enphase.Code == ""
+		})).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
+
+		body, err := json.Marshal(map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "owner@example.com",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req := withUser(httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(body)), "admin@example.com", true)
+		w := httptest.NewRecorder()
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 	})
 }
 

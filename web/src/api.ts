@@ -1,4 +1,4 @@
-import { extractError, fetchSettings, fetchAuthStatus, login, logout } from './apiCore';
+import { extractError, extractErrorWithBody, fetchSettings, fetchAuthStatus, login, logout } from './apiCore';
 export { fetchSettings, fetchAuthStatus, login, logout };
 
 export interface SystemAlarm {
@@ -362,6 +362,16 @@ export interface SettingsUpdate {
     siteID?: string;
 }
 
+export class UpdateSettingsError extends Error {
+    credentialsSaved: boolean;
+
+    constructor(message: string, credentialsSaved = false) {
+        super(message);
+        this.name = 'UpdateSettingsError';
+        this.credentialsSaved = credentialsSaved;
+    }
+}
+
 export const updateSettings = async (settings: Settings, siteID?: string, credentials?: CredentialsPayload): Promise<void> => {
     const payload: any = {
         ...settings,
@@ -384,7 +394,8 @@ export const updateSettings = async (settings: Settings, siteID?: string, creden
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to update settings'));
+        const { message, body } = await extractErrorWithBody(response, 'Failed to update settings');
+        throw new UpdateSettingsError(message, Boolean(body?.credentialsSaved));
     }
 };
 

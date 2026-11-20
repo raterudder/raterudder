@@ -451,11 +451,16 @@ interface ESSFormProps {
     setCurrentStage: (stage: number | ((prev: number) => number)) => void;
     handleOAuthLogin: (url: string, fieldName: string) => void;
     handleESSContinue: (e?: React.FormEvent | React.MouseEvent) => Promise<void>;
+    handleESSResendStage?: (e?: React.FormEvent | React.MouseEvent) => Promise<void>;
+    resendCooldownSeconds?: number;
+    onStage0FieldChange?: () => void;
+    stageMessage?: string | null;
     isWizard?: boolean;
     editESS?: boolean;
     setEditESS?: (val: boolean) => void;
     essAuthStatus?: SettingsType['essAuthStatus'];
     highlightTOU?: boolean;
+    hasSavedCredentialsForRetry?: boolean;
 }
 
 const MAX_INTERACTIVE_ESS_BACKOFF_SECONDS = 15 * 60;
@@ -507,6 +512,8 @@ const formatESSRateLimitError = (errMsg: string): string => {
 
 const isESSAuthFailureError = (errMsg: string): boolean => {
     if (/ESS rate limited/i.test(errMsg)) return false;
+    if (/verification code was sent|needs next stage/i.test(errMsg)) return false;
+    if (/^failed to verify ess credentials:/i.test(errMsg)) return true;
     if (/invalid utility|location data|postal code|minimum battery|arbitrage|coverage|release|failed to get settings|failed to encrypt|failed to save settings|network|failed to fetch/i.test(errMsg)) {
         return false;
     }
@@ -545,11 +552,16 @@ const ESSForm = ({
     setCurrentStage,
     handleOAuthLogin,
     handleESSContinue,
+    handleESSResendStage,
+    resendCooldownSeconds = 0,
+    onStage0FieldChange,
+    stageMessage,
     isWizard = false,
     editESS = false,
     setEditESS,
     essAuthStatus,
-    highlightTOU = false
+    highlightTOU = false,
+    hasSavedCredentialsForRetry = false
 }: ESSFormProps) => {
     const provider = essProviders.find(p => p.id === settings.ess);
     const maxStage = provider
@@ -733,6 +745,14 @@ const ESSForm = ({
                                             </div>
                                         ) : (
                                             <>
+                                                {hasSavedCredentialsForRetry && (
+                                                    <div className="success-message" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: 0, marginBottom: '0.5rem' }}>
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.25rem' }}>
+                                                            <polyline points="20 6 9 17 4 12" />
+                                                        </svg>
+                                                        Account linked! Click {isWizard ? 'Complete Setup' : 'Save Settings'} below to retry, or log in again to link a different account.
+                                                    </div>
+                                                )}
                                                 <Button
                                                     className="save-button"
                                                     style={{ width: '100%' }}
@@ -758,6 +778,19 @@ const ESSForm = ({
                                         )}
                                     </div>
                                 )}
+                                {!((provider.oAuthURLs && Object.keys(provider.oAuthURLs).length > 0)) && hasSavedCredentialsForRetry && (maxStage === 0 || currentStage >= maxStage) && (
+                                    <div className="success-message" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: 0, marginBottom: '0.75rem' }}>
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.25rem' }}>
+                                            <polyline points="20 6 9 17 4 12" />
+                                        </svg>
+                                        Account verified! Click {isWizard ? 'Complete Setup' : 'Save Settings'} below to retry without entering a new code.
+                                    </div>
+                                )}
+                                {!(hasSavedCredentialsForRetry && (maxStage === 0 || currentStage >= maxStage)) && stageMessage && currentStage > 0 && (
+                                    <div className="success-message" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: 0, marginBottom: '0.75rem' }}>
+                                        {stageMessage}
+                                    </div>
+                                )}
                                 {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => (
                                     <Field.Root key={cred.field} className="form-group">
                                         <Field.Label htmlFor={`ess-${cred.field}`}>{cred.name}</Field.Label>
@@ -766,7 +799,10 @@ const ESSForm = ({
                                                 value={essCredentials[cred.field] || cred.default || ""}
                                                 disabled={isSaving || isStaging}
                                                 onValueChange={(value) => {
-                                                    setEssCredentials({ ...essCredentials, [cred.field]: value as string });
+                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                        onStage0FieldChange?.();
+                                                    }
+                                                    setEssCredentials(prev => ({ ...prev, [cred.field]: value as string }));
                                                     setIsESSDirty(true);
                                                 }}
                                             >
@@ -799,7 +835,11 @@ const ESSForm = ({
                                                 type={cred.type === 'password' ? 'password' : 'text'}
                                                 disabled={isSaving || isStaging}
                                                 onChange={(e) => {
-                                                    setEssCredentials({ ...essCredentials, [cred.field]: e.target.value });
+                                                    const nextVal = e.target.value;
+                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                        onStage0FieldChange?.();
+                                                    }
+                                                    setEssCredentials(prev => ({ ...prev, [cred.field]: nextVal }));
                                                     setIsESSDirty(true);
                                                 }}
                                                 placeholder={`Enter ${cred.name}`}
@@ -808,6 +848,19 @@ const ESSForm = ({
                                         {cred.description && <Field.Description>{cred.description}</Field.Description>}
                                     </Field.Root>
                                 ))}
+                                {currentStage > 0 && maxStage > 0 && !hasSavedCredentialsForRetry && handleESSResendStage && (
+                                    <div style={{ marginTop: '-0.25rem', marginBottom: '0.75rem' }}>
+                                        <button
+                                            type="button"
+                                            className="text-button"
+                                            style={{ marginTop: 0, padding: 0 }}
+                                            onClick={handleESSResendStage}
+                                            disabled={isStaging || isSaving || resendCooldownSeconds > 0}
+                                        >
+                                            {isStaging ? 'Sending code...' : resendCooldownSeconds > 0 ? `Resend Code (${resendCooldownSeconds}s)` : 'Resend Code'}
+                                        </button>
+                                    </div>
+                                )}
                             </>
                         );
                     })()}
@@ -991,7 +1044,11 @@ const ESSForm = ({
                                 style={{ marginTop: 0 }}
                                 onClick={() => {
                                     if (setEditESS) setEditESS(false);
-                                    setCurrentStage(0);
+                                    if (maxStage > 0) {
+                                        onStage0FieldChange?.();
+                                    } else {
+                                        setCurrentStage(0);
+                                    }
                                 }}
                                 aria-label="Finish editing Energy Storage System"
                             >
@@ -1021,6 +1078,7 @@ const Settings = ({
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
     const [isESSDirty, setIsESSDirty] = useState(false);
+    const [savedCredentialsProviders, setSavedCredentialsProviders] = useState<Record<string, boolean>>({});
     const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
     const [essProviders, setEssProviders] = useState<ESSProviderInfo[]>([]);
     const [loadingLists, setLoadingLists] = useState(true);
@@ -1029,6 +1087,16 @@ const Settings = ({
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [currentStage, setCurrentStage] = useState(0);
     const [isStaging, setIsStaging] = useState(false);
+    const [stageMessage, setStageMessage] = useState<string | null>(null);
+    const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0);
+
+    useEffect(() => {
+        if (resendCooldownSeconds <= 0) return;
+        const timer = setInterval(() => {
+            setResendCooldownSeconds(prev => (prev > 1 ? prev - 1 : 0));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [resendCooldownSeconds]);
     const [localEssAuthStatus, setLocalEssAuthStatus] = useState<SettingsType['essAuthStatus']>(undefined);
     const [minArbitrageInput, setMinArbitrageInput] = useState<string>('');
     const [minBatteryExportInput, setMinBatteryExportInput] = useState<string>('');
@@ -1468,6 +1536,9 @@ const Settings = ({
         setNewAppName('');
         setIsConnectAIDialogOpen(false);
         setIsManualAppsOpen(false);
+        setSavedCredentialsProviders({});
+        setStageMessage(null);
+        setResendCooldownSeconds(0);
 
         return () => {
             active = false;
@@ -1642,7 +1713,26 @@ const Settings = ({
             setCurrentStage(0);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
+            setEditESS(Boolean(restored.ess && !restored.hasCredentials?.[restored.ess]));
+            setSavedCredentialsProviders({});
+            setStageMessage(null);
+            setResendCooldownSeconds(0);
             setError(null);
+        }
+    };
+
+    const handleStage0FieldChange = () => {
+        setCurrentStage(0);
+        setStageMessage(null);
+        setResendCooldownSeconds(0);
+        clearOneTimeCredentials();
+        if (settings?.ess) {
+            setSavedCredentialsProviders(prev => {
+                if (!prev[settings.ess]) return prev;
+                const next = { ...prev };
+                delete next[settings.ess];
+                return next;
+            });
         }
     };
 
@@ -1654,6 +1744,7 @@ const Settings = ({
         if (!settings || !settings.ess) return;
         setIsStaging(true);
         setError(null);
+        setStageMessage(null);
         let attemptedStage = false;
         try {
             const provider = essProviders.find(p => p.id === settings.ess);
@@ -1672,8 +1763,49 @@ const Settings = ({
             attemptedStage = true;
             await submitESSStage(settings.ess, payload, siteID);
             setCurrentStage(prev => prev + 1);
+            setStageMessage('Verification code sent. Please check your email and enter it below.');
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to advance stage';
+            if (attemptedStage && isESSAuthFailureError(errMsg)) {
+                recordInteractiveESSAuthResult(false);
+            }
+            setError(formatESSRateLimitError(errMsg));
+        } finally {
+            setIsStaging(false);
+        }
+    };
+
+    const handleESSResendStage = async (e?: React.FormEvent | React.MouseEvent) => {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        if (!settings || !settings.ess) return;
+        setIsStaging(true);
+        setError(null);
+        setStageMessage(null);
+        let attemptedStage = false;
+        try {
+            const provider = essProviders.find(p => p.id === settings.ess);
+            if (!provider) throw new Error('Selected ESS provider not found');
+
+            const payload: Record<string, string> = {};
+            const stage0Fields = (provider.credentials || []).filter(cred => (cred.stage ?? 0) === 0);
+            for (const cred of stage0Fields) {
+                const val = essCredentials[cred.field] || cred.default || "";
+                if (cred.required && !val) {
+                    throw new Error(`The ${cred.name} field is required.`);
+                }
+                payload[cred.field] = val;
+            }
+
+            attemptedStage = true;
+            await submitESSStage(settings.ess, payload, siteID);
+            clearOneTimeCredentials();
+            setResendCooldownSeconds(30);
+            setStageMessage('A new verification code has been sent. Please check your email.');
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : 'Failed to resend code';
             if (attemptedStage && isESSAuthFailureError(errMsg)) {
                 recordInteractiveESSAuthResult(false);
             }
@@ -1705,6 +1837,45 @@ const Settings = ({
         });
     };
 
+    const buildESSCredentialsPayload = (
+        essProvider: ESSProviderInfo | undefined,
+        hasSavedCredentials: boolean,
+    ): CredentialsPayload | undefined => {
+        if (!essProvider || (!isESSDirty && Object.keys(essCredentials).length === 0)) {
+            return undefined;
+        }
+        const credentialsPayload: CredentialsPayload = { [essProvider.id]: {} };
+        const processCred = (cred: ESSCredentialField) => {
+            let val = essCredentials[cred.field];
+            if (val === undefined || val === null || val === "") {
+                val = cred.default;
+            }
+
+            if (cred.required && (val === undefined || val === null || val === "")) {
+                if ((cred.oneTime || cred.field === 'authCode') && hasSavedCredentials) {
+                    return;
+                }
+                // TODO: we should probably have the backend define better errors
+                if (cred.field === 'authCode') {
+                    setEditESS(true);
+                    throw new Error('Login to connect your energy system.');
+                }
+                throw new Error(`The ${cred.name} field is required.`);
+            }
+            if (val !== undefined && val !== null && val !== "") {
+                credentialsPayload[essProvider.id][cred.field] = val;
+            }
+        };
+
+        for (const cred of (essProvider.credentials || [])) {
+            processCred(cred);
+        }
+        if (essProvider.oAuthKey) {
+            processCred(essProvider.oAuthKey);
+        }
+        return credentialsPayload;
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!settings || savingRef.current) return;
@@ -1725,6 +1896,7 @@ const Settings = ({
         }
 
         let attemptedESSAuth = false;
+        let submittedESS = '';
         try {
             savingRef.current = true;
             setIsSaving(true);
@@ -1747,38 +1919,14 @@ const Settings = ({
                 finalSettings.utilityRateOptions = finalOpts;
             }
 
-            let credentialsPayload: CredentialsPayload | undefined = undefined;
             const essProvider = essProviders.find(p => p.id === settings.ess);
-            if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
-                credentialsPayload = { [essProvider.id]: {} };
-                const processCred = (cred: ESSCredentialField) => {
-                    let val = essCredentials[cred.field];
-                    if (val === undefined || val === null || val === "") {
-                        val = cred.default;
-                    }
+            const hasSavedCredentials = Boolean(
+                essProvider && savedCredentialsProviders[essProvider.id]
+            );
+            const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
-                    if (cred.required && (val === undefined || val === null || val === "")) {
-                        // TODO: we should probably have the backend define better errors
-                        if (cred.field === 'authCode') {
-                            setEditESS(true);
-                            throw new Error('Login to connect your energy system.');
-                        }
-                        throw new Error(`The ${cred.name} field is required.`);
-                    }
-                    if (val !== undefined && val !== null && val !== "") {
-                        credentialsPayload![essProvider.id][cred.field] = val;
-                    }
-                };
-
-                for (const cred of (essProvider.credentials || [])) {
-                    processCred(cred);
-                }
-                if (essProvider.oAuthKey) {
-                    processCred(essProvider.oAuthKey);
-                }
-            }
-
-            attemptedESSAuth = Boolean(credentialsPayload && finalSettings.ess);
+            submittedESS = finalSettings.ess || '';
+            attemptedESSAuth = Boolean(credentialsPayload && submittedESS);
             await updateSettings(finalSettings, siteID, credentialsPayload);
             if (attemptedESSAuth) {
                 recordInteractiveESSAuthResult(true);
@@ -1811,6 +1959,8 @@ const Settings = ({
                 setEssCredentials({});
                 setOauthStatus('idle');
             }
+            setSavedCredentialsProviders({});
+            setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
 
@@ -1832,8 +1982,24 @@ const Settings = ({
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
-            if (attemptedESSAuth && isESSAuthFailureError(errMsg)) {
+            const credentialsSaved = Boolean((err as { credentialsSaved?: boolean })?.credentialsSaved);
+            const isAuthErr = attemptedESSAuth && (credentialsSaved || isESSAuthFailureError(errMsg));
+            if (isAuthErr) {
                 recordInteractiveESSAuthResult(false);
+            }
+            if (attemptedESSAuth && credentialsSaved && submittedESS) {
+                setSavedCredentialsProviders(prev => ({ ...prev, [submittedESS]: true }));
+            } else if (
+                attemptedESSAuth &&
+                submittedESS &&
+                /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
+            ) {
+                setSavedCredentialsProviders(prev => {
+                    if (!prev[submittedESS]) return prev;
+                    const next = { ...prev };
+                    delete next[submittedESS];
+                    return next;
+                });
             }
             if (errMsg.toLowerCase().includes("authorization code is invalid") || errMsg.toLowerCase().includes("code is invalid")) {
                 setError("The authorization code expired. Please click 'Login to link account' again and save immediately.");
@@ -1841,8 +2007,13 @@ const Settings = ({
             } else {
                 setError(formatESSRateLimitError(errMsg));
             }
-            setOauthStatus('idle');
-            clearOneTimeCredentials();
+            if (attemptedESSAuth) {
+                setStageMessage(null);
+            }
+            if (isAuthErr) {
+                setOauthStatus('idle');
+                clearOneTimeCredentials();
+            }
         } finally {
             savingRef.current = false;
             setIsSaving(false);
@@ -1850,6 +2021,11 @@ const Settings = ({
     };
 
     const handleChange = <K extends keyof SettingsType>(field: K, value: SettingsType[K]) => {
+        if (field === 'ess') {
+            setStageMessage(null);
+            setResendCooldownSeconds(0);
+            setSavedCredentialsProviders({});
+        }
         setSettings(prev => prev ? ({ ...prev, [field]: value }) : null);
     };
 
@@ -1893,45 +2069,23 @@ const Settings = ({
 
         let success = false;
         let attemptedESSAuth = false;
+        let submittedESS = '';
         try {
             savingRef.current = true;
             setIsSaving(true);
             setError(null);
             setSuccessMessage(null);
 
-            let credentialsPayload: CredentialsPayload | undefined = undefined;
             const finalSettings = normalizeMinBatterySOC({ ...settings });
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
-            if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
-                credentialsPayload = { [essProvider.id]: {} };
-                const processCred = (cred: ESSCredentialField) => {
-                    let val = essCredentials[cred.field];
-                    if (val === undefined || val === null || val === "") {
-                        val = cred.default;
-                    }
+            const hasSavedCredentials = Boolean(
+                essProvider && savedCredentialsProviders[essProvider.id]
+            );
+            const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
-                    if (cred.required && (val === undefined || val === null || val === "")) {
-                        if (cred.field === 'authCode') {
-                            setEditESS(true);
-                            throw new Error('Login to connect your energy system.');
-                        }
-                        throw new Error(`The ${cred.name} field is required.`);
-                    }
-                    if (val !== undefined && val !== null && val !== "") {
-                        credentialsPayload![essProvider.id][cred.field] = val;
-                    }
-                };
-
-                for (const cred of (essProvider.credentials || [])) {
-                    processCred(cred);
-                }
-                if (essProvider.oAuthKey) {
-                    processCred(essProvider.oAuthKey);
-                }
-            }
-
-            attemptedESSAuth = Boolean(credentialsPayload && finalSettings.ess);
+            submittedESS = finalSettings.ess || '';
+            attemptedESSAuth = Boolean(credentialsPayload && submittedESS);
             await updateSettings(finalSettings, siteID, credentialsPayload);
             if (attemptedESSAuth) {
                 recordInteractiveESSAuthResult(true);
@@ -1949,6 +2103,8 @@ const Settings = ({
                 setEssCredentials({});
                 setOauthStatus('idle');
             }
+            setSavedCredentialsProviders({});
+            setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
             originalSettingsRef.current = JSON.stringify(finalSettings);
@@ -1968,8 +2124,24 @@ const Settings = ({
             success = true;
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
-            if (attemptedESSAuth && isESSAuthFailureError(errMsg)) {
+            const credentialsSaved = Boolean((err as { credentialsSaved?: boolean })?.credentialsSaved);
+            const isAuthErr = attemptedESSAuth && (credentialsSaved || isESSAuthFailureError(errMsg));
+            if (isAuthErr) {
                 recordInteractiveESSAuthResult(false);
+            }
+            if (attemptedESSAuth && credentialsSaved && submittedESS) {
+                setSavedCredentialsProviders(prev => ({ ...prev, [submittedESS]: true }));
+            } else if (
+                attemptedESSAuth &&
+                submittedESS &&
+                /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
+            ) {
+                setSavedCredentialsProviders(prev => {
+                    if (!prev[submittedESS]) return prev;
+                    const next = { ...prev };
+                    delete next[submittedESS];
+                    return next;
+                });
             }
             if (errMsg.toLowerCase().includes("authorization code is invalid") || errMsg.toLowerCase().includes("code is invalid")) {
                 setError("The authorization code expired. Please click 'Login to link account' again and save immediately.");
@@ -1977,8 +2149,11 @@ const Settings = ({
             } else {
                 setError(formatESSRateLimitError(errMsg));
             }
-            setOauthStatus('idle');
             if (attemptedESSAuth) {
+                setStageMessage(null);
+            }
+            if (isAuthErr) {
+                setOauthStatus('idle');
                 clearOneTimeCredentials();
             }
         } finally {
@@ -2069,6 +2244,16 @@ const Settings = ({
         }
 
         setOauthStatus('popup_open');
+        setError(null);
+
+        const cleanupOAuth = () => {
+            window.removeEventListener('message', listener);
+            oauthListenerRef.current = null;
+            if (oauthTimerRef.current) {
+                clearInterval(oauthTimerRef.current);
+                oauthTimerRef.current = null;
+            }
+        };
 
         const listener = (event: MessageEvent) => {
             if (event.origin !== window.location.origin) return;
@@ -2076,8 +2261,8 @@ const Settings = ({
             if (event.data && event.data.type === 'OAUTH_CODE') {
                 if (siteID && event.data.state !== siteID) {
                     setError('Authentication state mismatch. Please try again.');
-                    window.removeEventListener('message', listener);
-                    oauthListenerRef.current = null;
+                    setOauthStatus('idle');
+                    cleanupOAuth();
                     return;
                 }
 
@@ -2085,14 +2270,32 @@ const Settings = ({
                     ...prev,
                     [fieldName]: event.data.code
                 }));
+                if (settings?.ess) {
+                    setSavedCredentialsProviders(prev => {
+                        if (!prev[settings.ess]) return prev;
+                        const next = { ...prev };
+                        delete next[settings.ess];
+                        return next;
+                    });
+                }
                 setOauthStatus('success');
                 setIsESSDirty(true);
-                window.removeEventListener('message', listener);
-                oauthListenerRef.current = null;
-                if (oauthTimerRef.current) {
-                    clearInterval(oauthTimerRef.current);
-                    oauthTimerRef.current = null;
+                cleanupOAuth();
+            } else if (event.data && event.data.type === 'OAUTH_ERROR') {
+                if (siteID && event.data.state && event.data.state !== siteID) {
+                    return;
                 }
+                const oauthErr = String(event.data.error || '').toLowerCase();
+                const oauthDesc = typeof event.data.errorDescription === 'string' ? event.data.errorDescription : '';
+                if (oauthErr.includes('denied') || oauthErr.includes('cancel')) {
+                    setError("Authorization was cancelled or permissions were not granted. Please click 'Login to link account' and approve all requested permissions.");
+                } else if (oauthDesc) {
+                    setError(`Authorization failed: ${oauthDesc}`);
+                } else {
+                    setError("Authorization did not complete. Please click 'Login to link account' and try again.");
+                }
+                setOauthStatus('idle');
+                cleanupOAuth();
             }
         };
 
@@ -2359,10 +2562,15 @@ const Settings = ({
                                     setCurrentStage={setCurrentStage}
                                     handleOAuthLogin={handleOAuthLogin}
                                     handleESSContinue={handleESSContinue}
+                                    handleESSResendStage={handleESSResendStage}
+                                    resendCooldownSeconds={resendCooldownSeconds}
+                                    onStage0FieldChange={handleStage0FieldChange}
+                                    stageMessage={stageMessage}
                                     isWizard={true}
                                     editESS={editESS}
                                     setEditESS={setEditESS}
                                     essAuthStatus={localEssAuthStatus ?? settings.essAuthStatus}
+                                    hasSavedCredentialsForRetry={Boolean(settings.ess && savedCredentialsProviders[settings.ess])}
                                 />
                             </div>
                         )}
@@ -2906,11 +3114,16 @@ const Settings = ({
                     setCurrentStage={setCurrentStage}
                     handleOAuthLogin={handleOAuthLogin}
                     handleESSContinue={handleESSContinue}
+                    handleESSResendStage={handleESSResendStage}
+                    resendCooldownSeconds={resendCooldownSeconds}
+                    onStage0FieldChange={handleStage0FieldChange}
+                    stageMessage={stageMessage}
                     isWizard={false}
                     editESS={editESS}
                     setEditESS={setEditESS}
                     essAuthStatus={localEssAuthStatus ?? settings.essAuthStatus}
                     highlightTOU={highlightTOU}
+                    hasSavedCredentialsForRetry={Boolean(settings.ess && savedCredentialsProviders[settings.ess])}
                 />
                 </div>
 

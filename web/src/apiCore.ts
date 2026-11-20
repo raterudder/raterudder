@@ -1,6 +1,11 @@
 import type { AuthStatus, Settings } from './api';
 
-export async function extractError(response: Response, fallback: string): Promise<string> {
+export interface ExtractedError {
+    message: string;
+    body?: Record<string, unknown>;
+}
+
+export async function extractErrorWithBody(response: Response, fallback: string): Promise<ExtractedError> {
     if (response.status === 401 && !response.url.includes('/api/auth/status') && !response.url.includes('/api/list/utilities')) {
         try {
             const statusRes = await fetch('/api/auth/status');
@@ -16,11 +21,19 @@ export async function extractError(response: Response, fallback: string): Promis
 
     try {
         const body = await response.json();
-        if (body && typeof body.error === 'string') {
-            return body.error;
+        if (body && typeof body === 'object') {
+            return {
+                message: typeof body.error === 'string' ? body.error : fallback,
+                body: body as Record<string, unknown>,
+            };
         }
     } catch { /* ignore parse failures */ }
-    return fallback;
+    return { message: fallback };
+}
+
+export async function extractError(response: Response, fallback: string): Promise<string> {
+    const { message } = await extractErrorWithBody(response, fallback);
+    return message;
 }
 
 export const fetchSettings = async (siteID?: string): Promise<Settings> => {

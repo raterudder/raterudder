@@ -426,18 +426,36 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			existingCreds, credsUpdated, err = essSystem.Authenticate(ctx, existingCreds)
 			now = s.now().UTC()
 			if err != nil {
+				if errors.Is(err, ess.ErrNeedsNextStage) {
+					log.Ctx(ctx).InfoContext(ctx, "ess credentials require next stage verification", slog.String("ess", newSettings.ESS))
+					if credsUpdated {
+						savedCreds := mergeUpdatedProviderCredentials(origCreds, existingCreds, newSettings.ESS)
+						if enc, encErr := s.encryptCredentials(ctx, siteID, savedCreds); encErr != nil {
+							log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt stage credentials", slog.Any("error", encErr))
+						} else {
+							existing.EncryptedCredentials = enc
+							if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
+								log.Ctx(ctx).ErrorContext(ctx, "failed to save stage credentials", slog.Any("error", dbErr))
+							}
+						}
+					}
+					writeJSONError(w, "A verification code was sent to your email. Please enter the code and try again.", http.StatusBadRequest)
+					return
+				}
 				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
 
 				// purposefully store the existing settings with the auth status updated
 				// and NOT the new settings since the credentials were not verified, while
 				// preserving preexisting credentials for another provider and saving any
 				// rotated credentials for the target provider.
+				var credsSaved bool
 				if credsUpdated {
 					savedCreds := mergeUpdatedProviderCredentials(origCreds, existingCreds, newSettings.ESS)
 					if enc, encErr := s.encryptCredentials(ctx, siteID, savedCreds); encErr != nil {
 						log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated credentials", slog.Any("error", encErr))
 					} else {
 						existing.EncryptedCredentials = enc
+						credsSaved = true
 					}
 				}
 				existing.ESSAuthStatus.ConsecutiveFailures++
@@ -446,6 +464,22 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				existing.ESSAuthStatus.LastUserAttempt = now
 				if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
+					credsSaved = false
+				}
+				if credsSaved {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					if encErr := json.NewEncoder(w).Encode(struct {
+						Error            string `json:"error"`
+						CredentialsSaved bool   `json:"credentialsSaved,omitempty"`
+					}{
+						Error:            fmt.Sprintf("failed to verify ess credentials: %v", err),
+						CredentialsSaved: true,
+					}); encErr != nil {
+						log.Ctx(ctx).WarnContext(ctx, "failed to write error response", slog.Any("error", encErr))
+						panic(http.ErrAbortHandler)
+					}
+					return
 				}
 				writeJSONError(w, fmt.Sprintf("failed to verify ess credentials: %v", err), http.StatusBadRequest)
 				return
@@ -710,6 +744,12 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	case "enphase":
 		if req.Credentials != nil && req.Credentials.Enphase != nil {
 			existingCreds.Enphase = mergeEnphaseCredentials(existingCreds.Enphase, req.Credentials.Enphase)
+			// Stage 0 requests (no OTP code and no password) explicitly request a fresh OTP email;
+			// clear any previously cached session so expired OTP-only sessions don't fail with 401.
+			if req.Credentials.Enphase.Code == "" && req.Credentials.Enphase.Password == "" && existingCreds.Enphase != nil {
+				existingCreds.Enphase.SessionID = ""
+				existingCreds.Enphase.ManagerToken = ""
+			}
 		}
 		existingCreds.Franklin = nil
 		existingCreds.Mock = nil
@@ -867,6 +907,8 @@ func mergeEnphaseCredentials(existing, incoming *types.EnphaseCredentials) *type
 		if incoming.Password != existing.Password {
 			merged.SessionID = ""
 			merged.ManagerToken = ""
+			merged.SystemID = 0
+			merged.UserID = 0
 		}
 		merged.Password = incoming.Password
 	}
@@ -874,6 +916,8 @@ func mergeEnphaseCredentials(existing, incoming *types.EnphaseCredentials) *type
 		merged.Code = incoming.Code
 		merged.SessionID = ""
 		merged.ManagerToken = ""
+		merged.SystemID = 0
+		merged.UserID = 0
 	}
 	if incoming.SessionID != "" {
 		merged.SessionID = incoming.SessionID
