@@ -551,7 +551,7 @@ func TestComEd(t *testing.T) {
 		// Find transmission services charge (PSC) for BESH Jan-May 2026
 		var pscJanMay, pscJune2026, pscSept2026 *types.UtilityFeesPeriod
 		var mpccJanMay, mpccJune2026 *types.UtilityFeesPeriod
-		var hpeaJan, hpeaJune, hpeaAug, hpeaSept, hpeaOct *types.UtilityFeesPeriod
+		var hpeaJan, hpeaJune, hpeaAug, hpeaSept, hpeaOct, hpeaNov, hpeaDecFallback *types.UtilityFeesPeriod
 
 		for i := range fees {
 			f := &fees[i]
@@ -582,6 +582,10 @@ func TestComEd(t *testing.T) {
 					hpeaSept = f
 				} else if f.Start.Month() == time.October {
 					hpeaOct = f
+				} else if f.Start.Month() == time.November {
+					hpeaNov = f
+				} else if f.Start.Month() == time.December {
+					hpeaDecFallback = f
 				}
 			}
 		}
@@ -626,6 +630,15 @@ func TestComEd(t *testing.T) {
 			assert.InDelta(t, -0.02296, hpeaOct.DollarsPerKWH, 0.00001)
 			assert.False(t, hpeaOct.GridAdditional)
 		}
+		if assert.NotNil(t, hpeaNov) {
+			assert.InDelta(t, 0.01193, hpeaNov.DollarsPerKWH, 0.00001)
+			assert.False(t, hpeaNov.GridAdditional)
+		}
+		if assert.NotNil(t, hpeaDecFallback) {
+			assert.InDelta(t, 0.01193, hpeaDecFallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), hpeaDecFallback.End)
+			assert.False(t, hpeaDecFallback.GridAdditional)
+		}
 
 		// BES Fees
 		besFees, err := getComEdBESFees(opts)
@@ -633,7 +646,7 @@ func TestComEd(t *testing.T) {
 		assert.NotEmpty(t, besFees)
 
 		var pscBESJanMay, pscBESJune2026, pscBESSept2026 *types.UtilityFeesPeriod
-		var peaJan, peaJune, peaAug, peaSept, peaOct *types.UtilityFeesPeriod
+		var peaJan, peaJune, peaAug, peaSept, peaOct, peaNov, peaDecFallback *types.UtilityFeesPeriod
 		var pecSummerJuneAug, pecSummerSept, pecNonsummerJanMay, pecNonsummerOctMay *types.UtilityFeesPeriod
 
 		for i := range besFees {
@@ -658,6 +671,10 @@ func TestComEd(t *testing.T) {
 					peaSept = f
 				} else if f.Start.Month() == time.October {
 					peaOct = f
+				} else if f.Start.Month() == time.November {
+					peaNov = f
+				} else if f.Start.Month() == time.December {
+					peaDecFallback = f
 				}
 			}
 			if strings.Contains(f.Description, "Electricity Supply Charge (PEC)") {
@@ -697,6 +714,13 @@ func TestComEd(t *testing.T) {
 		if assert.NotNil(t, peaOct) {
 			assert.InDelta(t, -0.01551, peaOct.DollarsPerKWH, 0.00001)
 		}
+		if assert.NotNil(t, peaNov) {
+			assert.InDelta(t, 0.03758, peaNov.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, peaDecFallback) {
+			assert.InDelta(t, 0.03758, peaDecFallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), peaDecFallback.End)
+		}
 		if assert.NotNil(t, pecSummerJuneAug) {
 			assert.InDelta(t, 0.08677, pecSummerJuneAug.DollarsPerKWH, 0.00001)
 		}
@@ -718,7 +742,7 @@ func TestComEd(t *testing.T) {
 		var mpecBESTSummerJuneAug, mdppecBESTSummerJuneAug, epecBESTSummerJuneAug, opecBESTSummerJuneAug *types.UtilityFeesPeriod
 		var mpecBESTSummerSept, mdppecBESTSummerSept, epecBESTSummerSept, opecBESTSummerSept *types.UtilityFeesPeriod
 		var mpecBESTNonsummer, mdppecBESTNonsummer, epecBESTNonsummer, opecBESTNonsummer *types.UtilityFeesPeriod
-		var pjmBEST, tpeaBESTJanSep, tpeaBESTOct *types.UtilityFeesPeriod
+		var pjmBEST, tpeaBESTJanSep, tpeaBESTOct, tpeaBESTNov, tpeaBESTDecFallback *types.UtilityFeesPeriod
 
 		for i := range bestFees {
 			f := &bestFees[i]
@@ -730,6 +754,10 @@ func TestComEd(t *testing.T) {
 					tpeaBESTJanSep = f
 				} else if f.Start.Month() == time.October {
 					tpeaBESTOct = f
+				} else if f.Start.Month() == time.November {
+					tpeaBESTNov = f
+				} else if f.Start.Month() == time.December {
+					tpeaBESTDecFallback = f
 				}
 			}
 			if strings.Contains(f.Description, "BEST Summer Morning") {
@@ -783,6 +811,13 @@ func TestComEd(t *testing.T) {
 		if assert.NotNil(t, tpeaBESTOct) {
 			assert.InDelta(t, 0.00110, tpeaBESTOct.DollarsPerKWH, 0.00001)
 		}
+		if assert.NotNil(t, tpeaBESTNov) {
+			assert.InDelta(t, 0.00460, tpeaBESTNov.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, tpeaBESTDecFallback) {
+			assert.InDelta(t, 0.00460, tpeaBESTDecFallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), tpeaBESTDecFallback.End)
+		}
 		if assert.NotNil(t, mpecBESTSummerJuneAug) {
 			assert.InDelta(t, 0.03778, mpecBESTSummerJuneAug.DollarsPerKWH, 0.00001)
 		}
@@ -818,6 +853,26 @@ func TestComEd(t *testing.T) {
 		}
 		if assert.NotNil(t, opecBESTNonsummer) {
 			assert.InDelta(t, 0.03394, opecBESTNonsummer.DollarsPerKWH, 0.00001)
+		}
+
+		// Verify 2027 BES and BEST schedule continuity through May 2027
+		for _, rateID := range []string{"comed_bes", "comed_best"} {
+			u := &genericTOU{}
+			require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+				UtilityProvider:    "comed",
+				UtilityRate:        rateID,
+				UtilityRateOptions: opts,
+			}))
+			for _, checkTime := range []time.Time{
+				time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
+				time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
+				time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
+			} {
+				p, err := u.priceForTime(checkTime)
+				require.NoError(t, err, "priceForTime failed for %s at %v", rateID, checkTime)
+				assert.Greater(t, p.DollarsPerKWH, 0.0, "expected positive supply price for %s at %v", rateID, checkTime)
+				assert.Greater(t, p.GridUseDollarsPerKWH, 0.0, "expected positive delivery price for %s at %v", rateID, checkTime)
+			}
 		}
 	})
 

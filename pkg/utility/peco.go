@@ -1,5 +1,19 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): peco (PECO Energy Company)
+// - Official Sources:
+//   - https://www.peco.com/my-account/my-dashboard/rates-tariffs/electric-service/current-electric
+//   - https://www.peco.com/cdn/assets/v3/assets/blt1b5616c79bacadb4/bltc70b88d49d2a1491/6abbe397d463362a37c0f102/Current_Electric_tariff_eff_Oct_1_2026_(003).pdf?branch=prod_alias
+//   - https://www.peco.com/my-account/my-dashboard/rates-tariffs/electric-service/proposed-electric
+//   - https://azure-na-assets.contentstack.com/v3/assets/blt1b5616c79bacadb4/bltf0a3b82010822345/6af61350a4c7f761ffba775c/TSC_Supp_no._40_eff_December_1_2026_clean.pdf
+//   - Tariff Electric Pa. P.U.C. No. 8: Supplement No. 25 (4th Rev. Pages 37-39 GSA Class 1), Supplement No. 27 (3rd Rev. Page 46 TSC), Supplement No. 32 (14th Rev. Pages 52-53 Rate R/RH), Supplement No. 40 (4th Rev. Page 46 TSC eff. Dec 1, 2026), Rate RS-2 Net Metering (Pages 54-56)
+// - Effective Window: 2025-12-01 through 2027-12-31 (Supplement No. 40 TSC $0.00995/kWh effective 2026-12-01)
+// - Revision Cadence: Semi-Annual (June 1 and December 1 for GSA Procurement Class 1 and TSC; quarterly distribution/GSA reconciliations as filed)
+// - Next Audit Due: 2026-12-01 (Check December 1, 2026 semi-annual GSA Procurement Class 1 supplement for Rate R/RH and Residential TOU)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Models PECO Default Service Price to Compare (GSA Procurement Class 1 + Transmission Service Charge: Jun-Nov 2026 TSC $0.00974/kWh, Dec 2026+ TSC $0.00995/kWh per Supplement No. 40); fixed monthly customer charge ($11.75/mo) excluded; 1:1 kWh net metering under Rate RS-2.
+
 import (
 	"time"
 
@@ -65,13 +79,30 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					OtherDollarsPerKWH: 0.11024,
 					OtherDescription:   "PECO Rate R/RH Standard Rate (Winter/Spring)",
 				})
-				// Jun 1, 2026 - Dec 31, 2026: $0.11759 / kWh
+				// Jun 1, 2026 - Nov 30, 2026: $0.11759 / kWh ($0.10785 GSA + $0.00974 TSC)
 				simplified = append(simplified, touSimplifiedPeriod{
 					Year:               2026,
 					MonthStart:         time.June,
-					MonthEnd:           time.December,
+					MonthEnd:           time.November,
 					OtherDollarsPerKWH: 0.11759,
 					OtherDescription:   "PECO Rate R/RH Standard Rate (Summer/Fall)",
+				})
+				// Dec 1, 2026 - Dec 31, 2026: $0.11780 / kWh ($0.10785 GSA + $0.00995 TSC per Supplement No. 40)
+				simplified = append(simplified, touSimplifiedPeriod{
+					Year:               2026,
+					MonthStart:         time.December,
+					MonthEnd:           time.December,
+					OtherDollarsPerKWH: 0.11780,
+					OtherDescription:   "PECO Rate R/RH Standard Rate (Winter)",
+				})
+			} else if year >= 2027 {
+				// 2027+: $0.11780 / kWh ($0.10785 GSA + $0.00995 TSC per Supplement No. 40 until superseded)
+				simplified = append(simplified, touSimplifiedPeriod{
+					Year:               year,
+					MonthStart:         time.January,
+					MonthEnd:           time.December,
+					OtherDollarsPerKWH: 0.11780,
+					OtherDescription:   "PECO Rate R/RH Standard Rate",
 				})
 			}
 
@@ -95,7 +126,12 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 			} else if year == 2026 {
 				schedules = []touRates{
 					{time.January, time.May, 0.32747, 0.08382, 0.06061, "Winter/Spring 2026"},
-					{time.June, time.December, 0.32404, 0.09336, 0.06741, "Summer/Fall 2026"},
+					{time.June, time.November, 0.32404, 0.09336, 0.06741, "Summer/Fall 2026"},
+					{time.December, time.December, 0.32425, 0.09357, 0.06762, "Winter 2026"},
+				}
+			} else if year >= 2027 {
+				schedules = []touRates{
+					{time.January, time.December, 0.32425, 0.09357, 0.06762, "2027"},
 				}
 			}
 
@@ -183,7 +219,7 @@ func pecoUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential Service (Rate R/RH)",
 				Options: pecoOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return pecoPeriods("peco_r", opts, []int{2025, 2026}), nil
+					return pecoPeriods("peco_r", opts, []int{2025, 2026, 2027}), nil
 				},
 			},
 			{
@@ -191,7 +227,7 @@ func pecoUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential Time-of-Use (TOU)",
 				Options: pecoOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return pecoPeriods("peco_tou", opts, []int{2025, 2026}), nil
+					return pecoPeriods("peco_tou", opts, []int{2025, 2026, 2027}), nil
 				},
 			},
 		},

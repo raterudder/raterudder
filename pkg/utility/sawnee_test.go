@@ -116,4 +116,24 @@ func TestSawneeUtility(t *testing.T) {
 			assert.InDelta(t, 0.0425, p.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("2027 Forward Continuity", func(t *testing.T) {
+		for rateID, wantSummerPeak := range map[string]float64{
+			"sawnee_h":   0.0767,
+			"sawnee_tu":  0.335,
+			"sawnee_cpp": 0.286,
+		} {
+			u := &genericTOU{}
+			require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+				UtilityProvider: "sawnee",
+				UtilityRate:     rateID,
+			}))
+			p, err := u.priceForTime(time.Date(2027, time.June, 14, 15, 0, 0, 0, etLocation))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, wantSummerPeak, p.DollarsPerKWH, 1e-6)
+				assert.True(t, p.SeparateGenerationCredit)
+				assert.InDelta(t, 0.0379, p.GenerationCreditDollarsPerKWH, 1e-6)
+			}
+		}
+	})
 }
