@@ -586,6 +586,63 @@ func TestTesla(t *testing.T) {
 		assert.False(t, status.DCCoupled)
 	})
 
+	t.Run("GetStatus GridPowerLimits", func(t *testing.T) {
+		var siteInfoResp map[string]any
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": siteInfoResp,
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 75.0,
+						"grid_status":        "Active",
+					},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		newTeslaSys := func() System {
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+			return sys
+		}
+
+		// 1. Uncapped sentinel values (+/- 1e9) leave limits as 0 (unlimited)
+		siteInfoResp = map[string]any{
+			"backup_reserve_percent":  20.0,
+			"nameplate_energy":        13500.0,
+			"max_site_meter_power_ac": 1000000000.0,
+			"min_site_meter_power_ac": -1000000000.0,
+		}
+		status, err := newTeslaSys().GetStatus(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, status.MaxGridImportKW)
+		assert.Zero(t, status.MaxGridExportKW)
+
+		// 2. Capped import and export limits (in kW)
+		siteInfoResp = map[string]any{
+			"backup_reserve_percent":  20.0,
+			"nameplate_energy":        27000.0,
+			"max_site_meter_power_ac": 14.4,
+			"min_site_meter_power_ac": -6.632,
+		}
+		status, err = newTeslaSys().GetStatus(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 14.4, status.MaxGridImportKW)
+		assert.Equal(t, 6.632, status.MaxGridExportKW)
+	})
+
 	t.Run("GetStatus Ignore Unknown Batteries Fallback", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {

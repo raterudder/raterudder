@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import App from '../App';
+import './OAuthAuthorizePage';
 import * as api from '../api';
 import { setupDefaultApiMocks, defaultAuthStatus } from '../test/apiMocks';
 
@@ -125,6 +126,34 @@ describe('OAuthAuthorizePage', () => {
         const mismatchWarning = screen.getByTestId('oauth-redirect-mismatch-warning');
         expect(mismatchWarning).toHaveTextContent('app.example.com');
         expect(mismatchWarning).toHaveTextContent('other.example.net:8443');
+    });
+
+    it('does not warn when CIMD client redirects to loopback', async () => {
+        const cimdURL = 'https://claude.ai/oauth/claude-code-client-metadata';
+        window.history.pushState(
+            null,
+            '',
+            `/oauth/authorize?client_id=${encodeURIComponent(cimdURL)}&redirect_uri=${encodeURIComponent('http://localhost:56498/callback')}&code_challenge=ch_abc&code_challenge_method=S256`
+        );
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [{ id: 'site1', name: 'Home Site' }],
+        });
+        (api.fetchOAuthClientInfo as any).mockResolvedValue({
+            clientName: 'Claude Code',
+            redirectURI: 'http://localhost:56498/callback',
+            clientDomain: 'claude.ai',
+            verified: true,
+        });
+
+        render(<App />);
+
+        expect(await screen.findByText(/Connect Claude Code/i)).toBeInTheDocument();
+        expect(screen.getByTestId('oauth-client-domain')).toHaveTextContent('Domain: claude.ai');
+        expect(screen.queryByTestId('oauth-unverified-warning')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('oauth-redirect-mismatch-warning')).not.toBeInTheDocument();
     });
 
     it('ignores viewSite query parameter on /oauth/authorize for multi-site admins', async () => {

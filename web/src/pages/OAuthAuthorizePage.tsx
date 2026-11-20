@@ -117,14 +117,21 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
     const clientDomain = clientInfo?.clientDomain || '';
     let redirectLabel: string;
     let redirectOrigin: string;
+    let isLoopbackRedirect = false;
     try {
         const parsedRedirect = new URL(clientInfo?.redirectURI || redirectURI);
+        const hostname = parsedRedirect.hostname.toLowerCase();
         if (parsedRedirect.protocol === 'https:') {
             redirectLabel = parsedRedirect.host;
             redirectOrigin = parsedRedirect.origin.toLowerCase();
         } else if (parsedRedirect.protocol === 'http:') {
             redirectLabel = parsedRedirect.origin;
             redirectOrigin = parsedRedirect.origin.toLowerCase();
+            isLoopbackRedirect =
+                hostname === 'localhost' ||
+                hostname === '127.0.0.1' ||
+                hostname === '[::1]' ||
+                hostname === '::1';
         } else {
             redirectLabel = `${parsedRedirect.protocol}//${parsedRedirect.host}`;
             redirectOrigin = parsedRedirect.protocol.toLowerCase();
@@ -141,6 +148,7 @@ const OAuthAuthorizePage: React.FC<OAuthAuthorizePageProps> = ({ sites, selected
         clientInfo?.verified &&
         expectedDomainOrigin &&
         redirectOrigin &&
+        !isLoopbackRedirect &&
         redirectOrigin !== expectedDomainOrigin
     );
 

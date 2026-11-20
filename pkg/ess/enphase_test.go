@@ -541,6 +541,12 @@ func TestEnphase(t *testing.T) {
 				return
 			}
 
+			if r.URL.Path == "/app-api/123/get_pel_details" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"pel_type": "Not Configured", "export_limit": null}`))
+				return
+			}
+
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -646,6 +652,12 @@ func TestEnphase(t *testing.T) {
 			if r.URL.Path == "/app-api/123/grid_control_check.json" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"gridOutageCheck": false}`))
+				return
+			}
+
+			if r.URL.Path == "/app-api/123/get_pel_details" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"pel_type": "Not Configured", "export_limit": null}`))
 				return
 			}
 
@@ -1501,6 +1513,11 @@ func TestEnphase(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/app-api/123/get_pel_details" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"pel_type": "Not Configured", "export_limit": null}`))
+				return
+			}
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -1574,6 +1591,149 @@ func TestEnphase(t *testing.T) {
 			st, err := e.GetStatus(ctx)
 			require.NoError(t, err)
 			assert.True(t, st.GridUnavailable)
+		})
+	})
+
+	t.Run("GetStatus PowerExportLimit", func(t *testing.T) {
+		var pelStatus int = http.StatusOK
+		var pelBody string = `{"pel_type": "Not Configured", "export_limit": null}`
+		var pelCalls int
+		var lastAuthHeader string
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App: enphaseApp{Timezone: "UTC"},
+					State: enphaseState{
+						SiteID: 123,
+						BatteryConfig: enphaseBatteryConfig{
+							Usage:                   "self-consumption",
+							BatteryBackupPercentage: 20,
+						},
+					},
+				})
+			case "/pv/systems/123/today":
+				w.Write([]byte(`{"start_date":"2026-06-06","battery_details":{"aggregate_soc":50},"stats":[]}`))
+			case "/pv/settings/123/battery_status.json":
+				w.Write([]byte(`{"max_capacity":10,"available_power":7.68}`))
+			case "/app-api/123/grid_control_check.json":
+				w.Write([]byte(`{"gridOutageCheck":false}`))
+			case "/app-api/123/get_pel_details":
+				pelCalls++
+				lastAuthHeader = r.Header.Get("Authorization")
+				w.WriteHeader(pelStatus)
+				w.Write([]byte(pelBody))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.sessionID = "sess_abc"
+		e.managerToken = "mgr_jwt_xyz"
+		e.syncCookies()
+
+		t.Run("Not configured returns 0 and caches for 24h", func(t *testing.T) {
+			pelCalls = 0
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "Not Configured", "export_limit": null}`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 0.0, st.MaxGridExportKW)
+			assert.Equal(t, 0.0, st.MaxGridImportKW)
+			assert.Equal(t, "mgr_jwt_xyz", lastAuthHeader)
+			assert.Equal(t, 1, pelCalls)
+
+			// Second GetStatus within 24h must reuse cached PEL response without hitting endpoint
+			st2, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 0.0, st2.MaxGridExportKW)
+			assert.Equal(t, 1, pelCalls)
+		})
+
+		t.Run("Single gateway static export_value in kW", func(t *testing.T) {
+			pelCalls = 0
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "Static", "export_limit": {"serial_number": "GW1234", "export_value": "11.0 kW"}}`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.InDelta(t, 11.0, st.MaxGridExportKW, 1e-6)
+			assert.Equal(t, 1, pelCalls)
+		})
+
+		t.Run("Scalar export_limit in Watts", func(t *testing.T) {
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "Static", "export_limit": "5,000 W"}`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.InDelta(t, 5.0, st.MaxGridExportKW, 1e-6)
+		})
+
+		t.Run("Multi-gateway static array sums gateway export limits", func(t *testing.T) {
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "Static", "export_limit": [{"serial_number": "GW1", "export_value": "3.84 kW"}, {"serial_number": "GW2", "export_value": "3.84 kW"}]}`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.InDelta(t, 7.68, st.MaxGridExportKW, 1e-6)
+		})
+
+		t.Run("24-Hour Schedule is ignored and returns 0", func(t *testing.T) {
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "24-Hour Schedule", "export_limit": {"serial_number": "GW1", "schedule": [{"time_range": "08:00 - 16:00", "pel": "4.5 kW"}]}}`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 0.0, st.MaxGridExportKW)
+		})
+
+		t.Run("Unitless numbers and unsupported units return 0", func(t *testing.T) {
+			ctx := context.Background()
+			assert.Equal(t, 0.0, resolveEnphasePELExportKW(ctx, enphasePELDetailsResponse{
+				PELType:     "Static",
+				ExportLimit: json.RawMessage(`5000`),
+			}))
+			assert.Equal(t, 0.0, resolveEnphasePELExportKW(ctx, enphasePELDetailsResponse{
+				PELType:     "Static",
+				ExportLimit: json.RawMessage(`{"serial_number": "GW1", "export_value": "5000"}`),
+			}))
+			assert.Equal(t, 0.0, resolveEnphasePELExportKW(ctx, enphasePELDetailsResponse{
+				PELType:     "Static",
+				ExportLimit: json.RawMessage(`{"serial_number": "GW1", "export_value": "20 A"}`),
+			}))
+		})
+
+		t.Run("HTTP failure gracefully falls back to 0 without caching error", func(t *testing.T) {
+			pelCalls = 0
+			pelStatus = http.StatusInternalServerError
+			pelBody = `internal error`
+			e.pelExpiry = time.Time{}
+
+			st, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 0.0, st.MaxGridExportKW)
+			assert.Equal(t, 1, pelCalls)
+
+			// Next poll retries since failure was not cached
+			pelStatus = http.StatusOK
+			pelBody = `{"pel_type": "Static", "export_limit": "7.6 kW"}`
+			st2, err := e.GetStatus(context.Background())
+			require.NoError(t, err)
+			assert.InDelta(t, 7.6, st2.MaxGridExportKW, 1e-6)
+			assert.Equal(t, 2, pelCalls)
 		})
 	})
 

@@ -104,6 +104,8 @@ export interface SystemStatus {
     batteryCapacityKWH: number;
     maxBatteryChargeKW: number;
     maxBatteryDischargeKW: number;
+    maxGridImportKW?: number;
+    maxGridExportKW?: number;
     solarKW: number;
     gridKW: number;
     homeKW: number;

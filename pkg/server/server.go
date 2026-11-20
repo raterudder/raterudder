@@ -548,15 +548,21 @@ func isImageFile(p string) bool {
 func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		isAssetsPath := cleanedPath == "assets" || strings.HasPrefix(cleanedPath, "assets/")
 		// Default to serving index.html for unknown paths (SPA)
 		if r.URL.Path != "/" {
 			// Check if the file exists in the filesystem
 			f, err := dir.Open(cleanedPath)
 			if err == nil {
+				stat, statErr := f.Stat()
 				f.Close()
+				if statErr == nil && stat.IsDir() && isAssetsPath {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
 			} else if errors.Is(err, fs.ErrNotExist) {
-				// Don't fallback to index.html for .well-known
-				if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+				// Don't fallback to index.html for .well-known or /assets/
+				if strings.HasPrefix(r.URL.Path, "/.well-known/") || isAssetsPath {
 					// we don't write JSON here because we don't know what file type is expected
 					http.Error(w, "not found", http.StatusNotFound)
 					return

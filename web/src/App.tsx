@@ -1,35 +1,46 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Route, Switch, Redirect, useLocation, Router, useSearch } from 'wouter';
 import { useBrowserLocation } from 'wouter/use-browser-location';
 import Header from './components/Header';
 import Footer from './components/Footer';
-import FeedbackWidget from './components/FeedbackWidget';
-import { TutorialDialog } from './components/TutorialDialog';
-import { NotificationModal } from './components/NotificationModal';
-import { TermsAcceptanceModal } from './components/TermsAcceptanceModal';
+import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
 import LandingPage from './pages/LandingPage';
-import Dashboard from './pages/Dashboard';
-import Settings from './pages/Settings';
-import Forecast from './pages/Forecast';
-import History from './pages/History';
-import LoginPage from './pages/LoginPage';
-import JoinSitePage from './pages/JoinSitePage';
-import NewSitePage from './pages/NewSitePage';
-import BetaInterstitialPage from './pages/BetaInterstitialPage';
-import AdminPage from './pages/AdminPage';
-import PrivacyPolicy from './pages/PrivacyPolicy';
-import TermsOfService from './pages/TermsOfService';
-import HowItWorksPage from './pages/HowItWorksPage';
-import GettingStartedPage from './pages/GettingStartedPage';
-import ChangelogPage from './pages/ChangelogPage';
-import SupportedUtilitiesPage from './pages/SupportedUtilitiesPage';
-import TeslaCallback from './pages/TeslaCallback';
-import OAuthAuthorizePage from './pages/OAuthAuthorizePage';
+import { routeImporters } from './utils/routePreload';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
 import { FeaturesProvider } from './utils/features';
+import './utils/pwaUtils';
+
+const Dashboard = React.lazy(routeImporters['/dashboard']);
+const Settings = React.lazy(routeImporters['/settings']);
+const Forecast = React.lazy(routeImporters['/forecast']);
+const History = React.lazy(routeImporters['/history']);
+const LoginPage = React.lazy(routeImporters['/login']);
+const JoinSitePage = React.lazy(routeImporters['/join-site']);
+const NewSitePage = React.lazy(routeImporters['/new-site']);
+const BetaInterstitialPage = React.lazy(routeImporters['/welcome']);
+const AdminPage = React.lazy(routeImporters['/admin']);
+const PrivacyPolicy = React.lazy(routeImporters['/privacy']);
+const TermsOfService = React.lazy(routeImporters['/terms']);
+const HowItWorksPage = React.lazy(routeImporters['/how-it-works']);
+const GettingStartedPage = React.lazy(routeImporters['/getting-started']);
+const ChangelogPage = React.lazy(routeImporters['/changelog']);
+const SupportedUtilitiesPage = React.lazy(routeImporters['/utilities']);
+const TeslaCallback = React.lazy(routeImporters['/callback/tesla']);
+const OAuthAuthorizePage = React.lazy(routeImporters['/oauth/authorize']);
+
+const FeedbackWidget = React.lazy(() => import('./components/FeedbackWidget'));
+const TutorialDialog = React.lazy(() =>
+    import('./components/TutorialDialog').then((m) => ({ default: m.TutorialDialog }))
+);
+const NotificationModal = React.lazy(() =>
+    import('./components/NotificationModal').then((m) => ({ default: m.NotificationModal }))
+);
+const TermsAcceptanceModal = React.lazy(() =>
+    import('./components/TermsAcceptanceModal').then((m) => ({ default: m.TermsAcceptanceModal }))
+);
 
 const isMarketingRoute = (path: string) =>
     path === '/' ||
@@ -403,134 +414,169 @@ function AppContent() {
                             <span>Loading...</span>
                         </div>
                     ) : (
-                        <Switch>
-                            <Route path="/" component={LandingPage} />
-                            <Route path="/how-it-works" component={HowItWorksPage} />
-                            <Route path="/getting-started" component={GettingStartedPage} />
-                            <Route path="/utilities" component={SupportedUtilitiesPage} />
-                            <Route path="/changelog" component={ChangelogPage} />
-                            <Route path="/privacy" component={PrivacyPolicy} />
-                            <Route path="/terms" component={TermsOfService} />
-                            <Route path="/login">
-                                {loggedIn ? (
-                                    (() => {
-                                        const from = new URLSearchParams(search || window.location.search).get('from');
-                                        const isSafeRelativeFrom = Boolean(from && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/\\'));
-                                        const dest = isSafeRelativeFrom && from ? from : '/dashboard';
-                                        return <Redirect to={dest} replace />;
-                                    })()
-                                ) : (
-                                    <LoginPage
-                                        onLoginSuccess={handleLoginSuccess}
-                                        onLoginError={() => console.log('Login Failed')}
-                                        authEnabled={authRequired}
-                                        clientIDs={clientIDs}
-                                    />
-                                )}
-                            </Route>
+                        <Suspense
+                            fallback={
+                                <div className="loading-screen">
+                                    <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                                    <span>Loading...</span>
+                                </div>
+                            }
+                        >
+                            <Switch>
+                                <Route path="/" component={LandingPage} />
+                                <Route path="/how-it-works">
+                                    <HowItWorksPage />
+                                </Route>
+                                <Route path="/getting-started">
+                                    <GettingStartedPage />
+                                </Route>
+                                <Route path="/utilities">
+                                    <SupportedUtilitiesPage />
+                                </Route>
+                                <Route path="/changelog">
+                                    <ChangelogPage />
+                                </Route>
+                                <Route path="/privacy">
+                                    <PrivacyPolicy />
+                                </Route>
+                                <Route path="/terms">
+                                    <TermsOfService />
+                                </Route>
+                                <Route path="/login">
+                                    {loggedIn ? (
+                                        (() => {
+                                            const from = new URLSearchParams(search || window.location.search).get('from');
+                                            const isSafeRelativeFrom = Boolean(from && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/\\'));
+                                            const dest = isSafeRelativeFrom && from ? from : '/dashboard';
+                                            return <Redirect to={dest} replace />;
+                                        })()
+                                    ) : (
+                                        <LoginPage
+                                            onLoginSuccess={handleLoginSuccess}
+                                            onLoginError={() => console.log('Login Failed')}
+                                            authEnabled={authRequired}
+                                            clientIDs={clientIDs}
+                                        />
+                                    )}
+                                </Route>
 
-                            {/* Protected Routes */}
-                            <Route path="/welcome">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {effectiveSites.length > 0 && !new URLSearchParams(search || window.location.search).has('requestUtility') ? (
-                                        <Redirect to="/dashboard" replace />
-                                    ) : (
-                                        <BetaInterstitialPage />
-                                    )}
-                                </ProtectedRoute>
-                            </Route>
-                             <Route path="/new-site">
-                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                     <NewSitePage onJoinSuccess={handleJoinSuccess} />
-                                 </ProtectedRoute>
-                             </Route>
-                             <Route path="/join-site">
-                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                     <JoinSitePage onJoinSuccess={handleJoinSuccess} />
-                                 </ProtectedRoute>
-                             </Route>
-                            <Route path="/dashboard">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {!effectiveSiteID && effectiveSites.length === 0 ? (
-                                        <Redirect to="/welcome" replace />
-                                    ) : (
-                                        <Dashboard siteID={effectiveSiteID} settings={settings} />
-                                    )}
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/forecast">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {!effectiveSiteID && effectiveSites.length === 0 ? (
-                                        <Redirect to="/welcome" replace />
-                                    ) : (
-                                        <Forecast siteID={effectiveSiteID} settings={settings} />
-                                    )}
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/history">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {!effectiveSiteID && effectiveSites.length === 0 ? (
-                                        <Redirect to="/welcome" replace />
-                                    ) : (
-                                        <History siteID={effectiveSiteID} settings={settings} />
-                                    )}
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/settings">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {!effectiveSiteID && effectiveSites.length === 0 ? (
-                                        <Redirect to="/welcome" replace />
-                                    ) : (
-                                         <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} />
-                                    )}
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/admin">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    <AdminPage />
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/oauth/authorize">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    <OAuthAuthorizePage sites={sites} selectedSiteID={selectedSiteID} />
-                                </ProtectedRoute>
-                            </Route>
+                                {/* Protected Routes */}
+                                <Route path="/welcome">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        {effectiveSites.length > 0 && !new URLSearchParams(search || window.location.search).has('requestUtility') ? (
+                                            <Redirect to="/dashboard" replace />
+                                        ) : (
+                                            <BetaInterstitialPage />
+                                        )}
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/new-site">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        <NewSitePage onJoinSuccess={handleJoinSuccess} />
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/join-site">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        <JoinSitePage onJoinSuccess={handleJoinSuccess} />
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/dashboard">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        {!effectiveSiteID && effectiveSites.length === 0 ? (
+                                            <Redirect to="/welcome" replace />
+                                        ) : (
+                                            <Dashboard siteID={effectiveSiteID} settings={settings} />
+                                        )}
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/forecast">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        {!effectiveSiteID && effectiveSites.length === 0 ? (
+                                            <Redirect to="/welcome" replace />
+                                        ) : (
+                                            <Forecast siteID={effectiveSiteID} settings={settings} />
+                                        )}
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/history">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        {!effectiveSiteID && effectiveSites.length === 0 ? (
+                                            <Redirect to="/welcome" replace />
+                                        ) : (
+                                            <History siteID={effectiveSiteID} settings={settings} />
+                                        )}
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/settings">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        {!effectiveSiteID && effectiveSites.length === 0 ? (
+                                            <Redirect to="/welcome" replace />
+                                        ) : (
+                                            <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} />
+                                        )}
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/admin">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        <AdminPage />
+                                    </ProtectedRoute>
+                                </Route>
+                                <Route path="/oauth/authorize">
+                                    <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                        <OAuthAuthorizePage sites={sites} selectedSiteID={selectedSiteID} />
+                                    </ProtectedRoute>
+                                </Route>
 
-                            <Route path="/callback/tesla" component={TeslaCallback} />
+                                <Route path="/callback/tesla">
+                                    <TeslaCallback />
+                                </Route>
 
-                            {/* Fallback */}
-                            <Route>
-                                <Redirect to="/" replace />
-                            </Route>
-                        </Switch>
+                                {/* Fallback */}
+                                <Route>
+                                    <Redirect to="/" replace />
+                                </Route>
+                            </Switch>
+                        </Suspense>
                     )}
                 </main>
 
                 <Footer />
 
                 {loggedIn && (
-                    <FeedbackWidget siteID={effectiveSiteID} />
+                    <Suspense fallback={null}>
+                        <FeedbackWidget siteID={effectiveSiteID} />
+                    </Suspense>
                 )}
 
-                {loggedIn && (
-                    <NotificationModal
-                        open={isNotificationModalOpen}
-                        onClose={() => setIsNotificationModalOpen(false)}
-                        siteID={effectiveSiteID}
-                        siteName={effectiveSites.find(s => s.id === effectiveSiteID)?.name || effectiveSiteID}
-                        settings={settings}
-                        currentUserID={currentUserID}
-                        onSaved={handleSettingsSaved}
-                    />
+                {loggedIn && isNotificationModalOpen && (
+                    <Suspense fallback={null}>
+                        <NotificationModal
+                            open={isNotificationModalOpen}
+                            onClose={() => setIsNotificationModalOpen(false)}
+                            siteID={effectiveSiteID}
+                            siteName={effectiveSites.find(s => s.id === effectiveSiteID)?.name || effectiveSiteID}
+                            settings={settings}
+                            currentUserID={currentUserID}
+                            onSaved={handleSettingsSaved}
+                        />
+                    </Suspense>
                 )}
 
-                <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />
+                {showTutorial && (
+                    <Suspense fallback={null}>
+                        <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />
+                    </Suspense>
+                )}
 
-                <TermsAcceptanceModal
-                    open={loggedIn && sites.length > 0 && !termsAccepted && location !== '/terms' && location !== '/privacy'}
-                    onAccepted={() => setTermsAccepted(true)}
-                    onLogout={handleLogout}
-                />
+                {loggedIn && sites.length > 0 && !termsAccepted && location !== '/terms' && location !== '/privacy' && (
+                    <Suspense fallback={null}>
+                        <TermsAcceptanceModal
+                            open={true}
+                            onAccepted={() => setTermsAccepted(true)}
+                            onLogout={handleLogout}
+                        />
+                    </Suspense>
+                )}
             </div>
         </FeaturesProvider>
     );
@@ -539,9 +585,11 @@ function AppContent() {
 
 function App() {
   return (
-    <Router hook={useLocationWithViewSite}>
-        <AppContent />
-    </Router>
+    <ChunkErrorBoundary>
+        <Router hook={useLocationWithViewSite}>
+            <AppContent />
+        </Router>
+    </ChunkErrorBoundary>
   );
 }
 

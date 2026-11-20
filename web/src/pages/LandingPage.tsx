@@ -1,19 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { Link } from 'wouter';
 import { Accordion } from '@base-ui/react/accordion';
-import {
-    ResponsiveContainer,
-    AreaChart,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    ReferenceLine,
-    ReferenceArea,
-    Line
-} from 'recharts';
-import { ALL_ZONES } from '../utils/forecastUtils';
+import { ALL_ZONES } from '../utils/planZones';
 import { usePageSEO, PUBLIC_PAGES_SEO } from '../utils/seo';
 import './LandingPage.css';
+
+const LandingPageChart = React.lazy(() => import('../components/LandingPageChart'));
 
 // Simulation of a 24-hour cycle (Hourly intervals)
 const chartData = [
@@ -288,6 +280,10 @@ const LandingPage: React.FC = () => {
     const [activePhase, setActivePhase] = useState(0);
     const [isAutoplay, setIsAutoplay] = useState(true);
     const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+    const [shouldLoadChart, setShouldLoadChart] = useState(
+        () => typeof window !== 'undefined' && typeof window.IntersectionObserver === 'undefined'
+    );
+    const chartContainerRef = useRef<HTMLDivElement | null>(null);
     const autoplayRef = useRef<number | null>(null);
 
     useEffect(() => {
@@ -295,6 +291,31 @@ const LandingPage: React.FC = () => {
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, []);
+
+    useEffect(() => {
+        if (shouldLoadChart) {
+            return;
+        }
+        if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
+            setShouldLoadChart(true);
+            return;
+        }
+        const el = chartContainerRef.current;
+        if (!el) {
+            return;
+        }
+        const observer = new window.IntersectionObserver(
+            (entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) {
+                    setShouldLoadChart(true);
+                    observer.disconnect();
+                }
+            },
+            { rootMargin: '300px 0px' }
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [shouldLoadChart]);
 
     const isRateRudder = typeof window !== 'undefined' && (
         window.location.hostname === 'raterudder.com' ||
@@ -769,71 +790,19 @@ const LandingPage: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="chart-visual-container" aria-hidden="true">
-                                <ResponsiveContainer width="100%" height={isMobile ? 190 : 235}>
-                                    <AreaChart data={segmentedChartData} margin={{ top: 10, right: isMobile ? 8 : 20, left: isMobile ? -25 : -10, bottom: 0 }}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-                                        <XAxis
-                                            dataKey="time"
-                                            stroke="rgba(255,255,255,0.35)"
-                                            fontSize={isMobile ? 10 : 12}
-                                            tickLine={false}
-                                            ticks={isMobile
-                                                ? ['12 AM', '4 AM', '8 AM', '12 PM', '4 PM', '8 PM']
-                                                : ['12 AM', '3 AM', '6 AM', '9 AM', '12 PM', '3 PM', '6 PM', '9 PM', '11 PM']}
-                                            tickMargin={6}
+                            <div ref={chartContainerRef} className="chart-visual-container" aria-hidden="true">
+                                {shouldLoadChart ? (
+                                    <Suspense fallback={<div style={{ width: '100%', height: isMobile ? 190 : 235 }} />}>
+                                        <LandingPageChart
+                                            data={segmentedChartData}
+                                            isMobile={isMobile}
+                                            chartHeight={isMobile ? 190 : 235}
+                                            phase={phases[activePhase]}
                                         />
-                                        <YAxis
-                                            stroke="rgba(255,255,255,0.35)"
-                                            fontSize={isMobile ? 10 : 12}
-                                            tickLine={false}
-                                            axisLine={false}
-                                            domain={[0, 100]}
-                                            ticks={isMobile ? [0, 50, 100] : [0, 20, 40, 60, 80, 100]}
-                                            unit="%"
-                                        />
-
-                                        {/* Minimum Reserve Line */}
-                                        <ReferenceLine y={20} stroke="rgba(255, 255, 255, 0.2)" strokeDasharray="3 3" />
-
-                                        {/* Highlighted Phase Area */}
-                                        <ReferenceArea
-                                            x1={phases[activePhase].x1}
-                                            x2={phases[activePhase].x2}
-                                            fill={phases[activePhase].color}
-                                            fillOpacity={0.14}
-                                            stroke={phases[activePhase].color}
-                                            strokeOpacity={0.35}
-                                        />
-                                        <ReferenceLine x={phases[activePhase].x1} stroke={phases[activePhase].color} strokeOpacity={0.7} strokeDasharray="2 2" />
-                                        <ReferenceLine x={phases[activePhase].x2} stroke={phases[activePhase].color} strokeOpacity={0.7} strokeDasharray="2 2" />
-
-                                        {/* Baseline Self-Consumption comparison curve */}
-                                        <Line
-                                            type="monotone"
-                                            dataKey="manualSoc"
-                                            stroke="rgba(193, 198, 215, 0.55)"
-                                            strokeWidth={2}
-                                            strokeDasharray="5 5"
-                                            dot={false}
-                                            isAnimationActive={false}
-                                        />
-
-                                        {/* Multi-color RateRudder mode segments */}
-                                        {ALL_ZONES.map((z) => (
-                                            <Line
-                                                key={z.key}
-                                                type="monotone"
-                                                dataKey={`soc_${z.key}`}
-                                                stroke={z.color}
-                                                strokeWidth={3}
-                                                dot={false}
-                                                connectNulls={false}
-                                                isAnimationActive={false}
-                                            />
-                                        ))}
-                                    </AreaChart>
-                                </ResponsiveContainer>
+                                    </Suspense>
+                                ) : (
+                                    <div style={{ width: '100%', height: isMobile ? 190 : 235 }} />
+                                )}
                             </div>
                         </div>
 

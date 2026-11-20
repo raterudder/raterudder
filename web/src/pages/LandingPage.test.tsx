@@ -1,5 +1,5 @@
 
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Router } from 'wouter';
 import LandingPage from './LandingPage';
@@ -160,6 +160,54 @@ describe('LandingPage Component', () => {
                 configurable: true,
                 value: originalLocation,
             });
+        }
+    });
+
+    it('loads the dispatch chart immediately when IntersectionObserver is absent and defers until intersecting when present', async () => {
+        const { unmount } = render(
+            <Router>
+                <LandingPage />
+            </Router>
+        );
+
+        expect(await screen.findByTestId('area-chart')).toBeInTheDocument();
+        unmount();
+
+        let observerCallback: IntersectionObserverCallback | null = null;
+        const disconnectSpy = vi.fn();
+        class MockIntersectionObserver {
+            constructor(cb: IntersectionObserverCallback) {
+                observerCallback = cb;
+            }
+            observe() {}
+            unobserve() {}
+            disconnect = disconnectSpy;
+        }
+
+        const originalIO = window.IntersectionObserver;
+        (window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = MockIntersectionObserver;
+
+        try {
+            render(
+                <Router>
+                    <LandingPage />
+                </Router>
+            );
+
+            expect(screen.queryByTestId('area-chart')).not.toBeInTheDocument();
+            expect(observerCallback).not.toBeNull();
+
+            act(() => {
+                observerCallback!(
+                    [{ isIntersecting: true } as IntersectionObserverEntry],
+                    {} as IntersectionObserver
+                );
+            });
+
+            expect(await screen.findByTestId('area-chart')).toBeInTheDocument();
+            expect(disconnectSpy).toHaveBeenCalled();
+        } finally {
+            (window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = originalIO;
         }
     });
 });

@@ -184,6 +184,14 @@ func resolveBatteryPowerKW(rateKW, capacityKWH float64) float64 {
 	return rateKW
 }
 
+// resolveGridLimitKW returns a non-negative grid power limit in kW, treating NaN or <= 0 as unlimited (0).
+func resolveGridLimitKW(limitKW float64) float64 {
+	if math.IsNaN(limitKW) || limitKW <= 0 {
+		return 0
+	}
+	return limitKW
+}
+
 // sanitizeRoundTripEfficiency returns the given round-trip efficiency, falling back to
 // defaultRoundTripEfficiency (0.90) if unpopulated or outside (0, 1].
 func sanitizeRoundTripEfficiency(eff float64) float64 {
@@ -230,6 +238,8 @@ type planState struct {
 	capacityKWH      float64
 	maxChargeKW      float64
 	maxDischargeKW   float64
+	maxGridImportKW  float64
+	maxGridExportKW  float64
 	chargingDisabled bool
 }
 
@@ -527,6 +537,8 @@ func (c *Controller) Plan(
 		capacityKWH:      capKWH,
 		maxChargeKW:      maxChargeKW,
 		maxDischargeKW:   maxDischargeKW,
+		maxGridImportKW:  resolveGridLimitKW(currentStatus.MaxGridImportKW),
+		maxGridExportKW:  resolveGridLimitKW(currentStatus.MaxGridExportKW),
 		chargingDisabled: currentStatus.BatteryChargingDisabled,
 	}
 
@@ -1335,6 +1347,8 @@ func stepPhysics(
 
 	maxChargeKW := resolveBatteryPowerKW(state.maxChargeKW, capacityKWH)
 	maxDischargeKW := resolveBatteryPowerKW(state.maxDischargeKW, capacityKWH)
+	maxGridImportKW := resolveGridLimitKW(state.maxGridImportKW)
+	maxGridExportKW := resolveGridLimitKW(state.maxGridExportKW)
 
 	var metrics intervalMetrics
 	newEnergy := max(0.0, min(capacityKWH, state.energyKWH))
@@ -1394,6 +1408,11 @@ func stepPhysics(
 		}
 	}
 
+	if maxGridExportKW > 0 && solarExportKWH > maxGridExportKW*dHours {
+		solarCurtailedKWH += solarExportKWH - maxGridExportKW*dHours
+		solarExportKWH = maxGridExportKW * dHours
+	}
+
 	unmetHomeLoadKWH := max(0.0, totalHomeLoadKWH-solarToHomeKWH)
 
 	// 2. Battery & Grid Dispatch
@@ -1414,6 +1433,10 @@ func stepPhysics(
 			roomInBatKWH := max(0.0, targetLimitKWH-newEnergy)
 			remainingChargeKW := max(0.0, maxChargeKW-(solarToBatKWH/dHours))
 			maxGridChargePossible := min(remainingChargeKW*dHours, roomInBatKWH/oneWayEff)
+			if maxGridImportKW > 0 {
+				remainingGridImportKWH := max(0.0, maxGridImportKW*dHours-unmetHomeLoadKWH)
+				maxGridChargePossible = min(maxGridChargePossible, remainingGridImportKWH)
+			}
 			gridChargeKWH = maxGridChargePossible
 			newEnergy += gridChargeKWH * oneWayEff
 		}
@@ -1440,6 +1463,10 @@ func stepPhysics(
 		usableExportEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
 		remainingDischargeKWH := min(max(0.0, maxBatDischargeKWH-batSuppliedHomeKWH), usableExportEnergy*oneWayEff)
 		batExportKWH = remainingDischargeKWH
+		if maxGridExportKW > 0 {
+			remainingGridExportKWH := max(0.0, maxGridExportKW*dHours-solarExportKWH)
+			batExportKWH = min(batExportKWH, remainingGridExportKWH)
+		}
 		newEnergy -= batExportKWH / oneWayEff
 
 		gridImportKWH = unmetHomeLoadKWH - batSuppliedHomeKWH
@@ -1487,6 +1514,8 @@ func stepPhysics(
 		capacityKWH:      capacityKWH,
 		maxChargeKW:      maxChargeKW,
 		maxDischargeKW:   maxDischargeKW,
+		maxGridImportKW:  maxGridImportKW,
+		maxGridExportKW:  maxGridExportKW,
 		chargingDisabled: state.chargingDisabled,
 	}
 
@@ -1515,6 +1544,9 @@ func calculateVPPDeficitSOC(
 	}
 	capacityKWH := initialState.capacityKWH
 	maxChargeKW := resolveBatteryPowerKW(initialState.maxChargeKW, capacityKWH)
+	if maxGridImportKW := resolveGridLimitKW(initialState.maxGridImportKW); maxGridImportKW > 0 && maxGridImportKW < maxChargeKW {
+		maxChargeKW = maxGridImportKW
+	}
 	maxChargeEnergy := maxChargeKW * leadTimeHours * oneWayEff
 	targetSOC := min(100.0, initialState.soc+(maxChargeEnergy/capacityKWH)*100.0)
 
@@ -2008,6 +2040,8 @@ func resimulatePathWithBaselineLoad(
 			capacityKWH:      capKWH,
 			maxChargeKW:      resolveBatteryPowerKW(initialStatus.MaxBatteryChargeKW, capKWH),
 			maxDischargeKW:   resolveBatteryPowerKW(initialStatus.MaxBatteryDischargeKW, capKWH),
+			maxGridImportKW:  resolveGridLimitKW(initialStatus.MaxGridImportKW),
+			maxGridExportKW:  resolveGridLimitKW(initialStatus.MaxGridExportKW),
 			chargingDisabled: initialStatus.BatteryChargingDisabled,
 		}
 	}

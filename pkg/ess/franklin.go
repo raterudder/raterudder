@@ -49,6 +49,8 @@ type Franklin struct {
 	powerCapConfigExpiry time.Time
 	runtimeDataCache     franklinDeviceCompositeInfoResult
 	runtimeDataExpiry    time.Time
+	powerControlCache    franklinGetPowerControlSettingResult
+	powerControlExpiry   time.Time
 
 	// retry delays for getDeviceCompositeInfo valid: false failures
 	retryDelay1 time.Duration
@@ -238,6 +240,9 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		return creds, false, fmt.Errorf("missing gateway ID: %w", ErrCredentialsMissing)
 	}
 
+	if f.gatewayID != creds.Franklin.GatewayID {
+		f.powerControlExpiry = time.Time{}
+	}
 	f.gatewayID = creds.Franklin.GatewayID
 
 	// Validate the credentials by fetching device info. This confirms the token
@@ -926,6 +931,27 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		}
 	}
 
+	var maxGridImportKW, maxGridExportKW float64
+	if pc, err := f.getPowerControlWithCache(ctx, false); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get franklin power control", slog.Any("error", err))
+	} else {
+		if pc.GridFeedMax > 0 {
+			maxGridExportKW = pc.GridFeedMax
+		} else if pc.GlobalGridDischargeMax > 0 {
+			maxGridExportKW = pc.GlobalGridDischargeMax
+		}
+		if pc.GridMax > 0 {
+			maxGridImportKW = pc.GridMax
+		} else if pc.GlobalGridChargeMax > 0 {
+			maxGridImportKW = pc.GlobalGridChargeMax
+		}
+		if pc.PeakDemandGridMax != nil && *pc.PeakDemandGridMax > 0 {
+			if maxGridImportKW == 0 || *pc.PeakDemandGridMax < maxGridImportKW {
+				maxGridImportKW = *pc.PeakDemandGridMax
+			}
+		}
+	}
+
 	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
 
 	status := types.SystemStatus{
@@ -944,6 +970,8 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryAboveMinSOC:    rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		MaxBatteryChargeKW:    maxBatteryChargeKW,
 		MaxBatteryDischargeKW: maxBatteryDischargeKW,
+		MaxGridImportKW:       maxGridImportKW,
+		MaxGridExportKW:       maxGridExportKW,
 		Alarms:                alarms,
 		Storms:                storms,
 		VPPActive:             vppActive,
@@ -1018,12 +1046,27 @@ func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControl
 	return res, nil
 }
 
+// getPowerControlWithCache returns cached power control settings if still fresh,
+// otherwise fetches them from the API and updates the cache. Must be called with f.mu held.
+func (f *Franklin) getPowerControlWithCache(ctx context.Context, refresh bool) (franklinGetPowerControlSettingResult, error) {
+	if !refresh && time.Now().Before(f.powerControlExpiry) {
+		return f.powerControlCache, nil
+	}
+	pc, err := f.getPowerControl(ctx)
+	if err != nil {
+		return franklinGetPowerControlSettingResult{}, err
+	}
+	f.powerControlCache = pc
+	f.powerControlExpiry = time.Now().Add(24 * time.Hour)
+	return pc, nil
+}
+
 // GridSettings returns the grid-related capabilities and restrictions configured for the FranklinWH gateway.
 func (f *Franklin) GridSettings(ctx context.Context) (types.GridSettings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	pc, err := f.getPowerControl(ctx)
+	pc, err := f.getPowerControlWithCache(ctx, false)
 	if err != nil {
 		return types.GridSettings{}, err
 	}
@@ -1066,7 +1109,11 @@ func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerContr
 	}
 
 	// TODO: should we be doing something with the powerControlTipMsg response? What does it mean?
-	return f.doRequest(req, nil)
+	if err := f.doRequest(req, nil); err != nil {
+		return err
+	}
+	f.powerControlExpiry = time.Time{}
+	return nil
 }
 
 type availableModes struct {
@@ -1570,7 +1617,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	}
 	sc := modes.selfConsumption
 
-	pc, err := f.getPowerControl(ctx)
+	pc, err := f.getPowerControlWithCache(ctx, false)
 	if err != nil {
 		return false, err
 	}
@@ -2298,10 +2345,13 @@ const (
 )
 
 type franklinGetPowerControlSettingResult struct {
-	GridFeedMax     float64                 `json:"gridFeedMax"`
-	GridFeedMaxFlag franklinGridFeedMaxFlag `json:"gridFeedMaxFlag"`
-	GridMax         float64                 `json:"gridMax"`
-	GridMaxFlag     franklinGridMaxFlag     `json:"gridMaxFlag"`
+	GridFeedMax            float64                 `json:"gridFeedMax"`
+	GridFeedMaxFlag        franklinGridFeedMaxFlag `json:"gridFeedMaxFlag"`
+	GridMax                float64                 `json:"gridMax"`
+	GridMaxFlag            franklinGridMaxFlag     `json:"gridMaxFlag"`
+	GlobalGridDischargeMax float64                 `json:"globalGridDischargeMax"`
+	GlobalGridChargeMax    float64                 `json:"globalGridChargeMax"`
+	PeakDemandGridMax      *float64                `json:"peakDemandGridMax"`
 
 	// Global limits (globalGridDischargeMax, globalGridChargeMax, globalSettingStatus)
 	// represent aggregate power caps across all installed aPower units combined.

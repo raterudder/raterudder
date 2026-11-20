@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Select } from '@base-ui/react/select';
 import { useFeatureFlag } from '../utils/features';
+import { getRoutePreloadProps } from '../utils/routePreload';
 import './Header.css';
 import type { UserSite } from '../api';
+
+const HeaderSiteSelect = React.lazy(() => import('./HeaderSiteSelect'));
 
 interface HeaderProps {
     loggedIn: boolean;
@@ -16,6 +18,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, onOpenNotifications }) => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+    const [openSelectOnLoad, setOpenSelectOnLoad] = React.useState(false);
     const [location] = useLocation();
 
     const showNotifications = useFeatureFlag('notifications');
@@ -23,6 +26,12 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);
     };
+
+    const mobileNavTarget = location === '/dashboard' ? '/forecast' : '/dashboard';
+    const selectedSiteLabel =
+        selectedSiteID === 'ALL'
+            ? 'Overview'
+            : sites.find((site) => site.id === selectedSiteID)?.name || selectedSiteID;
 
     return (
         <header className={`raterudder-header ${loggedIn ? 'logged-in' : 'logged-out'}`}>
@@ -35,9 +44,10 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     {loggedIn && selectedSiteID !== 'ALL' && (
                         <Link
                             key={location === '/dashboard' ? 'forecast' : 'dashboard'}
-                            to={location === '/dashboard' ? '/forecast' : '/dashboard'}
+                            to={mobileNavTarget}
                             className="nav-link mobile-top-nav-link hide-on-desktop"
                             onClick={() => setIsMenuOpen(false)}
+                            {...getRoutePreloadProps(mobileNavTarget)}
                             data-testid="mobile-top-nav-link"
                         >
                             {location === '/dashboard' ? 'Forecast' : 'Dashboard'}
@@ -62,40 +72,39 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     {loggedIn && sites.length > 0 && (
                         <div className="header-site-container">
                             {sites.length > 1 ? (
-                                <Select.Root
-                                    value={selectedSiteID}
-                                    items={{
-                                        ...Object.fromEntries(sites.map(site => [site.id, site.name || site.id])),
-                                        "ALL": "Overview"
-                                    }}
-                                    onValueChange={(value) => {
-                                        onSiteChange(value as string);
-                                        setIsMenuOpen(false);
-                                    }}
+                                <Suspense
+                                    fallback={
+                                        <button
+                                            type="button"
+                                            className="site-selector-header"
+                                            aria-label="Select Site"
+                                            onClick={() => setOpenSelectOnLoad(true)}
+                                        >
+                                            <span>{selectedSiteLabel}</span>
+                                            <span style={{ display: 'flex', alignItems: 'center' }}>
+                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
+                                            </span>
+                                        </button>
+                                    }
                                 >
-                                    <Select.Trigger className="site-selector-header" aria-label="Select Site">
-                                        <Select.Value />
-                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                            </svg>
-                                        </Select.Icon>
-                                    </Select.Trigger>
-                                    <Select.Portal>
-                                        <Select.Positioner className="select-positioner">
-                                            <Select.Popup className="select-popup">
-                                                <Select.Item className="select-item" value="ALL">
-                                                    <Select.ItemText>Overview</Select.ItemText>
-                                                </Select.Item>
-                                                {sites.map(site => (
-                                                    <Select.Item key={site.id} className="select-item" value={site.id}>
-                                                        <Select.ItemText>{site.name || site.id}</Select.ItemText>
-                                                    </Select.Item>
-                                                ))}
-                                            </Select.Popup>
-                                        </Select.Positioner>
-                                    </Select.Portal>
-                                </Select.Root>
+                                    <HeaderSiteSelect
+                                        sites={sites}
+                                        selectedSiteID={selectedSiteID}
+                                        defaultOpen={openSelectOnLoad}
+                                        onOpenChange={(open) => {
+                                            if (!open) {
+                                                setOpenSelectOnLoad(false);
+                                            }
+                                        }}
+                                        onSelectSite={(value) => {
+                                            setOpenSelectOnLoad(false);
+                                            onSiteChange(value);
+                                            setIsMenuOpen(false);
+                                        }}
+                                    />
+                                </Suspense>
                             ) : (
                                 <div className="site-badge-header" data-testid="header-site-name">
                                     {sites[0].name || sites[0].id}
@@ -106,11 +115,35 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     <nav className="header-nav">
                         {loggedIn ? (
                             <>
-                                <Link to="/dashboard" className={`nav-link ${location === '/dashboard' ? 'active' : ''}`} aria-current={location === '/dashboard' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Dashboard</Link>
+                                <Link
+                                    to="/dashboard"
+                                    className={`nav-link ${location === '/dashboard' ? 'active' : ''}`}
+                                    aria-current={location === '/dashboard' ? 'page' : undefined}
+                                    onClick={() => setIsMenuOpen(false)}
+                                    {...getRoutePreloadProps('/dashboard')}
+                                >
+                                    Dashboard
+                                </Link>
                                 {selectedSiteID !== 'ALL' && (
                                     <>
-                                        <Link to="/forecast" className={`nav-link ${location === '/forecast' ? 'active' : ''}`} aria-current={location === '/forecast' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Forecast</Link>
-                                        <Link to="/settings" className={`nav-link ${location === '/settings' ? 'active' : ''}`} aria-current={location === '/settings' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Settings</Link>
+                                        <Link
+                                            to="/forecast"
+                                            className={`nav-link ${location === '/forecast' ? 'active' : ''}`}
+                                            aria-current={location === '/forecast' ? 'page' : undefined}
+                                            onClick={() => setIsMenuOpen(false)}
+                                            {...getRoutePreloadProps('/forecast')}
+                                        >
+                                            Forecast
+                                        </Link>
+                                        <Link
+                                            to="/settings"
+                                            className={`nav-link ${location === '/settings' ? 'active' : ''}`}
+                                            aria-current={location === '/settings' ? 'page' : undefined}
+                                            onClick={() => setIsMenuOpen(false)}
+                                            {...getRoutePreloadProps('/settings')}
+                                        >
+                                            Settings
+                                        </Link>
                                     </>
                                 )}
                             </>
@@ -143,7 +176,12 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                                 <button onClick={() => { onLogout(); setIsMenuOpen(false); }} className="logout-link">Log Out</button>
                             </>
                         ) : (
-                            <Link to="/login" className="login-link" onClick={() => setIsMenuOpen(false)}>
+                            <Link
+                                to="/login"
+                                className="login-link"
+                                onClick={() => setIsMenuOpen(false)}
+                                {...getRoutePreloadProps('/login')}
+                            >
                                 <span className="hide-on-mobile">Log In / Sign Up</span>
                                 <span className="hide-on-desktop">Get Started</span>
                             </Link>
