@@ -31,7 +31,6 @@ func TestHandleListUtilities(t *testing.T) {
 		storage:    nil,
 		controller: controller.NewController(),
 		bypassAuth: true,
-		singleSite: true,
 	}
 
 	t.Run("Returns JSON array of utilities", func(t *testing.T) {
@@ -159,7 +158,6 @@ func TestHandleListUtilities(t *testing.T) {
 			storage:            mockStorage,
 			controller:         controller.NewController(),
 			bypassAuth:         true,
-			singleSite:         true,
 			generalRateLimit:   rate.Every(time.Minute / 30),
 			generalBurst:       30,
 			sensitiveRateLimit: rate.Every(time.Minute / 5),
@@ -233,7 +231,6 @@ func TestHandleListUtilities(t *testing.T) {
 			utilities:          mockUMap,
 			ess:                mockE,
 			storage:            mockStorage,
-			singleSite:         false,
 			generalRateLimit:   rate.Every(time.Minute / 30),
 			generalBurst:       30,
 			sensitiveRateLimit: rate.Every(time.Minute / 5),
@@ -266,7 +263,6 @@ func TestHandleListUtilities(t *testing.T) {
 		srv := &Server{
 			utilities:          mockUMap,
 			ess:                mockE,
-			singleSite:         false,
 			bypassAuth:         false,
 			generalRateLimit:   rate.Every(time.Minute / 30),
 			generalBurst:       30,
@@ -303,7 +299,6 @@ func TestHandleGetPeriods(t *testing.T) {
 			storage:    mockStorage,
 			controller: controller.NewController(),
 			bypassAuth: true,
-			singleSite: true,
 		}
 
 		req := httptest.NewRequest("GET", "/api/utility/periods", nil)
@@ -338,7 +333,6 @@ func TestHandleGetPeriods(t *testing.T) {
 			storage:    mockStorage,
 			controller: controller.NewController(),
 			bypassAuth: true,
-			singleSite: true,
 		}
 
 		req := httptest.NewRequest("GET", "/api/utility/periods", nil)
@@ -367,7 +361,6 @@ func TestHandleGetPeriods(t *testing.T) {
 			storage:    mockStorage,
 			controller: controller.NewController(),
 			bypassAuth: true,
-			singleSite: true,
 		}
 
 		req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=pg_e&utilityRate=pg_e_e_tou_c", nil)

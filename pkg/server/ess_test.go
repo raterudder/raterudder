@@ -116,7 +116,6 @@ func TestHandleListESS(t *testing.T) {
 			utilities:          mockUMap,
 			ess:                mockP,
 			storage:            mockStorage,
-			singleSite:         false,
 			generalRateLimit:   rate.Every(time.Minute / 30),
 			generalBurst:       30,
 			sensitiveRateLimit: rate.Every(time.Minute / 5),

@@ -189,7 +189,6 @@ func TestWebHandler(t *testing.T) {
 			storage:    mockS,
 			listenAddr: ":8080",
 			bypassAuth: true,
-			singleSite: true,
 			controller: controller.NewController(),
 			devProxy:   devServer.URL, // Point to our mock dev server
 		}
@@ -489,7 +488,7 @@ func TestConfigureOIDC(t *testing.T) {
 		}
 	})
 
-	t.Run("UpdateSpecificAudienceOnlySingleSite", func(t *testing.T) {
+	t.Run("UpdateSpecificAudienceOnly", func(t *testing.T) {
 		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
 			if issuer == "https://accounts.google.com" {
 				return oidc.NewProvider(ctx, googleSrv.URL)
@@ -497,7 +496,7 @@ func TestConfigureOIDC(t *testing.T) {
 			return nil, assert.AnError
 		}
 
-		srv := &Server{singleSite: true}
+		srv := &Server{}
 		err := srv.configureOIDC(
 			context.Background(),
 			nil,

@@ -445,14 +445,13 @@ func TestHandleAgentSummary(t *testing.T) {
 			storage:           mockStore,
 			appsEncryptionKey: testAppsEncryptionKey,
 			bypassAuth:        true,
-			singleSite:        true,
 			nowFunc:           func() time.Time { return fixedNow.UTC() },
 		}
 
 		mockStore.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockStore.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?siteID=none", nil)
 		w := httptest.NewRecorder()
 
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
@@ -468,7 +467,6 @@ func TestHandleAgentSummary(t *testing.T) {
 			storage:           mockStore,
 			appsEncryptionKey: testAppsEncryptionKey,
 			bypassAuth:        true,
-			singleSite:        true,
 			nowFunc:           func() time.Time { return fixedNow.UTC() },
 		}
 
@@ -478,7 +476,7 @@ func TestHandleAgentSummary(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 		mockStore.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?siteID=none", nil)
 		w := httptest.NewRecorder()
 
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
@@ -492,10 +490,9 @@ func TestHandleAgentSummary(t *testing.T) {
 		srv := &Server{
 			appsEncryptionKey: testAppsEncryptionKey,
 			bypassAuth:        true,
-			singleSite:        true,
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?format=xml", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?siteID=none&format=xml", nil)
 		w := httptest.NewRecorder()
 
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
@@ -508,10 +505,9 @@ func TestHandleAgentSummary(t *testing.T) {
 		srv := &Server{
 			appsEncryptionKey: "",
 			bypassAuth:        true,
-			singleSite:        true,
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?siteID=none", nil)
 		w := httptest.NewRecorder()
 
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)

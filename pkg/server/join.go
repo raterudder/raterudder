@@ -38,11 +38,6 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Create && s.singleSite {
-		writeJSONError(w, "cannot create a new site in single-site mode", http.StatusForbidden)
-		return
-	}
-
 	// Get the authenticated user from context (either existing or new-to-register)
 	var userID, email string
 

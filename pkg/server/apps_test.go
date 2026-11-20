@@ -64,10 +64,9 @@ func TestHandleListApps(t *testing.T) {
 		srv := newTestAppsServer(&mockStorage{}, now)
 		srv.appsEncryptionKey = ""
 		srv.bypassAuth = true
-		srv.singleSite = true
 		handler := srv.setupHandler()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/apps", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/apps?siteID=none", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotImplemented, w.Code)
@@ -226,10 +225,9 @@ func TestHandleNewApp(t *testing.T) {
 		srv := newTestAppsServer(&mockStorage{}, now)
 		srv.appsEncryptionKey = ""
 		srv.bypassAuth = true
-		srv.singleSite = true
 		handler := srv.setupHandler()
 
-		reqNew := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(`{"name":"Claude"}`))
+		reqNew := httptest.NewRequest(http.MethodPost, "/api/apps/new", strings.NewReader(`{"siteID":"none","name":"Claude"}`))
 		wNew := httptest.NewRecorder()
 		handler.ServeHTTP(wNew, reqNew)
 		assert.Equal(t, http.StatusNotImplemented, wNew.Code)

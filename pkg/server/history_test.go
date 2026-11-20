@@ -53,6 +53,17 @@ func (m *historyMockStorage) GetPriceHistory(ctx context.Context, provider strin
 	return m.prices, m.err
 }
 
+func withDefaultSiteID(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("siteID") == "" {
+			q.Set("siteID", types.SiteIDNone)
+			r.URL.RawQuery = q.Encode()
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStorage) {
 	mockU := &mockUtility{}
 	mockSBase := &mockStorage{}
@@ -79,7 +90,6 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 		listenAddr:         ":8080",
 		controller:         controller.NewController(),
 		bypassAuth:         true,
-		singleSite:         true,
 		generalRateLimit:   rate.Every(time.Minute / 30),
 		generalBurst:       30,
 		sensitiveRateLimit: rate.Every(time.Minute / 5),
@@ -87,7 +97,7 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 		nowFunc:            func() time.Time { return testTime },
 	}
 
-	return srv.setupHandler(), mockS, mockSBase
+	return withDefaultSiteID(srv.setupHandler()), mockS, mockSBase
 }
 
 func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
@@ -97,7 +107,6 @@ func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
 	srv := &Server{
 		storage:            mockS,
 		bypassAuth:         true,
-		singleSite:         true,
 		controller:         controller.NewController(),
 		generalRateLimit:   rate.Every(time.Minute / 30),
 		generalBurst:       30,
@@ -105,7 +114,7 @@ func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
 		sensitiveBurst:     5,
 		nowFunc:            func() time.Time { return testTime },
 	}
-	return srv.setupHandler(), mockS
+	return withDefaultSiteID(srv.setupHandler()), mockS
 }
 
 func TestHandleHistoryPrices(t *testing.T) {
