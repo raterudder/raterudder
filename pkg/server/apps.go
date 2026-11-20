@@ -226,7 +226,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hasDirectSitePermission(r *http.Request) bool {
-	if s.singleSite || s.bypassAuth {
+	if s.bypassAuth {
 		return true
 	}
 	user := s.getUser(r)

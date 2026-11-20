@@ -5843,4 +5843,94 @@ func TestFranklin(t *testing.T) {
 		}
 		assert.True(t, isFranklinScheduleMatch(currentStrategies, schedAt1320, time.Date(2026, 10, 16, 13, 20, 0, 0, time.UTC)))
 	})
+
+	t.Run("TTL Cache Wrappers Hit Expiry And Force Refresh", func(t *testing.T) {
+		var runtimeHits, deviceHits, powerCapHits int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/getDeviceCompositeInfo":
+				runtimeHits++
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":       true,
+						"runtimeData": map[string]any{"soc": float64(runtimeHits * 10), "timestamp": time.Now().Unix()},
+					},
+				})
+			case "/hes-gateway/terminal/getDeviceInfoV2":
+				deviceHits++
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"zoneInfo": "America/Chicago",
+						"totalCap": float64(deviceHits) * 13.5,
+					},
+				})
+			case "/hes-gateway/common/getPowerCapConfigList":
+				powerCapHits++
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  []map[string]any{{"peHwVersion": powerCapHits, "ratedCap": 13500}},
+				})
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			tokenStr:  "tok",
+			gatewayID: "gw-test",
+		}
+		ctx := context.Background()
+
+		// 1. RuntimeData cache hit, force refresh, and expiry
+		rd1, err := f.getRuntimeDataWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 10.0, rd1.RuntimeData.SOC)
+		rd2, err := f.getRuntimeDataWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 10.0, rd2.RuntimeData.SOC)
+		assert.Equal(t, 1, runtimeHits)
+		rd3, err := f.getRuntimeDataWithCache(ctx, true)
+		require.NoError(t, err)
+		assert.Equal(t, 20.0, rd3.RuntimeData.SOC)
+		assert.Equal(t, 2, runtimeHits)
+		f.runtimeDataExpiry = time.Now().Add(-time.Second)
+		rd4, err := f.getRuntimeDataWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 30.0, rd4.RuntimeData.SOC)
+		assert.Equal(t, 3, runtimeHits)
+
+		// 2. DeviceInfo cache hit, force refresh, and expiry
+		di1, err := f.getDeviceInfoWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 13.5, di1.TotalBatteryCapacityKWH)
+		di2, err := f.getDeviceInfoWithCache(ctx, false)
+		require.NoError(t, err)
+		assert.Equal(t, 13.5, di2.TotalBatteryCapacityKWH)
+		assert.Equal(t, 1, deviceHits)
+		di3, err := f.getDeviceInfoWithCache(ctx, true)
+		require.NoError(t, err)
+		assert.Equal(t, 27.0, di3.TotalBatteryCapacityKWH)
+		assert.Equal(t, 2, deviceHits)
+
+		// 3. PowerCapacityConfig 24h cache hit and expiry
+		pc1, err := f.getPowerCapacityConfigWithCache(ctx)
+		require.NoError(t, err)
+		require.Len(t, pc1, 1)
+		assert.Equal(t, 1, powerCapHits)
+		_, err = f.getPowerCapacityConfigWithCache(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, powerCapHits)
+		f.powerCapConfigExpiry = time.Now().Add(-time.Second)
+		_, err = f.getPowerCapacityConfigWithCache(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, powerCapHits)
+	})
 }

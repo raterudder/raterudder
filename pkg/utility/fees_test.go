@@ -425,4 +425,49 @@ func TestSiteFees(t *testing.T) {
 		assert.InDelta(t, 0.31, prices[0].DollarsPerKWH, 0.0001)
 		m.AssertExpectations(t)
 	})
+
+	t.Run("GetVPPInfo", func(t *testing.T) {
+		s := &SiteFees{}
+
+		// Default eversource_ct_vpp without VPPProgram returns empty VPP info
+		err := s.ApplySettings(ctx, types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+		})
+		require.NoError(t, err)
+		vppInfo, err := s.GetVPPInfo(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, vppInfo.Mandatory)
+
+		// eversource_ct_vpp with ess-passive returns all six mandatory VPP periods
+		err = s.ApplySettings(ctx, types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+			UtilityRateOptions: types.UtilityRateOptions{
+				VPPProgram: "ess-passive",
+			},
+		})
+		require.NoError(t, err)
+		vppInfo, err = s.GetVPPInfo(ctx)
+		require.NoError(t, err)
+		if assert.Len(t, vppInfo.Mandatory, 6) {
+			for _, p := range vppInfo.Mandatory {
+				assert.Equal(t, 20.0, p.ReserveSOC)
+				if assert.Len(t, p.Hours, 1) {
+					assert.Equal(t, 17, p.Hours[0].HourStart)
+					assert.Equal(t, 20, p.Hours[0].HourEnd)
+				}
+			}
+		}
+
+		// Disabling VPPProgram clears previously cached VPP info
+		err = s.ApplySettings(ctx, types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+		})
+		require.NoError(t, err)
+		vppInfo, err = s.GetVPPInfo(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, vppInfo.Mandatory)
+	})
 }

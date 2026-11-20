@@ -261,21 +261,6 @@ func TestHandleJoin(t *testing.T) {
 		store.AssertNotCalled(t, "UpdateUser")
 	})
 
-	t.Run("CreateNewSiteInSingleSiteMode", func(t *testing.T) {
-		store := &mockStorage{}
-		s := &Server{storage: store, singleSite: true}
-
-		body := `{"create":true,"name":"My New Site"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
-		req = withUser(req, "user@test.com", "user@test.com")
-		w := httptest.NewRecorder()
-
-		s.handleJoin(w, req)
-		assert.Equal(t, http.StatusForbidden, w.Code)
-		// No storage calls should have been made
-		store.AssertNotCalled(t, "CreateSite")
-	})
-
 	t.Run("CreateNewSitePrefixTooShortFallback", func(t *testing.T) {
 		store := &mockStorage{}
 

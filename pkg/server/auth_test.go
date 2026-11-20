@@ -97,9 +97,10 @@ func TestAuthMiddleware(t *testing.T) {
 
 	testKey := "12345678901234567890123456789012"
 	server := &Server{
-		singleSite:           false, // Multi-site mode by default for testing
 		sessionEncryptionKey: testKey,
 		sessionDuration:      7 * 24 * time.Hour,
+		featsEvaluator:       feats.NewEvaluator(feats.Config{}),
+		featsFetchedAt:       time.Now(),
 		oidcAudiences: map[string]string{
 			"google": "test-audience",
 		},
@@ -161,7 +162,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Login Bypass", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		req := createReq("POST", "/api/auth/login", nil, nil)
 
@@ -174,27 +174,9 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
-	t.Run("Single Site Mode - No SiteID Required", func(t *testing.T) {
-		mocks := new(mockStorage)
-		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
-		server.storage = mocks
-		server.singleSite = true
-		w := httptest.NewRecorder()
-		// Single site mode now requires auth, so provide a valid cookie
-		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
-		req := createReq("GET", "/api/test", nil, cookie)
-
-		server.authMiddleware(testHandler).ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Equal(t, types.SiteIDNone, w.Header().Get("X-Site-ID"))
-		assert.True(t, mocks.AssertExpectations(t))
-	})
-
 	t.Run("Multi Site Mode - No Auth", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		req := createReq("GET", "/api/test", nil, nil)
 
@@ -207,7 +189,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth but No SiteID", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
@@ -228,7 +209,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and Valid SiteID (Query Param)", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
@@ -259,7 +239,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and Invalid SiteID", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
@@ -285,7 +264,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth as Admin bypasses permissions as read-only", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		server.adminEmails = []string{"user@example.com"}
 		defer func() { server.adminEmails = nil }() // reset
 
@@ -317,7 +295,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and POST Body SiteID", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/test", map[string]string{"siteID": "site2"}, cookie)
@@ -347,7 +324,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Default SiteID if One", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
@@ -377,7 +353,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Logout No SiteID", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/auth/logout", nil, cookie)
@@ -398,7 +373,6 @@ func TestAuthMiddleware(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
 		// Test fallback update logic when updateOIDCVerifier is nil (--update-specific-email without --update-specific-audience)
-		server.singleSite = false
 		server.updateSpecificEmail = "updater@example.com"
 		savedUpdateVerifier := server.updateOIDCVerifier
 		server.updateOIDCVerifier = nil
@@ -436,7 +410,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Update Specific Audience", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		server.updateSpecificEmail = "updater@example.com"
 		defer func() {
 			server.updateSpecificEmail = ""
@@ -511,7 +484,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Join with New User", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
@@ -533,7 +505,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - User Lookup Fails", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
@@ -555,7 +526,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth Status with Unregistered User", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/auth/status", nil, cookie)
@@ -577,7 +547,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and SiteID ALL (Regular User)", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/history/savings?siteID=ALL", nil, cookie)
@@ -601,7 +570,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and SiteID ALL (Admin)", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		server.adminEmails = []string{"user@example.com"}
 		defer func() { server.adminEmails = nil }()
 
@@ -628,7 +596,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - Auth and SiteID ALL Disallowed Method", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=ALL", nil, cookie)
@@ -651,7 +618,6 @@ func TestAuthMiddleware(t *testing.T) {
 
 	t.Run("Multi Site Mode - Auth to site1 and Admin", func(t *testing.T) {
 		mocks := new(mockStorage)
-		server.singleSite = false
 		server.adminEmails = []string{"user@example.com"}
 		server.storage = mocks
 		defer func() { server.adminEmails = nil }()
@@ -684,7 +650,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Browser Report - Bypass SiteID Unmarshal", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 		w := httptest.NewRecorder()
 		payload := `[{"type": "csp-violation"}]`
 		req := createReq("POST", "/api/report/browser", json.RawMessage(payload), nil)
@@ -698,7 +663,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Session Token - Valid Authentication", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 
 		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "valid-secret-123", 7*24*time.Hour)
 		require.NoError(t, err)
@@ -730,7 +694,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Session Token - Secret Mismatch (Revoked) Clears Cookie", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 
 		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "old-revoked-secret", 7*24*time.Hour)
 		require.NoError(t, err)
@@ -764,7 +727,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Session Token - User Not Found Clears Cookie", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 
 		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", 7*24*time.Hour)
 		require.NoError(t, err)
@@ -793,7 +755,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("Multi Site Mode - User Lookup Storage Error Does Not Clear Cookies", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 
 		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", 7*24*time.Hour)
 		require.NoError(t, err)
@@ -842,7 +803,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("DisallowedEndpointRejectsAppToken", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			for _, p := range []string{"/api/test", "/api/settings", "/api/forecast", "/api/apps", "/api/update"} {
 				w := httptest.NewRecorder()
@@ -858,7 +818,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("AppsNotEnabledReturnsNotImplemented", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 			server.appsEncryptionKey = ""
 			defer func() { server.appsEncryptionKey = testAppsEncryptionKey }()
 
@@ -874,7 +833,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("MalformedAppTokenReturnsUnauthorized", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", time.Hour)
 			require.NoError(t, err)
@@ -908,7 +866,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("ValidBearerTokenAuthenticatesAndSetsSlogAttrs", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
 				ID:    "google:user@example.com",
@@ -961,7 +918,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("QueryTokenAllowedVsDisallowed", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
 				ID:    "google:user@example.com",
@@ -1016,7 +972,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("SiteIDMatchAndMismatch", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			// Matching siteID in query param succeeds
 			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
@@ -1083,7 +1038,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("PendingAndRevokedAppTokensRejected", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			userWithPendingAndActive := types.User{
 				ID:    "google:user@example.com",
@@ -1137,7 +1091,6 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run("UnauthenticatedReturnsWWWAuthenticateHeader", func(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
-			server.singleSite = false
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "https://staging.raterudder.com"+allowedPath, nil)
@@ -1152,7 +1105,6 @@ func TestAuthMiddleware(t *testing.T) {
 	t.Run("RevokedSessionNonce", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
-		server.singleSite = false
 
 		tok1, err := server.createSessionToken("google:user@example.com", "user@example.com", "secret-123", time.Hour)
 		require.NoError(t, err)
@@ -1505,9 +1457,10 @@ func TestHandleLogin(t *testing.T) {
 
 	testKey := "12345678901234567890123456789012"
 	server := &Server{
-		singleSite:           false,
 		sessionEncryptionKey: testKey,
 		sessionDuration:      7 * 24 * time.Hour,
+		featsEvaluator:       feats.NewEvaluator(feats.Config{}),
+		featsFetchedAt:       time.Now(),
 		oidcAudiences: map[string]string{
 			"google": "test-audience",
 		},

@@ -75,7 +75,6 @@ type Server struct {
 	oidcAudiences         map[string]string
 	oidcVerifiers         map[string]tokenVerifier
 	bypassAuth            bool
-	singleSite            bool
 	encryptionKey         string
 	sessionEncryptionKey  string
 	appsEncryptionKey     string
@@ -150,7 +149,6 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	oidcAudiences := map[string]string{}
 	lflag.JSON(&oidcAudiences, "oidc-audiences", oidcAudiences, "JSON map of provider (google/apple) to audience/client ID")
 	updateSpecificAudience := lflag.String("update-specific-audience", "", "Google-specific legacy audience to validate for /api/update")
-	singleSite := lflag.Bool("single-site", false, "Enable single-site mode (disables siteID requirement)")
 	showHidden := lflag.Bool("show-hidden", false, "Expose hidden providers in lists via the API")
 	encryptionKey := lflag.RequiredString("credentials-encryption-key", "Key for encrypting credentials")
 	sessionEncryptionKey := lflag.RequiredString("session-encryption-key", "Key for encrypting session cookies (32 bytes)")
@@ -194,7 +192,6 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		if err := srv.configureOIDC(context.Background(), oidcAudiences, *oidcAudience, *updateSpecificAudience, oidc.NewProvider); err != nil {
 			os.Exit(1)
 		}
-		srv.singleSite = *singleSite
 		srv.showHidden = *showHidden
 		srv.release = *release
 		srv.featuresEnvironment = *featuresEnvironment

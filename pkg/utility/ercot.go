@@ -272,6 +272,14 @@ type baseERCOTZone struct {
 	loadZone string
 }
 
+func (z *baseERCOTZone) settingsMatch(settings types.Settings) bool {
+	loadZone, err := loadZoneForTDU(settings.UtilityRateOptions.Location)
+	if err != nil {
+		return false
+	}
+	return z.loadZone == loadZone
+}
+
 func (z *baseERCOTZone) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	if z.loadZone == "" {
 		return types.Price{}, fmt.Errorf("ercot load zone is required")

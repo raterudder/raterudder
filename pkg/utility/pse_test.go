@@ -30,6 +30,18 @@ func TestPSEUtility(t *testing.T) {
 			assert.InDelta(t, 0.187465, p.DollarsPerKWH, 1e-6)
 		}
 
+		// Effective Oct 1, 2026 (Schedule 129 revision): $0.189119/kWh
+		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, ptLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.189119, p.DollarsPerKWH, 1e-6)
+		}
+
+		// 2027 continuity: $0.189119/kWh
+		p, err = u.priceForTime(time.Date(2027, time.February, 15, 12, 0, 0, 0, ptLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.189119, p.DollarsPerKWH, 1e-6)
+		}
+
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
 		assert.NotEmpty(t, periods)
@@ -138,6 +150,29 @@ func TestPSEUtility(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.November, 27, 8, 0, 0, 0, ptLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.108197, p.DollarsPerKWH, 1e-6)
+		}
+	})
+
+	t.Run("2027 Schedule 307 and 327 Continuity", func(t *testing.T) {
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "pse",
+			UtilityRate:     "pse_307",
+		}))
+		// Tue, Feb 9, 2027 at 8:00 AM PT -> Winter On-Peak ($0.532445)
+		p, err := u.priceForTime(time.Date(2027, time.February, 9, 8, 0, 0, 0, ptLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.532445, p.DollarsPerKWH, 1e-6)
+		}
+
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "pse",
+			UtilityRate:     "pse_327",
+		}))
+		// Tue, Feb 9, 2027 at 2:00 AM PT -> Super Off-Peak ($0.075542)
+		p, err = u.priceForTime(time.Date(2027, time.February, 9, 2, 0, 0, 0, ptLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.075542, p.DollarsPerKWH, 1e-6)
 		}
 	})
 }

@@ -879,7 +879,7 @@ func (s *Server) handleOAuthClientInfo(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	user := s.getUser(r)
-	if !s.bypassAuth && (user.ID == "" || (!s.singleSite && len(user.Sites) == 0)) {
+	if !s.bypassAuth && (user.ID == "" || len(user.Sites) == 0) {
 		log.Ctx(ctx).WarnContext(ctx, "oauth client info rejected: user lacks active site", slog.String("userID", user.ID))
 		writeJSONError(w, "a RateRudder account with an active site is required to authorize apps", http.StatusForbidden)
 		return

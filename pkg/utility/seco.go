@@ -1,5 +1,17 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): seco (SECO Energy)
+// - Official Sources:
+//   - https://secoenergy.com/solar-power
+//   - https://secoenergy.com/sites/default/files/2025-10/seco_energy_rate_tariff_current.pdf
+//   - SECO Energy Electric Rate Tariff: Rate Schedule RS (16th Rev. Sheet No. 9.0, eff. May 1, 2025), Rate Schedule RS-TOU (12th Rev. Sheet No. 9.1, eff. May 1, 2025), Wholesale Power Cost Adjustment (11th Rev. Sheet No. 12.0), Net Metering Service (2nd Rev. Sheet No. 16.4)
+// - Effective Window: 2025-05-01 through until superseded (modeled for 2026-01-01 through 2027-12-31)
+// - Revision Cadence: Annual / As-Filed (Cooperative Board rate tariff revisions; periodic PCA adjustments)
+// - Next Audit Due: 2027-05-01 (Check SECO Energy tariff book for annual residential base rate or Net Metering wholesale base cost revisions)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Schedule RS models Tier 1 (First 1,000 kWh) base energy charge ($0.1194/kWh); excludes daily fixed Customer Charge ($1.30/day) and variable Power Cost Adjustment (PCA); Net Metering excess exports credited at wholesale base cost of power ($0.095/kWh per Sheets 12.0 & 16.4, excluding variable PCA).
+
 import (
 	"time"
 
@@ -235,14 +247,14 @@ func secoUtilityInfo() types.UtilityProviderInfo {
 				ID:   "seco_rs",
 				Name: "Residential Service (Schedule RS)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return secoPeriods("seco_rs", opts, []int{2026}), nil
+					return secoPeriods("seco_rs", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
 				ID:   "seco_rs_tou",
 				Name: "Residential Service Time-of-Use (Schedule RS-TOU)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return secoPeriods("seco_rs_tou", opts, []int{2026}), nil
+					return secoPeriods("seco_rs_tou", opts, []int{2026, 2027}), nil
 				},
 			},
 		},

@@ -32,10 +32,22 @@ func TestPECOUtility(t *testing.T) {
 			assert.InDelta(t, 0.11024, p.DollarsPerKWH, 1e-6)
 		}
 
-		// Test Jun-Dec 2026: $0.11759
+		// Test Jun-Nov 2026: $0.11759
 		p, err = u.priceForTime(time.Date(2026, time.July, 4, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11759, p.DollarsPerKWH, 1e-6)
+		}
+
+		// Test Dec 2026 (Dec 1, 2026 GSA $0.11970 + Supplement No. 40 TSC $0.00995): $0.12965
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12965, p.DollarsPerKWH, 1e-6)
+		}
+
+		// Test 2027 forward continuity: $0.12965
+		p, err = u.priceForTime(time.Date(2027, time.February, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12965, p.DollarsPerKWH, 1e-6)
 		}
 
 		periods, err := u.GetPeriods(context.Background())
@@ -104,12 +116,34 @@ func TestPECOUtility(t *testing.T) {
 			assert.InDelta(t, 0.32404, p.DollarsPerKWH, 1e-6)
 		}
 
-		// Holiday exclusion: Christmas Day 2026 (Friday, Dec 25, 2026)
+		// Holiday exclusion (Summer/Fall 2026): Labor Day 2026 (Monday, Sep 7, 2026)
+		laborDay2026 := time.Date(2026, time.September, 7, 15, 0, 0, 0, etLocation) // 3:00 PM
+		p, err = u.priceForTime(laborDay2026)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.09336, p.DollarsPerKWH, 1e-6)
+		}
+
+		// Holiday exclusion (Dec 2026 per GSA + Supplement No. 40): Christmas Day 2026 (Friday, Dec 25, 2026)
 		christmas := time.Date(2026, time.December, 25, 15, 0, 0, 0, etLocation) // 3:00 PM
 		p, err = u.priceForTime(christmas)
 		if assert.NoError(t, err) {
-			// Peak hours on holidays should be treated as Off-Peak ($0.09336)
-			assert.InDelta(t, 0.09336, p.DollarsPerKWH, 1e-6)
+			// Peak hours on holidays should be treated as Off-Peak ($0.10276 eff Dec 1, 2026)
+			assert.InDelta(t, 0.10276, p.DollarsPerKWH, 1e-6)
+		}
+
+		// 2027 TOU continuity: Monday, Feb 15, 2027
+		febMon2027 := time.Date(2027, time.February, 15, 0, 0, 0, 0, etLocation)
+		p, err = u.priceForTime(febMon2027.Add(2 * time.Hour))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.07396, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(febMon2027.Add(10 * time.Hour))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.10276, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(febMon2027.Add(15 * time.Hour))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.35880, p.DollarsPerKWH, 1e-6)
 		}
 	})
 }

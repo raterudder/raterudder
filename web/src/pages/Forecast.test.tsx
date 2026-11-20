@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Router } from 'wouter';
 import Forecast, { STALE_FORECAST_TIMEOUT_MS } from './Forecast';
+import { syncByTimestamp } from '../utils/forecastUtils';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
 import { BatteryMode, ActionReason, type Plan, type PlanPeriod } from '../api';
@@ -272,6 +273,241 @@ describe('Forecast Page', () => {
 
         await user.click(toggle);
         expect(toggle).toBeChecked();
+    });
+
+    it('joins historical energy and price series via first-match Map lookup while skipping invalid timestamps', async () => {
+        const user = userEvent.setup();
+        const plan = makeTestPlan();
+        const base = new Date('2026-02-11T14:00:00Z');
+        const h1 = new Date(base.getTime() - 2 * 3600000).toISOString();
+        const h2 = new Date(base.getTime() - 3600000).toISOString();
+
+        let firstMatchReads = 0;
+        let duplicateMatchReads = 0;
+        let invalidPriceReads = 0;
+
+        const invalidPriceEntry: Record<string, any> = {
+            tsHourStart: 'invalid-price-ts',
+            gridUseDollarsPerKWH: 0,
+        };
+        Object.defineProperty(invalidPriceEntry, 'dollarsPerKWH', {
+            get() {
+                invalidPriceReads++;
+                return 9.99;
+            },
+            enumerable: true,
+        });
+
+        const firstH1Price: Record<string, any> = {
+            tsHourStart: h1,
+            gridUseDollarsPerKWH: 0.04,
+            exportDollarsPerKWH: 0.06,
+        };
+        Object.defineProperty(firstH1Price, 'dollarsPerKWH', {
+            get() {
+                firstMatchReads++;
+                return 0.11;
+            },
+            enumerable: true,
+        });
+
+        const duplicateH1Price: Record<string, any> = {
+            tsHourStart: h1,
+            gridUseDollarsPerKWH: 0.10,
+            exportDollarsPerKWH: 0.50,
+        };
+        Object.defineProperty(duplicateH1Price, 'dollarsPerKWH', {
+            get() {
+                duplicateMatchReads++;
+                return 0.85;
+            },
+            enumerable: true,
+        });
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            futurePrices: [
+                {
+                    tsHourStart: new Date(base.getTime() - 3 * 3600000).toISOString(),
+                    dollarsPerKWH: 0.10,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.05,
+                },
+            ],
+            energyHistory: [
+                {
+                    tsHourStart: h1,
+                    avgBatterySOC: 42,
+                    solarKWH: 1.4,
+                    homeLoadKWH: 0.95,
+                },
+                {
+                    tsHourStart: h2,
+                    avgBatterySOC: 48,
+                    solarKWH: 2.1,
+                    homeLoadKWH: 1.15,
+                },
+                {
+                    tsHourStart: 'invalid-energy-ts',
+                    avgBatterySOC: 50,
+                    solarKWH: 0,
+                    homeLoadKWH: 0.5,
+                },
+            ],
+            priceHistory: [
+                invalidPriceEntry,
+                firstH1Price,
+                duplicateH1Price,
+                {
+                    tsHourStart: h2,
+                    dollarsPerKWH: 0.14,
+                    gridUseDollarsPerKWH: 0.03,
+                },
+            ],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch', { name: /Show Previous 24 Hours/i });
+        await user.click(toggle);
+        expect(toggle).toBeChecked();
+        expect(screen.getByText('History')).toBeInTheDocument();
+        expect(screen.getAllByText('Now')).toHaveLength(3);
+        expect(firstMatchReads).toBe(1);
+        expect(duplicateMatchReads).toBe(0);
+        expect(invalidPriceReads).toBe(0);
+    });
+
+    it('skips ForecastChart timestamp parsing when Show Previous 24 Hours is off and computes Now when enabled', async () => {
+        const user = userEvent.setup();
+        const plan = makeTestPlan();
+        const sentinelTs = '2026-02-11T16:00:00.123Z';
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            futurePrices: [
+                {
+                    tsHourStart: '2026-02-11T14:00:00Z',
+                    dollarsPerKWH: 0.10,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.05,
+                },
+                {
+                    tsHourStart: sentinelTs,
+                    dollarsPerKWH: 0.18,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.06,
+                },
+                {
+                    tsHourStart: '2026-02-11T17:00:00Z',
+                    dollarsPerKWH: 0.22,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.07,
+                },
+            ],
+            energyHistory: [
+                {
+                    tsHourStart: '2026-02-11T13:00:00Z',
+                    avgBatterySOC: 44,
+                    solarKWH: 1.2,
+                    homeLoadKWH: 0.9,
+                },
+            ],
+            priceHistory: [
+                {
+                    tsHourStart: '2026-02-11T13:00:00Z',
+                    dollarsPerKWH: 0.12,
+                    gridUseDollarsPerKWH: 0.02,
+                },
+            ],
+            weather: [],
+        });
+
+        const OriginalDate = globalThis.Date;
+        let sentinelParseCount = 0;
+        const DateProxy = new Proxy(OriginalDate, {
+            construct(target, args, newTarget) {
+                if (args[0] === sentinelTs) {
+                    sentinelParseCount++;
+                }
+                return Reflect.construct(target, args, newTarget);
+            },
+            apply(target, thisArg, args) {
+                return Reflect.apply(target, thisArg, args);
+            },
+        });
+        globalThis.Date = DateProxy as DateConstructor;
+
+        try {
+            renderForecast({ settings: { location: { timeZone: 'America/Chicago' } } });
+
+            await waitFor(() => {
+                expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            });
+
+            // While Show Previous 24 Hours is off, sentinelTs is parsed only once in buildPlanPriceSeries
+            // and never parsed inside ForecastChart for currentTimeStr.
+            expect(screen.queryAllByText('Now')).toHaveLength(0);
+            expect(sentinelParseCount).toBe(1);
+
+            const toggle = screen.getByRole('switch', { name: /Show Previous 24 Hours/i });
+            await user.click(toggle);
+
+            expect(toggle).toBeChecked();
+            expect(screen.getAllByText('Now')).toHaveLength(3);
+            expect(sentinelParseCount).toBe(3);
+        } finally {
+            globalThis.Date = OriginalDate;
+        }
+    });
+
+    it('snaps sub-hourly 20-minute hover labels to hourly ticks and caches parsed ticks in syncByTimestamp', () => {
+        let valueReads = 0;
+        const hourlyIsos = [
+            '2026-02-11T14:00:00.000Z',
+            '2026-02-11T15:00:00.000Z',
+            '2026-02-11T16:00:00.000Z',
+            '2026-02-11T17:00:00.000Z',
+        ];
+        const hourlyTicks = hourlyIsos.map((iso) => {
+            const tick: Record<string, unknown> = {};
+            Object.defineProperty(tick, 'value', {
+                get() {
+                    valueReads++;
+                    return iso;
+                },
+                enumerable: true,
+            });
+            return tick;
+        });
+
+        // First call indexes tooltipTicks once
+        expect(syncByTimestamp(hourlyTicks, { activeLabel: '2026-02-11T15:20:00.000Z' })).toBe(1);
+        const initialReads = valueReads;
+        expect(initialReads).toBe(hourlyTicks.length);
+
+        // Subsequent sub-hourly and exact syncs reuse the WeakMap index with zero tick re-reads
+        expect(syncByTimestamp(hourlyTicks, { activeLabel: '2026-02-11T15:40:00.000Z' })).toBe(1);
+        expect(syncByTimestamp(hourlyTicks, { activeLabel: '2026-02-11T16:00:00.000Z' })).toBe(2);
+        expect(syncByTimestamp(hourlyTicks, { activeLabel: '2026-02-11T17:40:00.000Z' })).toBe(3);
+        expect(syncByTimestamp(hourlyTicks, { activeLabel: '2026-02-11T13:20:00.000Z' })).toBe(0);
+        expect(valueReads).toBe(initialReads);
+
+        // Unsorted ticks and invalid labels fall back cleanly
+        const unsortedTicks = [
+            { value: '2026-02-11T16:00:00.000Z' },
+            { value: 'not-a-timestamp' },
+            { value: '2026-02-11T14:00:00.000Z' },
+            { value: '2026-02-11T15:00:00.000Z' },
+        ];
+        expect(syncByTimestamp(unsortedTicks, { activeLabel: '2026-02-11T15:20:00.000Z' })).toBe(3);
+        expect(syncByTimestamp(unsortedTicks, { activeLabel: 'unparseable', activeTooltipIndex: 2 })).toBe(2);
+        expect(syncByTimestamp([], { activeLabel: '2026-02-11T15:00:00.000Z' })).toBe(-1);
     });
 
     it('renders dynamic battery modes legend and colored line segments for active plan modes', async () => {

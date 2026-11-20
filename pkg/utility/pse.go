@@ -1,5 +1,18 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): pse (Puget Sound Energy)
+// - Official Sources:
+//   - https://www.pse.com/en/pages/rates/schedule-summaries
+//   - https://www.pse.com/-/media/Project/PSE/Portal/Rate-documents/Electric/summ_elec_prices_2026_10_01.pdf
+//   - https://www.pse.com/-/media/Project/PSE/Portal/Rate-documents/Electric/summ_elec_prices_2026_05_01.pdf
+//   - WA UTC WN U-60, Electric Tariff G: Schedule 7 (Residential Service), Schedule 129 (Low Income Program eff. Oct 1, 2026), Schedule 150 (Net Metering), Schedule 307 (Residential TOU), Schedule 327 (Residential TOU with Super Off-Peak)
+// - Effective Window: 2026-01-01 through until superseded (Schedule 7 updated 2026-10-01; modeled through 2027-12-31)
+// - Revision Cadence: Semi-Annual / Annual (General rate case step Jan 29; rider adjustments typically May 1 and October 1)
+// - Next Audit Due: 2027-01-29 (Check WA UTC WN U-60 multi-year rate plan January 2027 step for Schedules 7, 307, and 327)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Schedule 7 models Tier 1 (First 600 kWh) Total Per kWh including supplemental riders ($0.187465/kWh Jan-Sep 2026; $0.189119/kWh eff. Oct 1, 2026); Schedules 307 and 327 model base tariff Energy Charges (eff. Jan 29, 2026, unchanged Oct 1, 2026); fixed Basic Charge ($7.49/mo) excluded; 1:1 kWh net metering under Schedule 150.
+
 import (
 	"time"
 
@@ -49,16 +62,37 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 
 		switch plan {
 		case "pse_7":
-			// Schedule 7: Residential Service
-			// Flat rate estimate of $0.187465/kWh year-round
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:               year,
-					MonthStart:         time.January,
-					MonthEnd:           time.December,
-					OtherDollarsPerKWH: 0.187465,
-					OtherDescription:   "PSE Schedule 7 Residential Service",
-				},
+			// Schedule 7: Residential Service (Tier 1 First 600 kWh Total Per kWh)
+			// Jan 1, 2026 - Sep 30, 2026: $0.187465/kWh
+			// Oct 1, 2026+: $0.189119/kWh (WA UTC Schedule 129 adjustment effective Oct 1, 2026)
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:               2026,
+						MonthStart:         time.January,
+						MonthEnd:           time.September,
+						OtherDollarsPerKWH: 0.187465,
+						OtherDescription:   "PSE Schedule 7 Residential Service",
+					},
+					{
+						Year:               2026,
+						MonthStart:         time.October,
+						MonthEnd:           time.December,
+						OtherDollarsPerKWH: 0.189119,
+						OtherDescription:   "PSE Schedule 7 Residential Service",
+					},
+				}
+			} else {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:               year,
+						MonthStart:         time.January,
+						MonthEnd:           time.December,
+						OtherDollarsPerKWH: 0.189119,
+						OtherDescription:   "PSE Schedule 7 Residential Service",
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(ptLocation, simplified)...)
 
@@ -346,7 +380,7 @@ func pseUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential Service (Schedule 7)",
 				Options: pseOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psePeriods("pse_7", opts, []int{2026}), nil
+					return psePeriods("pse_7", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -354,7 +388,7 @@ func pseUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential Service Time-of-Use (Schedule 307)",
 				Options: pseOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psePeriods("pse_307", opts, []int{2026}), nil
+					return psePeriods("pse_307", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -362,7 +396,7 @@ func pseUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential Service Time-of-Use with Super Off-Peak (Schedule 327)",
 				Options: pseOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psePeriods("pse_327", opts, []int{2026}), nil
+					return psePeriods("pse_327", opts, []int{2026, 2027}), nil
 				},
 			},
 		},

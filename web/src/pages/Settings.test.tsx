@@ -1132,6 +1132,400 @@ describe('App & Settings', () => {
         });
     });
 
+    it('allows retry without re-login when server saved rotated credentials on failure', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        const loginBtn = screen.getByRole('button', { name: /Login to link account/i });
+        await user.click(loginBtn);
+
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'tesla-auth-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+        });
+
+        // First save fails after Tesla exchanged the auth code and server saved the tokens
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: upstream status 503'), { credentialsSaved: true })
+        );
+
+        const saveBtn = screen.getByText('Save Settings');
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('failed to verify ess credentials: upstream status 503')).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenCalledTimes(1);
+        expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            ess: 'tesla',
+        }), expect.any(String), {
+            tesla: {
+                authCode: 'tesla-auth-code',
+            },
+        });
+
+        // Retry should reach the server with saved tokens without requiring another login
+        (updateSettings as any).mockResolvedValueOnce(undefined);
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Login to connect your energy system.')).not.toBeInTheDocument();
+        expect(updateSettings).toHaveBeenCalledTimes(2);
+        expect(updateSettings).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            ess: 'tesla',
+        }), expect.any(String), {
+            tesla: {},
+        });
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('handles Tesla OAuth permission rejection cleanly so user can immediately retry', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        const loginBtn = screen.getByRole('button', { name: /Login to link account/i });
+        await user.click(loginBtn);
+        expect(screen.getByRole('button', { name: /Awaiting link/i })).toBeDisabled();
+
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: {
+                    type: 'OAUTH_ERROR',
+                    error: 'access_denied',
+                    errorDescription: 'User rejected permissions',
+                    state: defaultAuthStatus.sites![0].id,
+                }
+            }));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Authorization was cancelled or permissions were not granted/i)).toBeInTheDocument();
+        });
+        expect(screen.getByRole('button', { name: /Login to link account/i })).not.toBeDisabled();
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('supports Enphase Resend Code and resets stage when editing stage-0 email', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'enphase',
+            hasCredentials: {}
+        });
+        (api.fetchESSList as any).mockResolvedValue([
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
+            {
+                id: 'enphase',
+                name: 'Enphase',
+                credentials: [
+                    { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                    { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1, oneTime: true },
+                ],
+            },
+        ]);
+        (api.submitESSStage as any).mockResolvedValue({ success: true });
+
+        await navigateToSettings();
+
+        const emailInput = await screen.findByPlaceholderText(/Enter Email/i);
+        await user.type(emailInput, 'owner@example.com');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+        const codeInput = await screen.findByPlaceholderText(/Enter Email Code/i);
+        await user.type(codeInput, '123456');
+
+        // Click Resend Code -> re-submits stage 0, clears old code, and shows confirmation
+        const resendBtn = screen.getByRole('button', { name: /Resend Code/i });
+        await user.click(resendBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText(/A new verification code has been sent/i)).toBeInTheDocument();
+        });
+        expect(api.submitESSStage).toHaveBeenCalledTimes(2);
+        expect(api.submitESSStage).toHaveBeenNthCalledWith(2, 'enphase', { username: 'owner@example.com' }, expect.any(String));
+        expect(screen.getByPlaceholderText(/Enter Email Code/i)).toHaveValue('');
+
+        // Editing stage-0 Email resets back to stage 0 so Continue reappears
+        await user.type(emailInput, '.uk');
+        await waitFor(() => {
+            expect(screen.queryByPlaceholderText(/Enter Email Code/i)).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+        });
+    });
+
+    it('preserves unconsumed Tesla authCode when save fails for a non-ESS validation error', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'fresh-unconsumed-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+        });
+
+        (updateSettings as any).mockRejectedValueOnce(new Error('failed to fetch location data: invalid postal code'));
+        await user.click(screen.getByText('Save Settings'));
+
+        await waitFor(() => {
+            expect(screen.getByText('failed to fetch location data: invalid postal code')).toBeInTheDocument();
+        });
+        // Auth code should NOT have been cleared since the server rejected before ESS auth
+        expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('clears consumed Tesla authCode and retries with saved tokens even when error mentions network', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'tesla-network-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+        });
+
+        // Upstream network error AFTER tokens were saved must still clear authCode
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: dial tcp: network is unreachable'), { credentialsSaved: true })
+        );
+        await user.click(screen.getByText('Save Settings'));
+
+        await waitFor(() => {
+            expect(screen.getByText('failed to verify ess credentials: dial tcp: network is unreachable')).toBeInTheDocument();
+            expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
+        });
+
+        (updateSettings as any).mockResolvedValueOnce(undefined);
+        await user.click(screen.getByText('Save Settings'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            ess: 'tesla',
+        }), expect.any(String), {
+            tesla: {},
+        });
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('ignores OAUTH_ERROR from a mismatched site state without breaking active OAuth flow', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        expect(screen.getByRole('button', { name: /Awaiting link/i })).toBeDisabled();
+
+        // Stale popup from a different site posts OAUTH_ERROR -> must be ignored
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_ERROR', error: 'access_denied', state: 'other-site-id' }
+            }));
+        });
+        expect(screen.getByRole('button', { name: /Awaiting link/i })).toBeDisabled();
+
+        // Legitimate popup posts OAUTH_CODE -> still received
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'valid-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+        await waitFor(() => {
+            expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+        });
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('shows Enphase verified retry banner, hides Resend Code, and clears stale state on provider switch', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'enphase',
+            hasCredentials: {}
+        });
+        (api.fetchESSList as any).mockResolvedValue([
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
+            {
+                id: 'enphase',
+                name: 'Enphase',
+                credentials: [
+                    { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                    { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1, oneTime: true },
+                ],
+            },
+        ]);
+        (api.submitESSStage as any).mockResolvedValue({ success: true });
+
+        await navigateToSettings();
+
+        const emailInput = await screen.findByPlaceholderText(/Enter Email/i);
+        await user.type(emailInput, 'owner@example.com');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+        const codeInput = await screen.findByPlaceholderText(/Enter Email Code/i);
+        await user.type(codeInput, '654321');
+
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: upstream 503'), { credentialsSaved: true })
+        );
+        await user.click(screen.getByText('Save Settings'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/Account verified! Click Save Settings below to retry without entering a new code./i)).toBeInTheDocument();
+        });
+        expect(screen.queryByRole('button', { name: /Resend Code/i })).not.toBeInTheDocument();
+
+        // Switching provider away and back must NOT leave a stale verified banner at stage 0
+        await user.click(screen.getByRole('combobox', { name: /System Type/i }));
+        await user.click(await screen.findByRole('option', { name: 'Tesla' }));
+        await user.click(screen.getByRole('combobox', { name: /System Type/i }));
+        await user.click(await screen.findByRole('option', { name: 'Enphase' }));
+
+        expect(screen.queryByText(/Account verified!/i)).not.toBeInTheDocument();
+    });
+
+    it('blocks Tesla reconnect retry from reusing old account when new authCode exchange fails, and clears retry state on unauthorized', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+        });
+
+        await navigateToSettings();
+
+        await user.click(await screen.findByLabelText('Edit Energy Storage System'));
+
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+
+        // 1. Replacement Tesla authCode exchange fails (credentialsSaved: false)
+        await user.click(await screen.findByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'NA_bad_reconnect_code', state: defaultAuthStatus.sites![0].id },
+            }));
+        });
+        await screen.findByText('Received code! Save Settings below to complete.');
+
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: failed to exchange auth code: invalid_grant'), { credentialsSaved: false })
+        );
+        await user.click(screen.getByText('Save Settings'));
+        await screen.findByText(/failed to exchange auth code: invalid_grant/i);
+        expect(updateSettings).toHaveBeenCalledTimes(1);
+
+        // Clicking Save Settings again MUST NOT send { tesla: {} } against the old account
+        await user.click(screen.getByText('Save Settings'));
+        await screen.findByText('Login to connect your energy system.');
+        expect(updateSettings).toHaveBeenCalledTimes(1);
+
+        // 2. Fresh authCode exchanges (credentialsSaved: true), then fails validation with 503
+        await user.click(await screen.findByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'NA_good_reconnect_code', state: defaultAuthStatus.sites![0].id },
+            }));
+        });
+        await screen.findByText('Received code! Save Settings below to complete.');
+
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: upstream 503'), { credentialsSaved: true })
+        );
+        await user.click(screen.getByText('Save Settings'));
+        await screen.findByText(/Account linked! Click Save Settings below to retry/i);
+        expect(updateSettings).toHaveBeenCalledTimes(2);
+
+        // 3. If the retry fails with unauthorized, retry state is cleared so user must re-login
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: unauthorized'), { credentialsSaved: false })
+        );
+        await user.click(screen.getByText('Save Settings'));
+        await screen.findByText(/failed to verify ess credentials: unauthorized/i);
+        expect(screen.queryByText(/Account linked!/i)).not.toBeInTheDocument();
+        expect(updateSettings).toHaveBeenCalledTimes(3);
+
+        await user.click(screen.getByText('Save Settings'));
+        await screen.findByText('Login to connect your energy system.');
+        expect(updateSettings).toHaveBeenCalledTimes(3);
+
+        windowOpenSpy.mockRestore();
+    });
+
     it('handles invalid authorization code error and expands ESS section with custom message', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({
@@ -1651,7 +2045,7 @@ describe('App & Settings', () => {
             fireEvent.click(screen.getByText('Google Sign In'));
 
             // Step 1: Location
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
             const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
             await user.clear(zipInput);
             await user.type(zipInput, '90210');
@@ -1772,7 +2166,7 @@ describe('App & Settings', () => {
             fireEvent.click(screen.getByText('Google Sign In'));
 
             // Step 1: Location
-            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
             const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
             await user.clear(zipInput);
             await user.type(zipInput, '90210');
@@ -1955,7 +2349,7 @@ describe('App & Settings', () => {
                     ],
                 },
             ]);
-            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+            (api.submitESSStage as any).mockResolvedValue({ success: true });
 
             await navigateToSettings();
 
@@ -1993,6 +2387,232 @@ describe('App & Settings', () => {
             await waitFor(() => {
                 expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
             });
+        });
+
+        it('clears consumed one-time code on onboarding wizard save failure so retry uses saved session', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false,
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true,
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {},
+                features: { enphaseExportSchedules: true },
+            });
+            (api.fetchESSList as any).mockResolvedValue([
+                ...defaultESSProviders.filter(p => p.id !== 'enphase'),
+                {
+                    id: 'enphase',
+                    name: 'Enphase',
+                    credentials: [
+                        { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                        { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1, oneTime: true },
+                    ],
+                },
+            ]);
+            (api.submitESSStage as any).mockResolvedValue({ stage: 1 });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+            await waitFor(() => expect(screen.getByText('Google Sign In')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Step 1: Location
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 2: Utility
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+            await user.click(screen.getByRole('combobox', { name: /Utility Provider/i }));
+            await user.click(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' }));
+            await user.click(screen.getByRole('combobox', { name: /Rate Plan/i }));
+            await user.click(await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' }));
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 3: ESS (Enphase)
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+            await user.click(screen.getByRole('combobox', { name: /System Type/i }));
+            await user.click(await screen.findByRole('option', { name: 'Enphase' }));
+
+            const emailInput = await screen.findByPlaceholderText(/Enter Email/i);
+            await user.type(emailInput, 'test@example.com');
+            await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+            const codeInput = await screen.findByPlaceholderText(/Enter Email Code/i);
+            await user.type(codeInput, '654321');
+
+            // First Complete Setup fails after OTP is redeemed
+            (updateSettings as any).mockRejectedValueOnce(new Error('credential validation failed: upstream 503'));
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('credential validation failed: upstream 503')).toBeInTheDocument();
+            });
+            expect(updateSettings).toHaveBeenCalledTimes(1);
+            expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+                ess: 'enphase',
+            }), expect.any(String), {
+                enphase: {
+                    username: 'test@example.com',
+                    code: '654321',
+                },
+            });
+
+            // One-time code input must be cleared so retry does not resend consumed OTP
+            expect(screen.getByPlaceholderText(/Enter Email Code/i)).toHaveValue('');
+
+            // Second Complete Setup succeeds without resending code
+            (updateSettings as any).mockResolvedValueOnce(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'enphase',
+                gridChargeBatteries: true,
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                manageTOUSchedules: true,
+                hasCredentials: { enphase: true },
+                features: { enphaseExportSchedules: true },
+            });
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+            });
+            expect(updateSettings).toHaveBeenCalledTimes(2);
+            expect(updateSettings).toHaveBeenNthCalledWith(2, expect.objectContaining({
+                ess: 'enphase',
+            }), expect.any(String), {
+                enphase: {
+                    username: 'test@example.com',
+                },
+            });
+        });
+
+        it('allows Tesla wizard retry using saved tokens after temporary provider failure', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false,
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true,
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {},
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+            await waitFor(() => expect(screen.getByText('Google Sign In')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Step 1: Location
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i }, { timeout: 5000 });
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 2: Utility
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+            await user.click(screen.getByRole('combobox', { name: /Utility Provider/i }));
+            await user.click(await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' }));
+            await user.click(screen.getByRole('combobox', { name: /Rate Plan/i }));
+            await user.click(await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' }));
+            await user.click(screen.getByRole('button', { name: /Save & Continue/i }));
+
+            // Step 3: ESS (Tesla)
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+            await user.click(screen.getByRole('combobox', { name: /System Type/i }));
+            await user.click(await screen.findByRole('option', { name: 'Tesla' }));
+
+            const mockPopup = { closed: false };
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+            const loginBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(loginBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'tesla-wizard-code', state: defaultAuthStatus.sites![0].id }
+                }));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+            });
+
+            // First Complete Setup fails after Tesla exchanges authCode and server saves tokens
+            (updateSettings as any).mockRejectedValueOnce(
+                Object.assign(new Error('failed to verify ess credentials: upstream status 503'), { credentialsSaved: true })
+            );
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('failed to verify ess credentials: upstream status 503')).toBeInTheDocument();
+                expect(screen.getByText(/Account linked! Click Complete Setup below to retry/i)).toBeInTheDocument();
+            });
+            expect(updateSettings).toHaveBeenCalledTimes(1);
+            expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+                ess: 'tesla',
+            }), expect.any(String), {
+                tesla: {
+                    authCode: 'tesla-wizard-code',
+                },
+            });
+
+            // Second Complete Setup succeeds without requiring another Tesla login
+            (updateSettings as any).mockResolvedValueOnce(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'tesla',
+                gridChargeBatteries: true,
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                manageTOUSchedules: true,
+                hasCredentials: { tesla: true },
+            });
+            await user.click(screen.getByRole('button', { name: /Complete Setup/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+            });
+            expect(screen.queryByText('Login to connect your energy system.')).not.toBeInTheDocument();
+            expect(updateSettings).toHaveBeenCalledTimes(2);
+            expect(updateSettings).toHaveBeenNthCalledWith(2, expect.objectContaining({
+                ess: 'tesla',
+            }), expect.any(String), {
+                tesla: {},
+            });
+
+            windowOpenSpy.mockRestore();
         });
     });
 

@@ -337,7 +337,6 @@ func TestHandleListFeedback(t *testing.T) {
 		serverWithAuth := &Server{
 			storage:     mockDBWithAuth,
 			adminEmails: []string{"admin@example.com"},
-			singleSite:  false,
 			oidcAudiences: map[string]string{
 				"google": "test-audience",
 			},
@@ -377,7 +376,6 @@ func TestHandleListFeedback(t *testing.T) {
 		serverWithAuth := &Server{
 			storage:     mockDBWithAuth,
 			adminEmails: []string{"admin@example.com"},
-			singleSite:  false,
 			oidcAudiences: map[string]string{
 				"google": "test-audience",
 			},

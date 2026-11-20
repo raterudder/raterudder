@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
     getBatteryModeLabel,
     getBatteryPillLabel,
@@ -19,6 +19,7 @@ import {
     getCurrencySymbol,
     getPlanStatusSubvalue,
     getActionLoadSubType,
+    getWallClockPartsInTimeZone,
     getDateInTimeZone,
     getSiteTodayDate,
     getHourInTimeZone,
@@ -552,6 +553,90 @@ describe('dashboardUtils', () => {
             expect(siteToday.getFullYear()).toBe(2026);
             expect(siteToday.getMonth()).toBe(10);
             expect(siteToday.getDate()).toBe(9);
+        });
+
+        it('preserves spring-forward and fall-back DST offsets in getWallClockPartsInTimeZone and getDateInTimeZone', () => {
+            // Spring forward in America/Los_Angeles on 2026-03-08 (2:00 AM PST -> 3:00 AM PDT)
+            const beforeSpring = getDateInTimeZone(2026, 2, 8, 1, 30, 0, 0, 'America/Los_Angeles');
+            const afterSpring = getDateInTimeZone(2026, 2, 8, 3, 30, 0, 0, 'America/Los_Angeles');
+            expect(beforeSpring.toISOString()).toBe('2026-03-08T09:30:00.000Z');
+            expect(afterSpring.toISOString()).toBe('2026-03-08T10:30:00.000Z');
+            expect(getWallClockPartsInTimeZone(beforeSpring, 'America/Los_Angeles')).toEqual({
+                year: 2026,
+                month: 3,
+                day: 8,
+                hour: 1,
+                minute: 30,
+                second: 0,
+            });
+            expect(getWallClockPartsInTimeZone(afterSpring, 'America/Los_Angeles')).toEqual({
+                year: 2026,
+                month: 3,
+                day: 8,
+                hour: 3,
+                minute: 30,
+                second: 0,
+            });
+
+            // Fall back in America/Los_Angeles on 2026-11-01 (2:00 AM PDT -> 1:00 AM PST)
+            const beforeFall = getDateInTimeZone(2026, 10, 1, 0, 30, 0, 0, 'America/Los_Angeles');
+            const afterFall = getDateInTimeZone(2026, 10, 1, 2, 30, 0, 0, 'America/Los_Angeles');
+            expect(beforeFall.toISOString()).toBe('2026-11-01T07:30:00.000Z');
+            expect(afterFall.toISOString()).toBe('2026-11-01T10:30:00.000Z');
+        });
+
+        it('returns null for empty or invalid timezones and Invalid Date without throwing', () => {
+            const validDate = new Date('2026-07-22T12:00:00Z');
+            expect(getWallClockPartsInTimeZone(validDate, '')).toBeNull();
+            expect(getWallClockPartsInTimeZone(validDate, undefined)).toBeNull();
+            expect(getWallClockPartsInTimeZone(validDate, 'Invalid/Not_A_Zone')).toBeNull();
+            expect(getWallClockPartsInTimeZone(new Date('invalid'), 'America/Los_Angeles')).toBeNull();
+
+            const fallbackDate = getDateInTimeZone(2026, 6, 22, 12, 0, 0, 0, 'Invalid/Not_A_Zone');
+            expect(fallbackDate.getTime()).toBe(new Date(2026, 6, 22, 12, 0, 0, 0).getTime());
+        });
+
+        it('reuses cached Intl.DateTimeFormat per valid IANA timezone and evicts oldest beyond 64 entries', () => {
+            const dtfSpy = vi.spyOn(Intl, 'DateTimeFormat');
+            try {
+                const sampleDate = new Date('2026-07-22T12:00:00Z');
+                expect(getWallClockPartsInTimeZone(sampleDate, 'Pacific/Auckland')).not.toBeNull();
+                expect(getWallClockPartsInTimeZone(new Date('2026-01-15T12:00:00Z'), 'Pacific/Auckland')).not.toBeNull();
+                expect(getHourInTimeZone('2026-07-22T12:00:00Z', undefined, 'Pacific/Auckland')).toBe(0);
+                expect(dtfSpy).toHaveBeenCalledTimes(1);
+
+                // Invalid timezone throws inside Intl.DateTimeFormat and must not be cached
+                expect(getWallClockPartsInTimeZone(sampleDate, 'Bad/Zone_1')).toBeNull();
+                expect(getWallClockPartsInTimeZone(sampleDate, 'Pacific/Auckland')).not.toBeNull();
+                expect(dtfSpy).toHaveBeenCalledTimes(2);
+
+                // Verify bounded 64-entry FIFO eviction
+                dtfSpy.mockClear();
+                const allZones = Intl.supportedValuesOf('timeZone').filter(
+                    (z) => z !== 'Pacific/Auckland' && z !== 'America/Los_Angeles'
+                );
+                const firstInserted = allZones[0];
+                const secondInserted = allZones[1];
+                for (let i = 0; i < 64; i++) {
+                    expect(getWallClockPartsInTimeZone(sampleDate, allZones[i])).not.toBeNull();
+                }
+                expect(dtfSpy).toHaveBeenCalledTimes(64);
+
+                // Second inserted entry is still in cache
+                dtfSpy.mockClear();
+                expect(getWallClockPartsInTimeZone(sampleDate, secondInserted)).not.toBeNull();
+                expect(dtfSpy).toHaveBeenCalledTimes(0);
+
+                // Inserting a 65th distinct entry evicts firstInserted (the oldest entry)
+                expect(getWallClockPartsInTimeZone(sampleDate, allZones[64])).not.toBeNull();
+                expect(dtfSpy).toHaveBeenCalledTimes(1);
+
+                dtfSpy.mockClear();
+                expect(getWallClockPartsInTimeZone(sampleDate, firstInserted)).not.toBeNull();
+                expect(dtfSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                dtfSpy.mockRestore();
+            }
         });
 
         it('ignores zero systemTimestamp (0001-01-01) and falls back to systemStatus timestamp offset', () => {

@@ -174,7 +174,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		var activeSession *SessionData
 		var activeAppToken *appTokenData
 		var activeAppName string
-		// user might be a mock/fake user if this is bypassAuth or singleSite
+		// user might be a mock/fake user if this is bypassAuth
 		var user types.User
 		var authSuccess bool
 		var authViaUpdateSpecific bool
@@ -197,7 +197,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 			// Check app token auth on allowed endpoints
 			if rawAppToken != "" && allowAppToken {
-				if len(s.appsEncryptionKey) != 32 || s.singleSite {
+				if len(s.appsEncryptionKey) != 32 {
 					writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 					return
 				}
@@ -316,97 +316,85 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				// allowed to update
 			} else if authSuccess {
 				// fetch user
-				if s.singleSite {
-					user = types.User{
-						ID:    userID,
-						Email: email,
-						Sites: []types.UserSite{{ID: types.SiteIDNone}},
-					}
-					// just take the session secret off the existing session if they have one
-					if activeSession != nil {
-						user.SessionSecret = activeSession.SessionSecret
+				var err error
+				user, err = s.storage.GetUser(ctx, userID)
+				if err != nil {
+					if ignoreUserNotFound && errors.Is(err, storage.ErrUserNotFound) {
+						log.Ctx(ctx).InfoContext(ctx, "user not found, will register on join", slog.String("userID", userID), slog.String("email", email))
+						// just take the session secret off the existing session if they have one
+						sessionSecret := ""
+						if activeSession != nil {
+							sessionSecret = activeSession.SessionSecret
+						}
+						// Put a stub user in context so the join handler can create it
+						ctx = context.WithValue(ctx, userToRegisterContextKey, types.User{
+							ID:            userID,
+							Email:         email,
+							SessionSecret: sessionSecret,
+						})
+					} else if errors.Is(err, storage.ErrUserNotFound) {
+						log.Ctx(ctx).WarnContext(ctx, "user not found", slog.String("userID", userID), slog.String("email", email))
+						if activeAppToken == nil {
+							s.clearCookie(w)
+						}
+						setWWWAuthenticate()
+						writeJSONError(w, "user lookup failed", http.StatusUnauthorized)
+						return
+					} else {
+						log.Ctx(ctx).ErrorContext(ctx, "user lookup failed due to storage error", slog.String("userID", userID), slog.String("email", email), slog.Any("error", err))
+						writeJSONError(w, "internal server error", http.StatusInternalServerError)
+						return
 					}
 				} else {
-					var err error
-					user, err = s.storage.GetUser(ctx, userID)
-					if err != nil {
-						if ignoreUserNotFound && errors.Is(err, storage.ErrUserNotFound) {
-							log.Ctx(ctx).InfoContext(ctx, "user not found, will register on join", slog.String("userID", userID), slog.String("email", email))
-							// just take the session secret off the existing session if they have one
-							sessionSecret := ""
-							if activeSession != nil {
-								sessionSecret = activeSession.SessionSecret
-							}
-							// Put a stub user in context so the join handler can create it
-							ctx = context.WithValue(ctx, userToRegisterContextKey, types.User{
-								ID:            userID,
-								Email:         email,
-								SessionSecret: sessionSecret,
-							})
-						} else if errors.Is(err, storage.ErrUserNotFound) {
-							log.Ctx(ctx).WarnContext(ctx, "user not found", slog.String("userID", userID), slog.String("email", email))
-							if activeAppToken == nil {
-								s.clearCookie(w)
-							}
-							setWWWAuthenticate()
-							writeJSONError(w, "user lookup failed", http.StatusUnauthorized)
-							return
-						} else {
-							log.Ctx(ctx).ErrorContext(ctx, "user lookup failed due to storage error", slog.String("userID", userID), slog.String("email", email), slog.Any("error", err))
-							writeJSONError(w, "internal server error", http.StatusInternalServerError)
-							return
-						}
-					} else {
-						// If authenticated via session token, verify per-user SessionSecret and RevokedSessions
-						if activeSession != nil {
-							sessionRevoked := user.SessionSecret == "" || subtle.ConstantTimeCompare([]byte(activeSession.SessionSecret), []byte(user.SessionSecret)) != 1
-							if !sessionRevoked && activeSession.nonce != "" {
-								for _, revoked := range user.RevokedSessions {
-									if subtle.ConstantTimeCompare([]byte(activeSession.nonce), []byte(revoked.Nonce)) == 1 {
-										sessionRevoked = true
-										break
-									}
-								}
-							}
-							if sessionRevoked {
-								log.Ctx(ctx).WarnContext(ctx, "session secret mismatch or revoked", slog.String("userID", userID), slog.String("email", email))
-								s.clearCookie(w)
-								if !allowNoLogin {
-									writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
-									return
-								}
-								user = types.User{}
-								activeSession = nil
-								userID = ""
-								email = ""
-								authSuccess = false
-							}
-						}
-
-						// If authenticated via app token, verify app exists on user for this site, is not pending, and matches TokenHash
-						if activeAppToken != nil {
-							tokenHash := sha256Hex(activeAppToken.Secret)
-							appValid := false
-							for _, app := range user.Apps {
-								if app.ID == activeAppToken.AppID && app.SiteID == activeAppToken.SiteID && app.PendingCodeHash == "" && app.TokenHash != "" &&
-									subtle.ConstantTimeCompare([]byte(app.TokenHash), []byte(tokenHash)) == 1 {
-									appValid = true
-									activeAppName = app.Name
+					// If authenticated via session token, verify per-user SessionSecret and RevokedSessions
+					if activeSession != nil {
+						sessionRevoked := user.SessionSecret == "" || subtle.ConstantTimeCompare([]byte(activeSession.SessionSecret), []byte(user.SessionSecret)) != 1
+						if !sessionRevoked && activeSession.nonce != "" {
+							for _, revoked := range user.RevokedSessions {
+								if subtle.ConstantTimeCompare([]byte(activeSession.nonce), []byte(revoked.Nonce)) == 1 {
+									sessionRevoked = true
 									break
 								}
 							}
-							if !appValid {
-								log.Ctx(ctx).WarnContext(ctx, "app token invalid or revoked", slog.String("userID", userID), slog.String("appID", activeAppToken.AppID))
-								setWWWAuthenticate()
-								writeJSONError(w, "app token invalid or revoked", http.StatusUnauthorized)
+						}
+						if sessionRevoked {
+							log.Ctx(ctx).WarnContext(ctx, "session secret mismatch or revoked", slog.String("userID", userID), slog.String("email", email))
+							s.clearCookie(w)
+							if !allowNoLogin {
+								writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
 								return
 							}
+							user = types.User{}
+							activeSession = nil
+							userID = ""
+							email = ""
+							authSuccess = false
 						}
+					}
 
-						// fill in default siteID if the user only has 1 site
-						if authSuccess && siteID == "" && len(user.Sites) == 1 && !optionalSiteID {
-							siteID = user.Sites[0].ID
+					// If authenticated via app token, verify app exists on user for this site, is not pending, and matches TokenHash
+					if activeAppToken != nil {
+						tokenHash := sha256Hex(activeAppToken.Secret)
+						appValid := false
+						for _, app := range user.Apps {
+							if app.ID == activeAppToken.AppID && app.SiteID == activeAppToken.SiteID && app.PendingCodeHash == "" && app.TokenHash != "" &&
+								subtle.ConstantTimeCompare([]byte(app.TokenHash), []byte(tokenHash)) == 1 {
+								appValid = true
+								activeAppName = app.Name
+								break
+							}
 						}
+						if !appValid {
+							log.Ctx(ctx).WarnContext(ctx, "app token invalid or revoked", slog.String("userID", userID), slog.String("appID", activeAppToken.AppID))
+							setWWWAuthenticate()
+							writeJSONError(w, "app token invalid or revoked", http.StatusUnauthorized)
+							return
+						}
+					}
+
+					// fill in default siteID if the user only has 1 site
+					if authSuccess && siteID == "" && len(user.Sites) == 1 && !optionalSiteID {
+						siteID = user.Sites[0].ID
 					}
 				}
 
@@ -418,10 +406,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					}
 
 					isAdmin := s.isMultiSiteAdmin(user)
-					if isAdmin && s.singleSite {
-						user.Admin = true
-					}
-					if !s.singleSite && siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
+					if siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
 						site, err := s.storage.GetSite(ctx, siteID)
 						if err != nil {
 							log.Ctx(ctx).WarnContext(ctx, "site lookup failed", slog.String("siteID", siteID), slog.Any("error", err))
@@ -454,14 +439,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		if siteID == "" {
-			if s.singleSite {
-				siteID = types.SiteIDNone
-			} else if !ignoreSiteID && !optionalSiteID {
-				log.Ctx(ctx).WarnContext(ctx, "siteID required", slog.String("userID", userID))
-				writeJSONError(w, "siteID required", http.StatusBadRequest)
-				return
-			}
+		if siteID == "" && !ignoreSiteID && !optionalSiteID {
+			log.Ctx(ctx).WarnContext(ctx, "siteID required", slog.String("userID", userID))
+			writeJSONError(w, "siteID required", http.StatusBadRequest)
+			return
 		}
 
 		var authAttrs []any
@@ -530,7 +511,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Determine or initialize SessionSecret
 	var sessionSecret string
-	if !s.singleSite && s.storage != nil {
+	if s.storage != nil {
 		user, err := s.storage.GetUser(r.Context(), subject)
 		if err == nil {
 			if user.SessionSecret == "" {
@@ -623,7 +604,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if sess, ok := r.Context().Value(sessionDataContextKey).(*SessionData); ok && sess != nil && sess.nonce != "" && sess.UserID != "" {
 		// Note: we explicitly do not handle revoking sessions if a user logs out before
 		// creating/joining a site (when they do not yet have a User record in storage).
-		if !s.singleSite && !s.bypassAuth && s.storage != nil {
+		if !s.bypassAuth && s.storage != nil {
 			err := s.storage.RevokeUserSession(r.Context(), sess.UserID, types.RevokedSession{
 				Nonce:     sess.nonce,
 				TSExpires: time.Unix(sess.ExpiresAt, 0).UTC(),
@@ -662,7 +643,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 
 	termsAccepted := false
 	if loggedIn {
-		if s.singleSite || s.bypassAuth || !persistedUser {
+		if s.bypassAuth || !persistedUser {
 			termsAccepted = true
 		} else {
 			termsAccepted = !user.TSTermsAccepted.Before(types.CurrentTermsDate)
@@ -720,7 +701,7 @@ func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	acceptedAt := s.now().UTC()
-	if !s.singleSite && !s.bypassAuth && s.storage != nil && user.TSTermsAccepted.Before(types.CurrentTermsDate) {
+	if !s.bypassAuth && s.storage != nil && user.TSTermsAccepted.Before(types.CurrentTermsDate) {
 		user.TSTermsAccepted = acceptedAt
 		if err := s.storage.UpdateUser(ctx, user); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update user terms acceptance", slog.String("userID", user.ID), slog.Any("error", err))

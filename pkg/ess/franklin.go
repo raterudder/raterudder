@@ -1078,44 +1078,6 @@ func (f *Franklin) GridSettings(ctx context.Context) (types.GridSettings, error)
 	}, nil
 }
 
-func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerControlSettingResult) error {
-	data := map[string]any{
-		"gatewayId": f.gatewayID,
-		// TODO: what does a gridMax value of -1 mean? It's not clear yet
-		"gridMax":     pc.GridMax,
-		"gridMaxFlag": pc.GridMaxFlag,
-	}
-	// if we have no export, we don't set the gridFeedMax
-	if pc.GridFeedMaxFlag != 3 {
-		if pc.GridFeedMax < 0 {
-			pc.GridFeedMax = -1.0
-		}
-		data["gridFeedMax"] = pc.GridFeedMax
-	}
-	data["gridFeedMaxFlag"] = pc.GridFeedMaxFlag
-
-	log.Ctx(ctx).InfoContext(
-		ctx,
-		"setting franklin power control",
-		slog.Float64("gridMax", pc.GridMax),
-		slog.Int("gridMaxFlag", int(pc.GridMaxFlag)),
-		slog.Float64("gridFeedMax", pc.GridFeedMax),
-		slog.Int("gridFeedMaxFlag", int(pc.GridFeedMaxFlag)),
-	)
-
-	req, err := f.newPostJSONRequest(ctx, "hes-gateway/terminal/tou/setPowerControlV2", data)
-	if err != nil {
-		return err
-	}
-
-	// TODO: should we be doing something with the powerControlTipMsg response? What does it mean?
-	if err := f.doRequest(req, nil); err != nil {
-		return err
-	}
-	f.powerControlExpiry = time.Time{}
-	return nil
-}
-
 type availableModes struct {
 	list                []franklinMode
 	touMode             franklinMode
@@ -1576,6 +1538,14 @@ func parseFranklinHourMinute(s string) (int, int, bool) {
 	return h, m, true
 }
 
+type franklinModePlan struct {
+	targetMode    franklinMode
+	newReserveSOC float64
+	needsExport   bool
+	modeChanged   bool
+	socChanged    bool
+}
+
 // SetModes sets the operating modes of the system.
 func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
@@ -1596,18 +1566,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return false, err
 	}
 
-	isStormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
-	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
-
-	if isStormHedge || isBackup {
-		if bat == types.BatteryModeNoChange {
-			return false, nil
-		}
-		log.Ctx(ctx).DebugContext(ctx, "storm hedge or backup active, skipping mode change",
-			slog.Any("batteryMode", bat),
-			slog.Bool("isStormHedge", isStormHedge),
-			slog.Bool("isBackup", isBackup),
-		)
+	if handled := f.checkFranklinStormOrBackup(ctx, bat, rd, modes); handled {
 		return false, nil
 	}
 
@@ -1615,79 +1574,81 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		log.Ctx(ctx).ErrorContext(ctx, "self consumption mode not available", slog.Any("modes", modes))
 		return false, errors.New("self consumption mode not available")
 	}
-	sc := modes.selfConsumption
 
 	pc, err := f.getPowerControlWithCache(ctx, false)
 	if err != nil {
 		return false, err
 	}
 
-	targetMode := sc
-	newReserveSOC := sc.ReserveSOC
+	plan, err := f.computeFranklinModePlan(ctx, bat, sol, opts, rd, modes, pc)
+	if err != nil {
+		return false, err
+	}
+
+	scheduleChanged, err := f.syncFranklinTOUIfNeeded(ctx, opts, rd, &modes, &plan)
+	if err != nil {
+		return false, err
+	}
+
+	return f.applyFranklinModeUpdates(ctx, modes, plan, scheduleChanged)
+}
+
+func (f *Franklin) checkFranklinStormOrBackup(
+	ctx context.Context,
+	bat types.BatteryMode,
+	rd franklinDeviceCompositeInfoResult,
+	modes availableModes,
+) bool {
+	isStormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
+	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
+	if !isStormHedge && !isBackup {
+		return false
+	}
+	if bat != types.BatteryModeNoChange {
+		log.Ctx(ctx).DebugContext(ctx, "storm hedge or backup active, skipping mode change",
+			slog.Any("batteryMode", bat),
+			slog.Bool("isStormHedge", isStormHedge),
+			slog.Bool("isBackup", isBackup),
+		)
+	}
+	return true
+}
+
+func (f *Franklin) computeFranklinModePlan(
+	ctx context.Context,
+	bat types.BatteryMode,
+	sol types.SolarMode,
+	opts types.ModesOptions,
+	rd franklinDeviceCompositeInfoResult,
+	modes availableModes,
+	pc franklinGetPowerControlSettingResult,
+) (franklinModePlan, error) {
+	needsExport := f.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport)
+	if needsExport && opts.Schedule == nil {
+		log.Ctx(ctx).ErrorContext(ctx, "no schedule provided for tou export", slog.String("gatewayID", f.gatewayID))
+		return franklinModePlan{}, errors.New("missing schedule to provision tou mode")
+	}
 
 	minSOC := f.settings.MinBatterySOC
 	if opts.MinimumSOC != 0 {
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	needsExport := f.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport)
-	if needsExport && opts.Schedule == nil {
-		log.Ctx(ctx).ErrorContext(ctx, "no schedule provided for tou export", slog.String("gatewayID", f.gatewayID))
-		return false, errors.New("missing schedule to provision tou mode")
-	}
+	var targetMode franklinMode
+	var newReserveSOC float64
 
 	if needsExport {
+		targetMode = modes.touMode
 		if bat == types.BatteryModeStandby {
 			newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
 		} else {
 			newReserveSOC = minSOC
 		}
-		targetMode = modes.touMode
 	} else {
-		switch bat {
-		case types.BatteryModeChargeAny:
-			if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid && ffFranklinBackupToCharge.Enabled(ctx) {
-				log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
-				if modes.backup == (franklinMode{}) {
-					log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
-					return false, errors.New("backup mode not available")
-				}
-				targetMode = modes.backup
-			} else {
-				if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
-					log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control", slog.Any("opts", opts))
-				}
-				// note: since we're not setting emergency backup mode solar will still be
-				// used to power the home first then spill over into the battery
-				if !sc.CanEditReserveSOC {
-					log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-					return false, errors.New("cannot edit reserve SOC")
-				}
-				targetSOC := 100
-				if opts.ChargeToSOC != 0 {
-					targetSOC = opts.ChargeToSOC
-				}
-				newReserveSOC = float64(targetSOC)
-			}
-		case types.BatteryModeLoad, types.BatteryModeExport:
-			// we set the SOC to the minimum battery SOC to ensure we start discharging
-			// if we're somehow less than this soc, we'll charge from the solar, unless
-			// solar is unavailable then it'll charge from the grid
-			// it seems like this accepts an int value
-			newReserveSOC = minSOC
-		case types.BatteryModeStandby:
-			// we floor the SOC to ensure we don't set it to a value that would cause the
-			// battery to charge
-			if !sc.CanEditReserveSOC {
-				log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-				return false, errors.New("cannot edit reserve SOC")
-			}
-			// make sure we don't set it to less than the minimum battery SOC
-			newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
-		case types.BatteryModeNoChange:
-			targetMode = modes.currentMode
-		default:
-			return false, fmt.Errorf("unknown battery mode: %v", bat)
+		var err error
+		targetMode, newReserveSOC, err = f.computeFranklinNonExportTarget(ctx, bat, opts, minSOC, rd.RuntimeData.SOC, modes, pc)
+		if err != nil {
+			return franklinModePlan{}, err
 		}
 	}
 
@@ -1699,175 +1660,290 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	}
 
 	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
-	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) && math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
+	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) &&
+		math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
 
+	return franklinModePlan{
+		targetMode:    targetMode,
+		newReserveSOC: newReserveSOC,
+		needsExport:   needsExport,
+		modeChanged:   modeChanged,
+		socChanged:    socChanged,
+	}, nil
+}
+
+func (f *Franklin) computeFranklinNonExportTarget(
+	ctx context.Context,
+	bat types.BatteryMode,
+	opts types.ModesOptions,
+	minSOC float64,
+	currentSOC float64,
+	modes availableModes,
+	pc franklinGetPowerControlSettingResult,
+) (franklinMode, float64, error) {
+	sc := modes.selfConsumption
+	switch bat {
+	case types.BatteryModeChargeAny:
+		gridChargeDisabled := f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid
+		if gridChargeDisabled && ffFranklinBackupToCharge.Enabled(ctx) {
+			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
+			if modes.backup == (franklinMode{}) {
+				log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
+				return franklinMode{}, 0, errors.New("backup mode not available")
+			}
+			return modes.backup, sc.ReserveSOC, nil
+		}
+		if gridChargeDisabled {
+			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control", slog.Any("opts", opts))
+		}
+		// note: since we're not setting emergency backup mode solar will still be
+		// used to power the home first then spill over into the battery
+		if !sc.CanEditReserveSOC {
+			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
+			return franklinMode{}, 0, errors.New("cannot edit reserve SOC")
+		}
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		return sc, float64(targetSOC), nil
+	case types.BatteryModeLoad, types.BatteryModeExport:
+		// we set the SOC to the minimum battery SOC to ensure we start discharging
+		// if we're somehow less than this soc, we'll charge from the solar, unless
+		// solar is unavailable then it'll charge from the grid
+		// it seems like this accepts an int value
+		return sc, minSOC, nil
+	case types.BatteryModeStandby:
+		// we floor the SOC to ensure we don't set it to a value that would cause the
+		// battery to charge
+		if !sc.CanEditReserveSOC {
+			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
+			return franklinMode{}, 0, errors.New("cannot edit reserve SOC")
+		}
+		// make sure we don't set it to less than the minimum battery SOC
+		return sc, max(math.Floor(currentSOC), minSOC), nil
+	case types.BatteryModeNoChange:
+		return modes.currentMode, sc.ReserveSOC, nil
+	default:
+		return franklinMode{}, 0, fmt.Errorf("unknown battery mode: %v", bat)
+	}
+}
+
+func (f *Franklin) syncFranklinTOUIfNeeded(
+	ctx context.Context,
+	opts types.ModesOptions,
+	rd franklinDeviceCompositeInfoResult,
+	modes *availableModes,
+	plan *franklinModePlan,
+) (bool, error) {
 	// When not exporting, skip TOU schedule updates if we are actively changing the
-	// operating mode or reserve SOC (e.g. starting/stopping a charge or entering standby)
-	// so saveTouDispatch never reloads the gateway's dispatch package in the same cycle
-	// as an active mode or reserve SOC update.
-	var scheduleChanged bool
-	shouldCheckTOUSchedule := f.settings.ManageTOUSchedules && opts.Schedule != nil && (needsExport || (!modeChanged && !socChanged))
-	if shouldCheckTOUSchedule {
-		tplRes, err := f.getTOUTemplate(ctx)
+	// operating mode or reserve SOC so saveTouDispatch never reloads the gateway's
+	// dispatch package in the same cycle as an active mode or reserve SOC update.
+	shouldCheck := f.settings.ManageTOUSchedules && opts.Schedule != nil && (plan.needsExport || (!plan.modeChanged && !plan.socChanged))
+	if !shouldCheck {
+		return false, nil
+	}
+
+	scheduleChanged, err := f.syncFranklinScheduleTemplate(ctx, opts.Schedule, modes.touMode, plan.needsExport)
+	if err != nil {
+		return false, err
+	}
+
+	if plan.needsExport && modes.touMode == (franklinMode{}) {
+		if err := f.provisionMissingTOUMode(ctx, rd, modes, plan); err != nil {
+			return false, err
+		}
+	}
+	return scheduleChanged, nil
+}
+
+func (f *Franklin) syncFranklinScheduleTemplate(
+	ctx context.Context,
+	schedule *types.TOUSchedule,
+	touMode franklinMode,
+	needsExport bool,
+) (bool, error) {
+	tplRes, err := f.getTOUTemplate(ctx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get franklin tou template", slog.Any("error", err))
+	}
+	isRateRudder := err == nil && isFranklinRateRudderSchedule(tplRes, touMode)
+	if !isRateRudder && !needsExport {
+		log.Ctx(ctx).DebugContext(ctx, "franklin schedule is manually configured and export is not required, skipping schedule update")
+		return false, nil
+	}
+	if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, schedule, f.now()) {
+		log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch")
+		return false, nil
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "saving franklin tou schedule", slog.Any("schedule", schedule))
+	if err := f.saveFranklinTOUSchedule(ctx, schedule, tplRes); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (f *Franklin) provisionMissingTOUMode(
+	ctx context.Context,
+	rd franklinDeviceCompositeInfoResult,
+	modes *availableModes,
+	plan *franklinModePlan,
+) error {
+	if f.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: franklin tou mode not configured on gateway, would've provisioned via saveTouDispatch",
+			slog.String("gatewayID", f.gatewayID),
+		)
+		modes.touMode = franklinMode{
+			WorkMode: franklinWorkModeTimeOfUse,
+			Name:     "RateRudder Dynamic Schedule",
+		}
+	} else {
+		log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
+			slog.String("gatewayID", f.gatewayID),
+		)
+		refreshedModes, err := f.getAvailableModes(ctx, rd)
 		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get franklin tou template", slog.Any("error", err))
+			log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
+			return err
 		}
-		isRateRudder := err == nil && isFranklinRateRudderSchedule(tplRes, modes.touMode)
+		*modes = refreshedModes
+	}
 
-		if isRateRudder || needsExport {
-			scheduleMatched := false
-			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.Schedule, f.now()) {
-				scheduleMatched = true
-				log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch")
-			}
+	if modes.touMode == (franklinMode{}) {
+		log.Ctx(ctx).ErrorContext(ctx, "franklin tou mode not available on gateway even after saving tou dispatch",
+			slog.String("gatewayID", f.gatewayID),
+			slog.Any("modes", modes.list),
+		)
+		return errors.New("franklin tou mode not available")
+	}
 
-			if !scheduleMatched {
-				log.Ctx(ctx).DebugContext(ctx, "saving franklin tou schedule", slog.Any("schedule", opts.Schedule))
-				if err := f.saveFranklinTOUSchedule(ctx, opts.Schedule, tplRes); err != nil {
-					return false, err
-				}
-				scheduleChanged = true
-			}
-		} else {
-			log.Ctx(ctx).DebugContext(ctx, "franklin schedule is manually configured and export is not required, skipping schedule update")
-		}
+	plan.targetMode = modes.touMode
+	if math.Abs(plan.newReserveSOC-plan.targetMode.ReserveSOC) <= 1.0 {
+		plan.newReserveSOC = plan.targetMode.ReserveSOC
+	}
+	plan.modeChanged = true
+	plan.socChanged = math.Round(plan.newReserveSOC) != math.Round(plan.targetMode.ReserveSOC)
+	return nil
+}
 
-		if needsExport && modes.touMode == (franklinMode{}) {
-			if f.settings.DryRun {
-				log.Ctx(ctx).InfoContext(ctx, "dry run: franklin tou mode not configured on gateway, would've provisioned via saveTouDispatch",
-					slog.String("gatewayID", f.gatewayID),
-				)
-				modes.touMode = franklinMode{
-					WorkMode: franklinWorkModeTimeOfUse,
-					Name:     "RateRudder Dynamic Schedule",
-				}
-			} else {
-				log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
-					slog.String("gatewayID", f.gatewayID),
-				)
-				refreshedModes, err := f.getAvailableModes(ctx, rd)
-				if err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
-					return false, err
-				}
-				modes = refreshedModes
-			}
+func (f *Franklin) applyFranklinModeUpdates(
+	ctx context.Context,
+	modes availableModes,
+	plan franklinModePlan,
+	scheduleChanged bool,
+) (bool, error) {
+	if !plan.modeChanged && !plan.socChanged {
+		return scheduleChanged, nil
+	}
 
-			if modes.touMode == (franklinMode{}) {
-				log.Ctx(ctx).ErrorContext(ctx, "franklin tou mode not available on gateway even after saving tou dispatch",
-					slog.String("gatewayID", f.gatewayID),
-					slog.Any("modes", modes.list),
-				)
-				return false, errors.New("franklin tou mode not available")
-			}
+	if f.settings.DryRun {
+		f.logFranklinDryRun(ctx, plan)
+		return scheduleChanged, nil
+	}
 
-			targetMode = modes.touMode
-			if math.Abs(newReserveSOC-targetMode.ReserveSOC) <= 1.0 {
-				newReserveSOC = targetMode.ReserveSOC
-			}
-			// we know it changed because we just created tou mode
-			modeChanged = true
-			socChanged = math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
+	if scheduleChanged && f.touDispatchDelay > 0 {
+		// Calling saveTouDispatch causes the FranklinWH gateway to reload its TOU dispatch
+		// package ("Package settings are taking effect, please check later"). Sending
+		// updateSocV2 or updateTouModeV2 immediately after saveTouDispatch can cause the
+		// gateway to delay or ignore the reserve SOC / operating mode change.
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"waiting after saving franklin tou schedule before updating mode/soc",
+			slog.Duration("delay", f.touDispatchDelay),
+		)
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(f.touDispatchDelay):
 		}
 	}
 
-	if modeChanged || socChanged {
-		if f.settings.DryRun {
-			if socChanged {
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"dry run: would've updated soc",
-					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", int(targetMode.WorkMode)),
-				)
-			}
-			if modeChanged {
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"dry run: would've updated tou mode",
-					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", int(targetMode.WorkMode)),
-				)
-			}
-		} else {
-			if scheduleChanged && f.touDispatchDelay > 0 {
-				// Calling saveTouDispatch causes the FranklinWH gateway to reload its TOU dispatch
-				// package ("Package settings are taking effect, please check later"). Sending
-				// updateSocV2 or updateTouModeV2 immediately after saveTouDispatch can cause the
-				// gateway to delay or ignore the reserve SOC / operating mode change.
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"waiting after saving franklin tou schedule before updating mode/soc",
-					slog.Duration("delay", f.touDispatchDelay),
-				)
-				select {
-				case <-ctx.Done():
-					return false, ctx.Err()
-				case <-time.After(f.touDispatchDelay):
-				}
-			}
-
-			// Explicitly call updateSocV2 before changing modes because updateTouModeV2
-			// does not seem to actually change the reserve SOC on the gateway hardware.
-			if socChanged {
-				log.Ctx(ctx).InfoContext(
-					ctx,
-					"updating franklin soc",
-					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", int(targetMode.WorkMode)),
-				)
-				params := url.Values{}
-				params.Set("gatewayId", f.gatewayID)
-				params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
-				params.Set("electricityType", strconv.Itoa(targetMode.ElectricityType))
-				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
-
-				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateSocV2", params)
-				if err != nil {
-					return false, err
-				}
-				if err := f.doRequest(req, nil); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
-					return false, err
-				}
-			}
-			if modeChanged {
-				log.Ctx(ctx).InfoContext(
-					ctx,
-					"updating franklin tou mode",
-					slog.Float64("soc", newReserveSOC),
-					slog.Int("workMode", int(targetMode.WorkMode)),
-				)
-
-				params := url.Values{}
-				params.Set("gatewayId", f.gatewayID)
-				params.Set("currendId", fmt.Sprint(targetMode.ID))
-				params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
-				params.Set("electricityType", fmt.Sprint(targetMode.ElectricityType))
-				params.Set("oldIndex", fmt.Sprint(targetMode.OldIndex))
-				params.Set("stromEn", fmt.Sprint(modes.stormHedgeEnabled))
-				// round to the nearest integer to minimize the chance of the battery charging
-				// or discharging when we don't want it to
-				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
-
-				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", params)
-				if err != nil {
-					return false, err
-				}
-				if err := f.doRequest(req, nil); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
-					return false, err
-				}
-			}
-			return true, nil
+	// Explicitly call updateSocV2 before changing modes because updateTouModeV2
+	// does not reliably change the reserve SOC on the gateway hardware.
+	if plan.socChanged {
+		if err := f.postFranklinSOCUpdate(ctx, plan.targetMode, int(math.Round(plan.newReserveSOC))); err != nil {
+			return false, err
 		}
 	}
-
-	if scheduleChanged {
-		return true, nil
+	if plan.modeChanged {
+		if err := f.postFranklinModeUpdate(ctx, plan.targetMode, plan.newReserveSOC, modes.stormHedgeEnabled); err != nil {
+			return false, err
+		}
 	}
+	return true, nil
+}
 
-	return false, nil
+func (f *Franklin) logFranklinDryRun(ctx context.Context, plan franklinModePlan) {
+	if plan.socChanged {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"dry run: would've updated soc",
+			slog.Int("soc", int(math.Round(plan.newReserveSOC))),
+			slog.Int("workMode", int(plan.targetMode.WorkMode)),
+		)
+	}
+	if plan.modeChanged {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"dry run: would've updated tou mode",
+			slog.Int("soc", int(math.Round(plan.newReserveSOC))),
+			slog.Int("workMode", int(plan.targetMode.WorkMode)),
+		)
+	}
+}
+
+func (f *Franklin) postFranklinSOCUpdate(ctx context.Context, targetMode franklinMode, roundedSOC int) error {
+	log.Ctx(ctx).InfoContext(
+		ctx,
+		"updating franklin soc",
+		slog.Int("soc", roundedSOC),
+		slog.Int("workMode", int(targetMode.WorkMode)),
+	)
+	params := url.Values{}
+	params.Set("gatewayId", f.gatewayID)
+	params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
+	params.Set("electricityType", strconv.Itoa(targetMode.ElectricityType))
+	params.Set("soc", strconv.Itoa(roundedSOC))
+
+	req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateSocV2", params)
+	if err != nil {
+		return err
+	}
+	if err := f.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+func (f *Franklin) postFranklinModeUpdate(ctx context.Context, targetMode franklinMode, newReserveSOC float64, stormHedgeEnabled int) error {
+	log.Ctx(ctx).InfoContext(
+		ctx,
+		"updating franklin tou mode",
+		slog.Float64("soc", newReserveSOC),
+		slog.Int("workMode", int(targetMode.WorkMode)),
+	)
+	params := url.Values{}
+	params.Set("gatewayId", f.gatewayID)
+	params.Set("currendId", fmt.Sprint(targetMode.ID))
+	params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
+	params.Set("electricityType", fmt.Sprint(targetMode.ElectricityType))
+	params.Set("oldIndex", fmt.Sprint(targetMode.OldIndex))
+	params.Set("stromEn", fmt.Sprint(stormHedgeEnabled))
+	// round to the nearest integer to minimize the chance of the battery charging
+	// or discharging when we don't want it to
+	params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
+
+	req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", params)
+	if err != nil {
+		return err
+	}
+	if err := f.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
+		return err
+	}
+	return nil
 }
 
 // GetEnergyHistory retrieves energy history for the specified period.

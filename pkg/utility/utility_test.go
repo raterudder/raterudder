@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +54,108 @@ func TestListUtilities(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("TariffAuditRegistryCoversAllUtilities", func(t *testing.T) {
+		raw, err := os.ReadFile("TARIFF_AUDIT.md")
+		require.NoError(t, err, "expected pkg/utility/TARIFF_AUDIT.md to exist")
+
+		const expectedHeader = "| Provider ID | Utility Name | Source File | Rate Plans | Revision Cadence | Repo Effective Horizon | Next Audit Due | Last Verified | Official Source URL(s) | Notes |"
+		lines := strings.Split(string(raw), "\n")
+
+		headerIdx := -1
+		for i, line := range lines {
+			if strings.TrimSpace(line) == expectedHeader {
+				headerIdx = i
+				break
+			}
+		}
+		require.NotEqual(t, -1, headerIdx, "TARIFF_AUDIT.md must contain exact registry table header %q", expectedHeader)
+		require.Less(t, headerIdx+2, len(lines), "TARIFF_AUDIT.md registry table must have separator and data rows")
+
+		documentedRows := make(map[string][]string)
+		for _, line := range lines[headerIdx+2:] {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "|") {
+				break
+			}
+			parts := strings.Split(strings.Trim(trimmed, "|"), "|")
+			require.Len(t, parts, 10, "TARIFF_AUDIT.md table row must have 10 columns: %s", trimmed)
+
+			providerID := strings.Trim(strings.TrimSpace(parts[0]), "`")
+			require.NotEmpty(t, providerID, "Provider ID must not be empty in row: %s", trimmed)
+			assert.NotContains(t, documentedRows, providerID, "duplicate Provider ID %q in TARIFF_AUDIT.md", providerID)
+			documentedRows[providerID] = parts
+
+			for colIdx, colName := range []string{
+				"Provider ID",
+				"Utility Name",
+				"Source File",
+				"Rate Plans",
+				"Revision Cadence",
+				"Repo Effective Horizon",
+				"Next Audit Due",
+				"Last Verified",
+				"Official Source URL(s)",
+				"Notes",
+			} {
+				assert.NotEmpty(t, strings.TrimSpace(parts[colIdx]), "column %q must not be empty for provider %q", colName, providerID)
+			}
+
+			for _, srcFile := range strings.Split(parts[2], ",") {
+				cleanFile := strings.Trim(strings.TrimSpace(srcFile), "`")
+				assert.Equal(t, filepath.Base(cleanFile), cleanFile, "Source File %q for provider %q must be a base filename in pkg/utility", cleanFile, providerID)
+				assert.True(t, strings.HasSuffix(cleanFile, ".go") && !strings.HasSuffix(cleanFile, "_test.go"), "Source File %q for provider %q must be a non-test .go file", cleanFile, providerID)
+				info, err := os.Stat(cleanFile)
+				if assert.NoError(t, err, "Source File %q for provider %q must exist in pkg/utility", cleanFile, providerID) {
+					assert.False(t, info.IsDir(), "Source File %q for provider %q must be a regular file, not a directory", cleanFile, providerID)
+				}
+			}
+
+			nextAuditDue := strings.Trim(strings.TrimSpace(parts[6]), "`")
+			_, err := time.Parse("2006-01-02", nextAuditDue)
+			assert.NoError(t, err, "Next Audit Due for %q must be YYYY-MM-DD, got %q", providerID, nextAuditDue)
+
+			lastVerified := strings.Trim(strings.TrimSpace(parts[7]), "`")
+			if lastVerified != "unverified" {
+				_, err := time.Parse("2006-01-02", lastVerified)
+				assert.NoError(t, err, "Last Verified for %q must be 'unverified' or YYYY-MM-DD, got %q", providerID, lastVerified)
+			}
+
+			assert.Contains(t, parts[8], "https://", "Official Source URL(s) for %q must contain an https:// URL", providerID)
+		}
+
+		visibleUtilities := make(map[string]bool)
+		for _, u := range utilities {
+			if !u.Hidden && u.ID != "tou_example" {
+				visibleUtilities[u.ID] = true
+				row, ok := documentedRows[u.ID]
+				if assert.True(t, ok, "visible utility %q (%s) must have a row in pkg/utility/TARIFF_AUDIT.md", u.ID, u.Name) {
+					documentedPlans := make(map[string]bool)
+					for _, rawPlan := range strings.Split(row[3], ",") {
+						planID := strings.Trim(strings.TrimSpace(rawPlan), "`")
+						if assert.NotEmpty(t, planID, "Rate Plans column for %q in TARIFF_AUDIT.md must not contain an empty plan ID", u.ID) {
+							assert.False(t, documentedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md has duplicate plan ID %q", u.ID, planID)
+							documentedPlans[planID] = true
+						}
+					}
+
+					expectedPlans := make(map[string]bool, len(u.Rates))
+					for _, r := range u.Rates {
+						expectedPlans[r.ID] = true
+						assert.True(t, documentedPlans[r.ID], "Rate Plans column for %q in TARIFF_AUDIT.md must list rate %q", u.ID, r.ID)
+					}
+
+					for planID := range documentedPlans {
+						assert.True(t, expectedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md lists unknown rate %q", u.ID, planID)
+					}
+				}
+			}
+		}
+
+		for docID := range documentedRows {
+			assert.True(t, visibleUtilities[docID], "TARIFF_AUDIT.md documents unknown or hidden provider ID %q", docID)
+		}
+	})
 }
 
 type mockUtility struct {
@@ -232,6 +337,117 @@ func TestMap(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, u)
 		assert.ErrorContains(t, err, "unknown utility rate: unknown")
+	})
+
+	t.Run("Site with tesla_dynamic updates ERCOT load zone on TDU location change", func(t *testing.T) {
+		m := Configured(nil)
+		fixedNow := time.Date(2026, time.September, 15, 10, 0, 0, 0, ctLocation)
+		dateKey := fixedNow.Format("20060102")
+		m.baseERCOT = &baseERCOT{
+			nowFunc: func() time.Time { return fixedNow },
+			cachedPrices: map[string][]types.Price{
+				"LZ_HOUSTON_" + dateKey: {
+					{
+						Provider:                      "ercot",
+						TSStart:                       fixedNow,
+						TSEnd:                         fixedNow.Add(time.Hour),
+						DollarsPerKWH:                 0.020,
+						SeparateGenerationCredit:      true,
+						GenerationCreditDollarsPerKWH: 0.020,
+					},
+				},
+				"LZ_NORTH_" + dateKey: {
+					{
+						Provider:                      "ercot",
+						TSStart:                       fixedNow,
+						TSEnd:                         fixedNow.Add(time.Hour),
+						DollarsPerKWH:                 0.080,
+						SeparateGenerationCredit:      true,
+						GenerationCreditDollarsPerKWH: 0.080,
+					},
+				},
+			},
+		}
+
+		// 1. Start on CenterPoint (LZ_HOUSTON)
+		u1, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "centerpoint",
+			},
+		})
+		require.NoError(t, err)
+		sf1, ok := u1.(*SiteFees)
+		require.True(t, ok)
+		z1, ok := sf1.base.(*baseERCOTZone)
+		require.True(t, ok)
+		assert.Equal(t, "LZ_HOUSTON", z1.loadZone)
+
+		p1, err := u1.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.020*0.90, p1.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// 2. Change TDU location to Oncor (LZ_NORTH) -> must rebuild with LZ_NORTH
+		u2, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+		})
+		require.NoError(t, err)
+		assert.NotSame(t, u1, u2)
+		sf2, ok := u2.(*SiteFees)
+		require.True(t, ok)
+		z2, ok := sf2.base.(*baseERCOTZone)
+		require.True(t, ok)
+		assert.Equal(t, "LZ_NORTH", z2.loadZone)
+
+		p2, err := u2.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.080*0.90, p2.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// 3. Change TDU location to TNMP (also LZ_NORTH) -> reuses cached provider and updates delivery fees
+		u3, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "tnmp",
+			},
+		})
+		require.NoError(t, err)
+		assert.Same(t, u2, u3)
+		p3, err := u3.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, texasTDUs["tnmp"].DeliveryDollarsPerKWH, p3.GridUseDollarsPerKWH, 1e-6)
+
+		// 4. Invalid TDU location returns error instead of reusing old zone
+		u4, err := m.Site(ctx, "site-tx", types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "invalid_tdu",
+			},
+		})
+		require.Error(t, err)
+		assert.Nil(t, u4)
+		assert.ErrorContains(t, err, "unknown TDU delivery utility")
+	})
+
+	t.Run("Site with eversource_ct_vpp returns VPP periods", func(t *testing.T) {
+		m := Configured(nil)
+		u, err := m.Site(ctx, "site-ct", types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+			UtilityRateOptions: types.UtilityRateOptions{
+				VPPProgram: "ess-passive",
+			},
+		})
+		require.NoError(t, err)
+		vppInfo, err := u.GetVPPInfo(ctx)
+		require.NoError(t, err)
+		assert.Len(t, vppInfo.Mandatory, 6)
 	})
 }
 

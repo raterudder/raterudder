@@ -1,5 +1,18 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): comed (ComEd)
+// - Official Sources:
+//   - https://www.comed.com/cdn/assets/v3/assets/blt3ebb3fed6084be2a/bltd0031ae7271bf238/6ae0f7cb8ea45760cd279082/2026_PEA_record_for_rate_book.pdf?branch=prod_alias
+//   - https://www.comed.com/cdn/assets/v3/assets/blt3ebb3fed6084be2a/blt51c693930a51fa85/6afcb1a99d8709634707cfff/2026_Index_of_Filings.pdf?branch=prod_alias
+//   - https://icc.illinois.gov/emdb/ucdb/entity/U295/filing-list
+//   - Ill. C. C. No. 10: Rate BES (215th Rev. Info Sheet No. 3), Rate BESH (215th Rev. Info Sheet No. 7), Rate BEST (6th Rev. Info Sheet No. 71), Rider PEA/HPEA (Nov 2026), Rider POGNM
+// - Effective Window: 2026-01-01 through 2027-06-01 (Nov 2026 PEA/HPEA/TPEA factors effective 2026-11-01 with trailing fallback through 2027-06-01)
+// - Revision Cadence: Monthly (PEA, HPEA, TPEA filed ~20th of prior month); Semi-Annual/Annual (PEC, PSC, MPCC, DFC on June 1 / Oct 1 / Jan 1)
+// - Next Audit Due: 2026-11-25 (December 2026 Rider PEA, HPEA, and TPEA Electric Rate Memo filing on ICC Entity U295)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Volumetric delivery (DFC & ADJ) and supply charges modeled by residential rate class; fixed monthly Customer Charge and Standard Metering Service Charge excluded; BES/BEST/BESH supply components follow Rider POGNM net metering credit rules.
+
 import (
 	"context"
 	"encoding/json"
@@ -1695,16 +1708,27 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Oct 2026)",
 		},
-		// fallback
+		// November 2026: 1.193 ¢/kWh (Rate BESH 215th Rev. Info Sheet No. 7, filed Oct 19, 2026)
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  -2.296 / 100,
+			DollarsPerKWH:  1.193 / 100,
 			GridAdditional: false,
-			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Oct 2026)",
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Nov 2026)",
+		},
+		// fallback through May 2027 supply year boundary until Dec 2026+ monthly HPEA memos are filed
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  1.193 / 100,
+			GridAdditional: false,
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Nov 2026)",
 		},
 	}
 
@@ -1909,16 +1933,27 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 			GridAdditional: false,
 			Description:    "Purchased Electricity Adjustment (PEA) (Oct 2026)",
 		},
-		// fallback
+		// November 2026: 3.758 ¢/kWh (Rate BES 215th Rev. Info Sheet No. 3, filed Oct 19, 2026)
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  -1.551 / 100,
+			DollarsPerKWH:  3.758 / 100,
 			GridAdditional: false,
-			Description:    "Purchased Electricity Adjustment (PEA) (Oct 2026)",
+			Description:    "Purchased Electricity Adjustment (PEA) (Nov 2026)",
+		},
+		// fallback through May 2027 supply year boundary until Dec 2026+ monthly PEA memos are filed
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  3.758 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Nov 2026)",
 		},
 	}
 
@@ -1977,16 +2012,27 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			GridAdditional: false,
 			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Oct 2026)",
 		},
-		// fallback
+		// November 2026: 0.460 ¢/kWh (Rate BEST 6th Rev. Info Sheet No. 71, filed Oct 19, 2026)
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.460 / 100,
+			GridAdditional: false,
+			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Nov 2026)",
+		},
+		// fallback through May 2027 supply year boundary until Dec 2026+ monthly TPEA memos are filed
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.110 / 100,
+			DollarsPerKWH:  0.460 / 100,
 			GridAdditional: false,
-			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Oct 2026)",
+			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Nov 2026)",
 		},
 
 		// --- BESTECs Components (Supply, GridAdditional: false) ---

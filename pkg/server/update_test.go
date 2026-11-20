@@ -151,7 +151,6 @@ func TestHandleUpdate(t *testing.T) {
 				oidcVerifiers: map[string]tokenVerifier{
 					"google": provider.Verifier(&oidc.Config{ClientID: audience}).Verify,
 				},
-				singleSite: true,
 			}
 		}
 
@@ -255,10 +254,9 @@ func TestHandleUpdate(t *testing.T) {
 			// so we just test with a bad token or missing header (already tested)
 			// But for completeness, we can create a server with empty verifiers
 			srv := &Server{
-				storage:    mockS,
-				utilities:  utility.NewMap(mockS),
-				ess:        ess.NewMap(),
-				singleSite: true,
+				storage:   mockS,
+				utilities: utility.NewMap(mockS),
+				ess:       ess.NewMap(),
 			}
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			w := httptest.NewRecorder()

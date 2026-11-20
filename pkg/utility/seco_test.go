@@ -100,4 +100,30 @@ func TestSECOUtility(t *testing.T) {
 			assert.InDelta(t, 0.0970, p.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("2027 Forward Continuity", func(t *testing.T) {
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "seco",
+			UtilityRate:     "seco_rs",
+		}))
+		p, err := u.priceForTime(time.Date(2027, time.February, 10, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1194, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.095, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "seco",
+			UtilityRate:     "seco_rs_tou",
+		}))
+		// Winter 2027 weekday peak: Tue, Feb 9, 2027 at 8:00 AM ET -> $0.2370
+		p, err = u.priceForTime(time.Date(2027, time.February, 9, 8, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.2370, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.095, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+	})
 }
