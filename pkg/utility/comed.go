@@ -106,9 +106,18 @@ type baseComEdHourly struct {
 	lastFutureFetch     time.Time
 	cachedFuture        []types.Price
 	historicalPrices    map[int64]types.Price      // Cache for historical prices (key: unix timestamp of start)
+	unconfirmedFetch    map[int64]time.Time        // Last API fetch time for unconfirmed past hours awaiting samples (key: unix timestamp of start)
 	recentPriceStates   map[int64]types.PriceState // Recent hourly PriceStates (key: unix timestamp of start) for short-horizon future error adjustment
 	lastRecentFetchTime time.Time
+	nowFunc             func() time.Time
 	sfGroup             singleflight.Group
+}
+
+func (c *baseComEdHourly) now() time.Time {
+	if c.nowFunc != nil {
+		return c.nowFunc()
+	}
+	return time.Now()
 }
 
 // configuredComEd sets up flags for ComEd and returns the instance.
@@ -117,6 +126,7 @@ func configuredComEdHourly(db storage.Database) *baseComEdHourly {
 	c := &baseComEdHourly{
 		client:            common.HTTPClient(10 * time.Second),
 		historicalPrices:  make(map[int64]types.Price),
+		unconfirmedFetch:  make(map[int64]time.Time),
 		recentPriceStates: make(map[int64]types.PriceState),
 		db:                db,
 	}
@@ -266,7 +276,7 @@ func (c *baseComEdHourly) recordRecentPriceStates(states []types.PriceState) {
 	if c.recentPriceStates == nil {
 		c.recentPriceStates = make(map[int64]types.PriceState)
 	}
-	now := time.Now().In(ctLocation)
+	now := c.now().In(ctLocation)
 	nowHourUnix := now.Truncate(time.Hour).Unix()
 	prevHourUnix := now.Truncate(time.Hour).Add(-time.Hour).Unix()
 	cutoff := now.Add(-12 * time.Hour).Unix()
@@ -482,50 +492,67 @@ type comedPriceEntry struct {
 	Price     string `json:"price"`
 }
 
+// cachedConfirmedPrefix returns the contiguous prefix of confirmed prices starting at start
+// up to end, advancing past any unconfirmed past hour that is within its 2-minute delayed-sample
+// fetch cooldown. It returns the cached confirmed prices and the first hour that still requires
+// a database or API lookup (equal to end when no lookup is needed).
+func (c *baseComEdHourly) cachedConfirmedPrefix(start, end, nowCT time.Time) ([]types.Price, time.Time) {
+	var cached []types.Price
+	curr := start
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for curr.Before(end) {
+		if p, ok := c.historicalPrices[curr.Unix()]; ok {
+			cached = append(cached, p)
+			curr = curr.Add(time.Hour)
+			continue
+		}
+		if fetchedAt, ok := c.unconfirmedFetch[curr.Unix()]; ok {
+			if curr.Add(time.Hour).After(nowCT.Add(-45*time.Minute)) && nowCT.Sub(fetchedAt) < 2*time.Minute {
+				curr = curr.Add(time.Hour)
+				continue
+			}
+			delete(c.unconfirmedFetch, curr.Unix())
+		}
+		break
+	}
+	return cached, curr
+}
+
 // GetConfirmedPrices returns confirmed prices for a specific time range.
 // This requests 5-minute feed data and averages it into hourly buckets.
 func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	ctx = log.With(ctx, log.Ctx(ctx).With(slog.Time("start", start), slog.Time("end", end)))
 
-	// Check if all needed hours are in cache
-	var cached []types.Price
-	curr := start.Truncate(time.Hour)
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		// iterate hourly
-		for curr.Before(end) {
-			// key is unixtimestamp of start of hour
-			if p, ok := c.historicalPrices[curr.Unix()]; ok {
-				cached = append(cached, p)
-			} else {
-				break
-			}
-			curr = curr.Add(time.Hour)
-		}
-	}()
+	nowCT := c.now().In(ctLocation)
+	maxEnd := nowCT.Add(-5 * time.Minute).Truncate(time.Hour)
 
+	start = start.Truncate(time.Hour)
+	if end.After(maxEnd) {
+		end = maxEnd.In(start.Location())
+	} else {
+		end = end.In(start.Location()).Truncate(time.Hour)
+	}
+
+	if !start.Before(end) {
+		return []types.Price{}, nil
+	}
+
+	// Check if all needed hours are in cache (or within 2-minute delayed-sample cooldown)
+	cached, curr := c.cachedConfirmedPrefix(start, end, nowCT)
 	if !curr.Before(end) {
 		log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in cache")
+		if cached == nil {
+			return []types.Price{}, nil
+		}
 		return cached, nil
 	}
 
-	key := fmt.Sprintf("confirmed-%s-%s", start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
+	key := fmt.Sprintf("confirmed-%s-%s", curr.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
 	res, err, _ := c.sfGroup.Do(key, func() (interface{}, error) {
+		nowInner := c.now().In(ctLocation)
 		// Recheck the cache inside the singleflight block
-		var cachedInner []types.Price
-		currInner := start.Truncate(time.Hour)
-		c.mu.Lock()
-		for currInner.Before(end) {
-			if p, ok := c.historicalPrices[currInner.Unix()]; ok {
-				cachedInner = append(cachedInner, p)
-			} else {
-				break
-			}
-			currInner = currInner.Add(time.Hour)
-		}
-		c.mu.Unlock()
-
+		cachedInner, currInner := c.cachedConfirmedPrefix(curr, end, nowInner)
 		if !currInner.Before(end) {
 			log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in cache (singleflight)")
 			return cachedInner, nil
@@ -545,26 +572,86 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 			} else if len(dbPrices) > 0 {
 				c.recordRecentPriceStates(dbPrices)
 				origEstByHour = extractOrigEstPrices(dbPrices)
-				// verify if all confirmed
-				allConfirmed := true
+
+				dbByHour := make(map[int64]types.PriceState, len(dbPrices))
 				for _, p := range dbPrices {
-					if !p.Confirmed {
-						allConfirmed = false
-						break
-					}
+					dbByHour[p.TSStart.Unix()] = p
 				}
 
-				if allConfirmed {
-					log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in database")
-					prices := make([]types.Price, len(cachedInner), len(cachedInner)+len(dbPrices))
-					copy(prices, cachedInner)
+				var dbConfirmedPrefix []types.Price
+				for currInner.Before(end) {
+					p, ok := dbByHour[currInner.Unix()]
+					if !ok || !p.Confirmed {
+						break
+					}
+					dbConfirmedPrefix = append(dbConfirmedPrefix, p.Price)
+					cachedInner = append(cachedInner, p.Price)
+					currInner = currInner.Add(time.Hour)
+				}
+
+				if len(dbConfirmedPrefix) > 0 {
 					c.mu.Lock()
-					for _, p := range dbPrices {
-						prices = append(prices, p.Price)
-						c.historicalPrices[p.TSStart.Unix()] = p.Price
+					if c.historicalPrices == nil {
+						c.historicalPrices = make(map[int64]types.Price)
+					}
+					for _, p := range dbConfirmedPrefix {
+						c.historicalPrices[p.TSStart.Unix()] = p
+						delete(c.unconfirmedFetch, p.TSStart.Unix())
 					}
 					c.mu.Unlock()
-					return prices, nil
+				}
+
+				if !currInner.Before(end) {
+					log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in database")
+					return cachedInner, nil
+				}
+
+				// Check whether all remaining hours in [currInner, end) are confirmed or
+				// unconfirmed past hours awaiting delayed 5-minute samples updated within 2 minutes.
+				allCovered := true
+				var trailingConfirmed []types.Price
+				pendingCooldown := make(map[int64]time.Time)
+				for h := currInner; h.Before(end); h = h.Add(time.Hour) {
+					p, ok := dbByHour[h.Unix()]
+					if !ok {
+						allCovered = false
+						break
+					}
+					if p.Confirmed {
+						trailingConfirmed = append(trailingConfirmed, p.Price)
+						continue
+					}
+					if len(p.SubDollarsPerKWH) > 0 &&
+						len(p.SubDollarsPerKWH) < 12 &&
+						h.Add(time.Hour).After(nowInner.Add(-45*time.Minute)) &&
+						!p.TSUpdated.IsZero() &&
+						nowInner.Sub(p.TSUpdated) < 2*time.Minute {
+						pendingCooldown[h.Unix()] = p.TSUpdated
+						continue
+					}
+					allCovered = false
+					break
+				}
+
+				if allCovered {
+					log.Ctx(ctx).DebugContext(ctx, "confirmed prices satisfied from database with delayed-sample cooldown")
+					c.mu.Lock()
+					if c.historicalPrices == nil {
+						c.historicalPrices = make(map[int64]types.Price)
+					}
+					if c.unconfirmedFetch == nil {
+						c.unconfirmedFetch = make(map[int64]time.Time)
+					}
+					for _, p := range trailingConfirmed {
+						c.historicalPrices[p.TSStart.Unix()] = p
+						delete(c.unconfirmedFetch, p.TSStart.Unix())
+						cachedInner = append(cachedInner, p)
+					}
+					for ts, updatedAt := range pendingCooldown {
+						c.unconfirmedFetch[ts] = updatedAt
+					}
+					c.mu.Unlock()
+					return cachedInner, nil
 				}
 			}
 		}
@@ -575,19 +662,26 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 			return nil, err
 		}
 
-		now := time.Now().In(ctLocation)
+		now := c.now().In(ctLocation)
 		confirmedPrices := make([]types.Price, len(cachedInner), len(cachedInner)+len(prices))
 		copy(confirmedPrices, cachedInner)
+		var newlyConfirmed []types.Price
+		confirmedSet := make(map[int64]bool, len(prices))
 		var earliest time.Time
 		var latest time.Time
 		toUpsert := make([]types.PriceState, 0, len(prices))
 		for _, p := range prices {
+			if p.TSStart.Before(currInner) || !p.TSStart.Before(end) {
+				continue
+			}
 			confirmed := p.isConfirmed(now)
 			origEst := origEstByHour[p.TSStart.Unix()]
 			priceToStore := p.Price
 
 			if confirmed {
 				confirmedPrices = append(confirmedPrices, p.Price)
+				newlyConfirmed = append(newlyConfirmed, p.Price)
+				confirmedSet[p.TSStart.Unix()] = true
 
 				if earliest.IsZero() || p.TSStart.Before(earliest) {
 					earliest = p.TSStart
@@ -652,14 +746,26 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 			slog.Int("count", len(confirmedPrices)),
 		)
 
-		// Update cache with confirmed prices
+		// Update cache with confirmed prices and 2-minute cooldown for unconfirmed recent past hours
 		c.mu.Lock()
-		for _, p := range confirmedPrices {
+		if c.historicalPrices == nil {
+			c.historicalPrices = make(map[int64]types.Price)
+		}
+		if c.unconfirmedFetch == nil {
+			c.unconfirmedFetch = make(map[int64]time.Time)
+		}
+		for _, p := range newlyConfirmed {
 			c.historicalPrices[p.TSStart.Unix()] = p
+			delete(c.unconfirmedFetch, p.TSStart.Unix())
+		}
+		for h := currInner; h.Before(end); h = h.Add(time.Hour) {
+			if !confirmedSet[h.Unix()] && h.Add(time.Hour).After(now.Add(-45*time.Minute)) {
+				c.unconfirmedFetch[h.Unix()] = now
+			}
 		}
 		c.mu.Unlock()
 
-		if c.db != nil {
+		if c.db != nil && len(toUpsert) > 0 {
 			if err := c.db.UpsertUtilityPrices(ctx, "comed", toUpsert, 0); err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to upsert comed prices to database", slog.Any("error", err))
 			}
@@ -670,10 +776,11 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	if err != nil {
 		return nil, err
 	}
-	prices := res.([]types.Price)
-	copied := make([]types.Price, len(prices))
-	copy(copied, prices)
-	return copied, nil
+	tail := res.([]types.Price)
+	out := make([]types.Price, 0, len(cached)+len(tail))
+	out = append(out, cached...)
+	out = append(out, tail...)
+	return out, nil
 }
 
 type priceWithSamples struct {
