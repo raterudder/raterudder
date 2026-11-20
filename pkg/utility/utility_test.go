@@ -126,8 +126,23 @@ func TestListUtilities(t *testing.T) {
 				visibleUtilities[u.ID] = true
 				row, ok := documentedRows[u.ID]
 				if assert.True(t, ok, "visible utility %q (%s) must have a row in pkg/utility/TARIFF_AUDIT.md", u.ID, u.Name) {
+					documentedPlans := make(map[string]bool)
+					for _, rawPlan := range strings.Split(row[3], ",") {
+						planID := strings.Trim(strings.TrimSpace(rawPlan), "`")
+						if assert.NotEmpty(t, planID, "Rate Plans column for %q in TARIFF_AUDIT.md must not contain an empty plan ID", u.ID) {
+							assert.False(t, documentedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md has duplicate plan ID %q", u.ID, planID)
+							documentedPlans[planID] = true
+						}
+					}
+
+					expectedPlans := make(map[string]bool, len(u.Rates))
 					for _, r := range u.Rates {
-						assert.Contains(t, row[3], r.ID, "Rate Plans column for %q in TARIFF_AUDIT.md must list rate %q", u.ID, r.ID)
+						expectedPlans[r.ID] = true
+						assert.True(t, documentedPlans[r.ID], "Rate Plans column for %q in TARIFF_AUDIT.md must list rate %q", u.ID, r.ID)
+					}
+
+					for planID := range documentedPlans {
+						assert.True(t, expectedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md lists unknown rate %q", u.ID, planID)
 					}
 				}
 			}
