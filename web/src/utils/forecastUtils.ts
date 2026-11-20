@@ -529,3 +529,80 @@ export function buildPlanSummaryBeats(
     });
 }
 
+interface TickTimestampIndex {
+    valueToIndex: Map<unknown, number>;
+    epochMs: number[];
+    isSorted: boolean;
+}
+
+const tickTimestampIndexCache = new WeakMap<readonly any[], TickTimestampIndex>();
+
+function getTickTimestampIndex(tooltipTicks: readonly any[]): TickTimestampIndex {
+    let cached = tickTimestampIndexCache.get(tooltipTicks);
+    if (!cached) {
+        const valueToIndex = new Map<unknown, number>();
+        const len = tooltipTicks.length;
+        const epochMs = new Array<number>(len);
+        let isSorted = true;
+        let prevMs = -Infinity;
+
+        for (let i = 0; i < len; i++) {
+            const val = tooltipTicks[i]?.value;
+            if ((typeof val !== 'number' || !Number.isNaN(val)) && !valueToIndex.has(val)) {
+                valueToIndex.set(val, i);
+            }
+            const ms = new Date(String(val)).getTime();
+            epochMs[i] = ms;
+            if (isNaN(ms) || ms < prevMs) {
+                isSorted = false;
+            } else {
+                prevMs = ms;
+            }
+        }
+
+        cached = { valueToIndex, epochMs, isSorted };
+        tickTimestampIndexCache.set(tooltipTicks, cached);
+    }
+    return cached;
+}
+
+export function syncByTimestamp(tooltipTicks: readonly any[], syncState: any): number {
+    if (!tooltipTicks || tooltipTicks.length === 0) return -1;
+    const activeLabel = syncState?.activeLabel;
+    if (activeLabel !== undefined && activeLabel !== null) {
+        const index = getTickTimestampIndex(tooltipTicks);
+        if (typeof activeLabel !== 'number' || !Number.isNaN(activeLabel)) {
+            const exactIdx = index.valueToIndex.get(activeLabel);
+            if (exactIdx !== undefined) return exactIdx;
+        }
+        const targetMs = new Date(String(activeLabel)).getTime();
+        if (!isNaN(targetMs)) {
+            const { epochMs, isSorted } = index;
+            if (isSorted) {
+                let lo = 0;
+                let hi = epochMs.length - 1;
+                let bestIdx = 0;
+                while (lo <= hi) {
+                    const mid = (lo + hi) >>> 1;
+                    if (epochMs[mid] <= targetMs) {
+                        bestIdx = mid;
+                        lo = mid + 1;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                return bestIdx;
+            }
+            let bestIdx = 0;
+            for (let i = 0; i < epochMs.length; i++) {
+                const tickMs = epochMs[i];
+                if (!isNaN(tickMs) && tickMs <= targetMs) {
+                    bestIdx = i;
+                }
+            }
+            return bestIdx;
+        }
+    }
+    return syncState?.activeTooltipIndex ?? -1;
+}
+

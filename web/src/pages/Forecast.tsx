@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { fetchModeling } from '../api';
-import type { ForecastResponse, Settings, PlanPeriod } from '../api';
+import type { ForecastResponse, Settings, PlanPeriod, PriceHistoryRes } from '../api';
 import { Button } from '@base-ui/react/button';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
@@ -38,6 +38,7 @@ import {
     buildPlanPriceSeries,
     computePlanSummaryStats,
     buildPlanSummaryBeats,
+    syncByTimestamp,
     type PlanSummaryStats,
 } from '../utils/forecastUtils';
 import { formatTime, getCurrencySymbol, getHourInTimeZone, type DaySummaryBeat } from '../utils/dashboardUtils';
@@ -113,39 +114,42 @@ function formatHour(ts: string, referenceTs?: string, timeZone?: string): string
     return formatted.replace(':00 ', ' ');
 }
 
-function syncByTimestamp(tooltipTicks: readonly any[], syncState: any): number {
-    if (!tooltipTicks || tooltipTicks.length === 0) return -1;
-    const activeLabel = syncState?.activeLabel;
-    if (activeLabel !== undefined && activeLabel !== null) {
-        const exactIdx = tooltipTicks.findIndex((t) => t.value === activeLabel);
-        if (exactIdx !== -1) return exactIdx;
-        const targetMs = new Date(String(activeLabel)).getTime();
-        if (!isNaN(targetMs)) {
-            let bestIdx = 0;
-            for (let i = 0; i < tooltipTicks.length; i++) {
-                const tickMs = new Date(String(tooltipTicks[i].value)).getTime();
-                if (!isNaN(tickMs) && tickMs <= targetMs) {
-                    bestIdx = i;
-                }
-            }
-            return bestIdx;
-        }
-    }
-    return syncState?.activeTooltipIndex ?? -1;
-}
+const CHART_MARGIN_MOBILE = { top: 5, right: 0, left: 0, bottom: 5 };
+const CHART_MARGIN_DESKTOP = { top: 5, right: 20, left: 0, bottom: 5 };
+const AXIS_TICK_MOBILE = { fontSize: 10 };
+const AXIS_TICK_DESKTOP = { fontSize: 12 };
+const RESERVE_REFERENCE_LABEL = {
+    value: 'Reserve',
+    fill: '#ef4444',
+    fontSize: 11,
+    position: 'insideTopRight' as const,
+};
+const NOW_REFERENCE_LABEL = {
+    value: 'Now',
+    position: 'insideTopLeft' as const,
+    fill: 'var(--primary)',
+    fontSize: 11,
+};
+const TOOLTIP_CONTAINER_STYLE_BASE: React.CSSProperties = {
+    backgroundColor: 'var(--surface-container-high)',
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    boxShadow: 'var(--shadow-lg)',
+    padding: '8px 12px',
+    color: 'var(--on-surface)',
+    backdropFilter: 'blur(10px)',
+    minWidth: '140px',
+};
+const TOOLTIP_CONTAINER_STYLE_MOBILE: React.CSSProperties = {
+    ...TOOLTIP_CONTAINER_STYLE_BASE,
+    fontSize: '0.75rem',
+};
+const TOOLTIP_CONTAINER_STYLE_DESKTOP: React.CSSProperties = {
+    ...TOOLTIP_CONTAINER_STYLE_BASE,
+    fontSize: '0.85rem',
+};
 
-function ForecastChart({
-    data,
-    config,
-    isMobile,
-    showCurrentTime,
-    nowMs,
-    planPeriods,
-    planStats,
-    scheduleBeats,
-    currencySymbol = '$',
-    timeZone,
-}: {
+interface ForecastChartProps {
     data: any[];
     config: ChartConfig;
     isMobile: boolean;
@@ -156,21 +160,125 @@ function ForecastChart({
     scheduleBeats?: DaySummaryBeat[];
     currencySymbol?: string;
     timeZone?: string;
-}) {
-    const currentTimeStr = React.useMemo(() => {
+}
+
+const ForecastChart = React.memo(function ForecastChart({
+    data,
+    config,
+    isMobile,
+    showCurrentTime,
+    nowMs,
+    planPeriods,
+    planStats,
+    scheduleBeats,
+    currencySymbol = '$',
+    timeZone,
+}: ForecastChartProps) {
+    const dataTimestampsMs = useMemo(
+        () => data.map((d) => new Date(d.ts).getTime()),
+        [data]
+    );
+
+    const currentTimeStr = useMemo(() => {
         if (!showCurrentTime || data.length === 0) return undefined;
         // find closest hour in data
         let closest = data[0].ts;
         let minDiff = Infinity;
-        for (const d of data) {
-            const diff = Math.abs(new Date(d.ts).getTime() - nowMs);
+        for (let i = 0; i < data.length; i++) {
+            const diff = Math.abs(dataTimestampsMs[i] - nowMs);
             if (diff < minDiff) {
                 minDiff = diff;
-                closest = d.ts;
+                closest = data[i].ts;
             }
         }
         return closest;
-    }, [data, showCurrentTime, nowMs]);
+    }, [data, dataTimestampsMs, showCurrentTime, nowMs]);
+
+    const firstTs = data[0]?.ts;
+    const isDollarUnit = config.unit.includes('$');
+
+    const formatXAxisTick = useCallback(
+        (ts: string) => formatHour(ts, firstTs, timeZone),
+        [firstTs, timeZone]
+    );
+
+    const formatYAxisTick = useCallback(
+        (v: number) => (isDollarUnit ? `$${v.toFixed(2)}` : v.toFixed(1)),
+        [isDollarUnit]
+    );
+
+    const renderTooltipContent = useCallback(
+        ({ active, payload, label }: any) => {
+            if (!active || !payload || !payload.length) return null;
+            const pt = payload[0].payload;
+            const timeStr = formatHour(String(label || pt.ts), firstTs, timeZone);
+            const containerStyle = isMobile ? TOOLTIP_CONTAINER_STYLE_MOBILE : TOOLTIP_CONTAINER_STYLE_DESKTOP;
+
+            if (config.dataKey === 'plannedSOC') {
+                const soc = pt.plannedSOC;
+                return (
+                    <div style={containerStyle}>
+                        <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
+                            {timeStr}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Battery SOC:</span>
+                            <span style={{ fontWeight: 600 }}>{soc !== undefined ? `${Number(soc).toFixed(1)}%` : '--'}</span>
+                        </div>
+                        {pt.zone && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+                                <span style={{ color: 'var(--text-muted)' }}>Mode:</span>
+                                <span style={{ color: pt.zoneColor, fontWeight: 700 }}>{pt.zone}</span>
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+
+            return (
+                <div style={containerStyle}>
+                    <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
+                        {timeStr}
+                    </div>
+                    {payload.map((entry: any, i: number) => {
+                        let displayName = config.title;
+                        if (entry.dataKey === 'batteryReserveSOC') {
+                            displayName = 'Reserve SOC';
+                        } else if (entry.dataKey === 'predictedSolarKWH') {
+                            displayName = 'Solar';
+                        } else if (entry.dataKey === 'avgHomeLoadKWH') {
+                            displayName = 'Home Load';
+                        } else if (entry.dataKey === 'gridChargeDollarsPerKWH') {
+                            displayName = 'Import Rate';
+                        } else if (entry.dataKey === 'gridExportDollarsPerKWH' || entry.dataKey === 'solarOppDollarsPerKWH') {
+                            displayName = 'Export Rate';
+                        }
+
+                        const val = Number(entry.value ?? 0);
+                        const formattedVal = isDollarUnit
+                            ? (val < 0 ? `-$${Math.abs(val).toFixed(4)}` : `$${val.toFixed(4)}`)
+                            : `${val.toFixed(1)}${config.unit.trim()}`;
+
+                        return (
+                            <div
+                                key={i}
+                                style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    gap: '12px',
+                                    marginBottom: i < payload.length - 1 ? '4px' : 0,
+                                }}
+                            >
+                                <span style={{ color: 'var(--text-muted)' }}>{displayName}:</span>
+                                <span style={{ fontWeight: 600 }}>{formattedVal}</span>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        },
+        [firstTs, timeZone, isMobile, config.dataKey, config.title, config.unit, isDollarUnit]
+    );
 
     const activeZones = React.useMemo(() => {
         if (config.dataKey !== 'plannedSOC' || !planPeriods || planPeriods.length === 0) {
@@ -286,7 +394,7 @@ function ForecastChart({
                     data={data}
                     syncId="forecast"
                     syncMethod={syncByTimestamp}
-                    margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}
+                    margin={isMobile ? CHART_MARGIN_MOBILE : CHART_MARGIN_DESKTOP}
                 >
                     <defs>
                         <linearGradient id={config.gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -303,104 +411,21 @@ function ForecastChart({
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="ts"
-                        tickFormatter={(ts) => formatHour(ts, data[0]?.ts, timeZone)}
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
+                        tickFormatter={formatXAxisTick}
+                        tick={isMobile ? AXIS_TICK_MOBILE : AXIS_TICK_DESKTOP}
                         stroke="var(--outline-variant)"
                         axisLine={false}
                         tickLine={false}
                     />
                     <YAxis
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
+                        tick={isMobile ? AXIS_TICK_MOBILE : AXIS_TICK_DESKTOP}
                         stroke="var(--outline-variant)"
                         width={isMobile ? 35 : 50}
                         axisLine={false}
                         tickLine={false}
-                        tickFormatter={(v: number) =>
-                            config.unit.includes('$') ? `$${v.toFixed(2)}` : v.toFixed(1)
-                        }
+                        tickFormatter={formatYAxisTick}
                     />
-                    <Tooltip
-                        content={({ active, payload, label }) => {
-                            if (!active || !payload || !payload.length) return null;
-                            const pt = payload[0].payload;
-                            const timeStr = formatHour(String(label || pt.ts), data[0]?.ts, timeZone);
-
-                            const containerStyle: React.CSSProperties = {
-                                backgroundColor: 'var(--surface-container-high)',
-                                border: '1px solid var(--border)',
-                                borderRadius: '8px',
-                                boxShadow: 'var(--shadow-lg)',
-                                padding: '8px 12px',
-                                color: 'var(--on-surface)',
-                                backdropFilter: 'blur(10px)',
-                                fontSize: isMobile ? '0.75rem' : '0.85rem',
-                                minWidth: '140px',
-                            };
-
-                            if (config.dataKey === 'plannedSOC') {
-                                const soc = pt.plannedSOC;
-                                return (
-                                    <div style={containerStyle}>
-                                        <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
-                                            {timeStr}
-                                        </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
-                                            <span style={{ color: 'var(--text-muted)' }}>Battery SOC:</span>
-                                            <span style={{ fontWeight: 600 }}>{soc !== undefined ? `${Number(soc).toFixed(1)}%` : '--'}</span>
-                                        </div>
-                                        {pt.zone && (
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
-                                                <span style={{ color: 'var(--text-muted)' }}>Mode:</span>
-                                                <span style={{ color: pt.zoneColor, fontWeight: 700 }}>{pt.zone}</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            }
-
-                            return (
-                                <div style={containerStyle}>
-                                    <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
-                                        {timeStr}
-                                    </div>
-                                    {payload.map((entry: any, i: number) => {
-                                        let displayName = config.title;
-                                        if (entry.dataKey === 'batteryReserveSOC') {
-                                            displayName = 'Reserve SOC';
-                                        } else if (entry.dataKey === 'predictedSolarKWH') {
-                                            displayName = 'Solar';
-                                        } else if (entry.dataKey === 'avgHomeLoadKWH') {
-                                            displayName = 'Home Load';
-                                        } else if (entry.dataKey === 'gridChargeDollarsPerKWH') {
-                                            displayName = 'Import Rate';
-                                        } else if (entry.dataKey === 'gridExportDollarsPerKWH' || entry.dataKey === 'solarOppDollarsPerKWH') {
-                                            displayName = 'Export Rate';
-                                        }
-
-                                        const val = Number(entry.value ?? 0);
-                                        const formattedVal = config.unit.includes('$')
-                                            ? (val < 0 ? `-$${Math.abs(val).toFixed(4)}` : `$${val.toFixed(4)}`)
-                                            : `${val.toFixed(1)}${config.unit.trim()}`;
-
-                                        return (
-                                            <div
-                                                key={i}
-                                                style={{
-                                                    display: 'flex',
-                                                    justifyContent: 'space-between',
-                                                    gap: '12px',
-                                                    marginBottom: i < payload.length - 1 ? '4px' : 0,
-                                                }}
-                                            >
-                                                <span style={{ color: 'var(--text-muted)' }}>{displayName}:</span>
-                                                <span style={{ fontWeight: 600 }}>{formattedVal}</span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            );
-                        }}
-                    />
+                    <Tooltip content={renderTooltipContent} />
                     {config.dataKey === 'plannedSOC' ? (
                         <>
                             <Area
@@ -452,12 +477,7 @@ function ForecastChart({
                                 <ReferenceLine
                                     y={lastReserveVal}
                                     stroke="none"
-                                    label={{
-                                        value: 'Reserve',
-                                        fill: '#ef4444',
-                                        fontSize: 11,
-                                        position: 'insideTopRight',
-                                    }}
+                                    label={RESERVE_REFERENCE_LABEL}
                                 />
                             )}
                         </>
@@ -501,12 +521,7 @@ function ForecastChart({
                             x={currentTimeStr}
                             stroke="var(--primary)"
                             strokeDasharray="3 3"
-                            label={{
-                                value: 'Now',
-                                position: 'insideTopLeft',
-                                fill: 'var(--primary)',
-                                fontSize: 11,
-                            }}
+                            label={NOW_REFERENCE_LABEL}
                         />
                     )}
                 </AreaChart>
@@ -520,7 +535,7 @@ function ForecastChart({
             )}
         </div>
     );
-}
+});
 
 interface ForecastProps {
     siteID?: string;
@@ -676,9 +691,16 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
             const energyHist = rawModelingData.energyHistory || [];
             const priceHist = rawModelingData.priceHistory || [];
+            const priceByHourMs = new Map<number, PriceHistoryRes>();
+            for (const p of priceHist) {
+                const pTime = new Date(p.tsHourStart).getTime();
+                if (!isNaN(pTime) && !priceByHourMs.has(pTime)) {
+                    priceByHourMs.set(pTime, p);
+                }
+            }
             planData = energyHist.map((h: any) => {
                 const hTime = new Date(h.tsHourStart).getTime();
-                const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                const price = !isNaN(hTime) ? priceByHourMs.get(hTime) : undefined;
                 const exportPrice = price
                     ? (price.exportDollarsPerKWH ?? price.dollarsPerKWH ?? 0)
                     : 0;
@@ -706,12 +728,26 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         const periodZones = periods.map((p) => classifyPlanPeriod(p));
 
         // Base hourly rates for each period (used for solar and home load interpolation)
+        let isPeriodRatesSorted = true;
+        let prevEndTimeMs = -Infinity;
         const periodRates = periods.map((p) => {
             const solarRate = p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0);
             const loadRate = p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0);
+            const startTimeMs = new Date(p.tsStart).getTime();
+            const endTimeMs = new Date(p.tsEnd).getTime();
+            if (
+                isNaN(startTimeMs) ||
+                isNaN(endTimeMs) ||
+                startTimeMs >= endTimeMs ||
+                startTimeMs < prevEndTimeMs
+            ) {
+                isPeriodRatesSorted = false;
+            } else {
+                prevEndTimeMs = endTimeMs;
+            }
             return {
-                startTimeMs: new Date(p.tsStart).getTime(),
-                endTimeMs: new Date(p.tsEnd).getTime(),
+                startTimeMs,
+                endTimeMs,
                 solarRate,
                 loadRate,
             };
@@ -725,6 +761,24 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             if (targetMs >= lastRate.endTimeMs) {
                 return lastRate;
             }
+            if (isPeriodRatesSorted) {
+                let lo = 0;
+                let hi = periodRates.length - 1;
+                let idx = 0;
+                while (lo <= hi) {
+                    const mid = (lo + hi) >>> 1;
+                    if (periodRates[mid].startTimeMs <= targetMs) {
+                        idx = mid;
+                        lo = mid + 1;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                if (targetMs < periodRates[idx].endTimeMs) {
+                    return periodRates[idx];
+                }
+                return lastRate;
+            }
             for (let i = 0; i < periodRates.length; i++) {
                 if (targetMs >= periodRates[i].startTimeMs && targetMs < periodRates[i].endTimeMs) {
                     return periodRates[i];
@@ -733,9 +787,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             return lastRate;
         };
 
-        const getInterpolatedRates = (ts: string | Date) => {
-            const d = new Date(ts);
-            const tsMs = d.getTime();
+        const getInterpolatedRates = (tsMs: number) => {
             const msIntoHour = ((tsMs % 3600000) + 3600000) % 3600000;
             if (msIntoHour === 0) {
                 return getBaseRateAt(tsMs);
@@ -755,7 +807,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
 
         periods.forEach((p, idx) => {
             const z = periodZones[idx];
-            const rates = getInterpolatedRates(p.tsStart);
+            const rates = getInterpolatedRates(periodRates[idx].startTimeMs);
 
             const pt: any = {
                 ts: p.tsStart,
@@ -787,7 +839,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             planData.push(pt);
 
             if (idx === periods.length - 1) {
-                const endRates = getInterpolatedRates(p.tsEnd);
+                const endRates = getInterpolatedRates(periodRates[idx].endTimeMs);
                 const endPt: any = {
                     ts: p.tsEnd,
                     hour: getHourInTimeZone(p.tsEnd, refTs, siteTimeZone),

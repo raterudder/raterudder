@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import { fetchHistoryEnergy, fetchSettings } from '../api';
-import type { EnergyStats, Settings as SettingsType } from '../api';
+import type { EnergyStats, Settings as SettingsType, WeatherRes } from '../api';
 import DateSelector from '../components/DateSelector';
 import {
     ResponsiveContainer,
@@ -75,22 +75,69 @@ function formatHour(ts: string, referenceTs?: string, timeZone?: string): string
     return formatted.replace(':00 ', ' ');
 }
 
-function HistoryChart({
-    data,
-    config,
-    isMobile,
-    timeZone,
-}: {
+const CHART_MARGIN_MOBILE = { top: 5, right: 0, left: 0, bottom: 5 };
+const CHART_MARGIN_DESKTOP = { top: 5, right: 20, left: 0, bottom: 5 };
+const AXIS_TICK_MOBILE = { fontSize: 10 };
+const AXIS_TICK_DESKTOP = { fontSize: 12 };
+const TOOLTIP_CONTENT_STYLE: React.CSSProperties = {
+    backgroundColor: 'var(--surface-container-high)',
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    boxShadow: 'var(--shadow-lg)',
+    color: 'var(--on-surface)',
+    backdropFilter: 'blur(10px)',
+};
+const TOOLTIP_ITEM_STYLE: React.CSSProperties = { color: 'var(--on-surface)' };
+const TOOLTIP_LABEL_STYLE: React.CSSProperties = {
+    color: 'var(--text-muted)',
+    marginBottom: '4px',
+    fontWeight: 700,
+};
+
+function formatHistoryYAxisTick(v: number): string {
+    return v.toFixed(1);
+}
+
+interface HistoryChartProps {
     data: HistoryDataPoint[];
     config: ChartConfig;
     isMobile: boolean;
     timeZone?: string;
-}) {
+}
+
+const HistoryChart = React.memo(function HistoryChart({
+    data,
+    config,
+    isMobile,
+    timeZone,
+}: HistoryChartProps) {
+    const firstTs = data[0]?.tsHourStart;
+
+    const formatXAxisTick = useCallback(
+        (ts: string) => formatHour(ts, firstTs, timeZone),
+        [firstTs, timeZone]
+    );
+
+    const formatTooltipLabel = useCallback(
+        (label: any) => formatHour(String(label), firstTs, timeZone),
+        [firstTs, timeZone]
+    );
+
+    const areaDataKeys = useMemo(
+        () => config.dataKeys.filter((dk) => dk.type === 'area'),
+        [config.dataKeys]
+    );
+
+    const lineDataKeys = useMemo(
+        () => config.dataKeys.filter((dk) => dk.type === 'line'),
+        [config.dataKeys]
+    );
+
     return (
         <div className="chart-card">
             <h3>{config.title}</h3>
             <ResponsiveContainer width="100%" height={240}>
-                <AreaChart data={data} syncId="history" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
+                <AreaChart data={data} syncId="history" margin={isMobile ? CHART_MARGIN_MOBILE : CHART_MARGIN_DESKTOP}>
                     <defs>
                         {config.dataKeys.map(dk => (
                              <linearGradient key={dk.key} id={`grad-${dk.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -102,34 +149,27 @@ function HistoryChart({
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="tsHourStart"
-                        tickFormatter={(ts) => formatHour(ts, data[0]?.tsHourStart, timeZone)}
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
+                        tickFormatter={formatXAxisTick}
+                        tick={isMobile ? AXIS_TICK_MOBILE : AXIS_TICK_DESKTOP}
                         stroke="var(--outline-variant)"
                         axisLine={false}
                         tickLine={false}
                     />
                     <YAxis
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
+                        tick={isMobile ? AXIS_TICK_MOBILE : AXIS_TICK_DESKTOP}
                         stroke="var(--outline-variant)"
                         width={isMobile ? 35 : 50}
                         axisLine={false}
                         tickLine={false}
-                        tickFormatter={(v: number) => v.toFixed(1)}
+                        tickFormatter={formatHistoryYAxisTick}
                     />
                     <Tooltip
-                        labelFormatter={(label) => formatHour(String(label), data[0]?.tsHourStart, timeZone)}
-                        contentStyle={{
-                            backgroundColor: 'var(--surface-container-high)',
-                            border: '1px solid var(--border)',
-                            borderRadius: '8px',
-                            boxShadow: 'var(--shadow-lg)',
-                            color: 'var(--on-surface)',
-                            backdropFilter: 'blur(10px)',
-                        }}
-                        itemStyle={{ color: 'var(--on-surface)' }}
-                        labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}
+                        labelFormatter={formatTooltipLabel}
+                        contentStyle={TOOLTIP_CONTENT_STYLE}
+                        itemStyle={TOOLTIP_ITEM_STYLE}
+                        labelStyle={TOOLTIP_LABEL_STYLE}
                     />
-                    {config.dataKeys.filter(dk => dk.type === 'area').map(dk => (
+                    {areaDataKeys.map(dk => (
                         <Area
                             key={dk.key}
                             type="monotone"
@@ -141,7 +181,7 @@ function HistoryChart({
                             isAnimationActive={true}
                         />
                     ))}
-                    {config.dataKeys.filter(dk => dk.type === 'line').map(dk => (
+                    {lineDataKeys.map(dk => (
                         <Line
                             key={dk.key}
                             type="monotone"
@@ -157,7 +197,7 @@ function HistoryChart({
             </ResponsiveContainer>
         </div>
     );
-}
+});
 
 const History: React.FC<{ siteID?: string; settings?: SettingsType | null }> = ({ siteID, settings: settingsProp = null }) => {
     const [location, setLocation] = useLocation();
@@ -215,11 +255,18 @@ const History: React.FC<{ siteID?: string; settings?: SettingsType | null }> = (
                 loadedSiteIDRef.current = siteID;
 
                 // Merge energy and weather
-                const merged: HistoryDataPoint[] = res.energy.map(e => {
-                    const w = res.weather.find(weather =>
-                        new Date(weather.tsHourStart).getTime() === new Date(e.tsHourStart).getTime()
-                    );
-                    return {
+                const weatherByHourMs = new Map<number, WeatherRes>();
+                for (const weather of res.weather || []) {
+                    const wTime = new Date(weather.tsHourStart).getTime();
+                    if (!isNaN(wTime) && !weatherByHourMs.has(wTime)) {
+                        weatherByHourMs.set(wTime, weather);
+                    }
+                }
+
+                const mergedWithTime = (res.energy || []).map((e) => {
+                    const eTime = new Date(e.tsHourStart).getTime();
+                    const w = !isNaN(eTime) ? weatherByHourMs.get(eTime) : undefined;
+                    const point: HistoryDataPoint = {
                         ...e,
                         irradiance: w?.irradiance,
                         improvedSolarGeneration: w?.improvedSolarGeneration,
@@ -228,9 +275,11 @@ const History: React.FC<{ siteID?: string; settings?: SettingsType | null }> = (
                         gridImportKWH: Math.floor((e.gridImportKWH || 0) * 10) / 10,
                         gridExportKWH: Math.floor((e.gridExportKWH || 0) * 10) / 10,
                     };
+                    return { point, timeMs: eTime };
                 });
 
-                setData(merged.sort((a, b) => new Date(a.tsHourStart).getTime() - new Date(b.tsHourStart).getTime()));
+                mergedWithTime.sort((a, b) => a.timeMs - b.timeMs);
+                setData(mergedWithTime.map((entry) => entry.point));
             } catch (err) {
                 if (!isCancelled) {
                     setError(err instanceof Error ? err.message : 'Failed to load history');
