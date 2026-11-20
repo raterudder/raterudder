@@ -9,7 +9,7 @@ package utility
 // - Effective Window: 2026-01-01 through 2027-12-31 (see provider-level Tariff Audit Metadata blocks below for schedule-specific details)
 // - Revision Cadence: Quarterly (LADWP Adjustment Billing Factors) / Annual (MVEA General Rules & Regulations, CenterPoint Indiana Rider EDG)
 // - Next Audit Due: 2027-01-05 (LADWP Q1 2027 Residential Adjustment Billing Factors effective Jan 1, 2027)
-// - Last Verified: 2026-11-19
+// - Last Verified: 2026-11-20
 // - Modeling Notes: Preserves all historical 2026 inline periods intact and appends verified 2027 volumetric schedules; fixed monthly/daily customer charges excluded; see individual inline provider blocks below for detailed modeling notes.
 
 import (
@@ -652,7 +652,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		// - Effective Window: 2026-01-01 through 2027-12-31 (Q4 2026 adjustment factors $0.20150/kWh carried forward into 2027 until Q1 2027 quarterly filing)
 		// - Revision Cadence: Quarterly (Adjustment Billing Factors updated Jan 1, Apr 1, Jul 1, Oct 1)
 		// - Next Audit Due: 2027-01-05 (Check Q1 2027 LADWP Residential Adjustment Billing Factors effective Jan 1, 2027)
-		// - Last Verified: 2026-11-19
+		// - Last Verified: 2026-11-20
 		// - Modeling Notes: Schedule R-1A models Zone 1 Tier 1 base rate ($0.07142/kWh) plus quarterly Adjustment Billing Factors ($0.20150/kWh in Q4 2026 = $0.27292/kWh); Schedule R-1B models High Peak, Low Peak, and Base TOU rates plus quarterly Adjustment Billing Factors; fixed monthly/minimum charges excluded; 1:1 net energy metering.
 		{
 			ID:   "ladwp",
@@ -963,11 +963,11 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		//   - https://mvea.coop/wp-content/uploads/2026/08/16.05-RESIDENTIAL-PREPAID-RATE.pdf
 		//   - https://mvea.coop/wp-content/uploads/2026/11/16.06-RESIDENTIAL-NET-METERING-DEMAND-RATE_RM-final-v2.pdf
 		//   - MVEA General Rules and Regulations: 16.01 Residential Demand Rate, 16.02 Residential Time-of-Day Rate, 16.05 Residential Prepaid Rate, 16.06 Residential Net Metering Demand Rate, 16.08 Residential Net Metering TOD Rate (Effective October 1, 2026)
-		// - Effective Window: 2026-01-01 through until superseded (2026 baseline preserved intact; October 1, 2026 effective tariff schedules modeled across 2027)
+		// - Effective Window: 2026-01-01 through until superseded (Jan-Sep 2026 pre-revision baseline preserved; October 1, 2026 tariff revision applied from 2026-10-01 through 2027-12-31)
 		// - Revision Cadence: Annual (Cooperative Board General Rules & Regulations rate updates)
 		// - Next Audit Due: 2027-09-01 (Check MVEA General Rules & Regulations for annual October residential rate adjustments)
-		// - Last Verified: 2026-11-19
-		// - Modeling Notes: Preserves 2026 periods intact; for 2027 applies MVEA's October 1, 2026 tariff revision: 16.01/16.06 volumetric energy rate $0.11269/kWh (excludes $39.50/mo Grid Access and $2.00/kW weekday demand charge; 1:1 net metering under 16.06) and 16.02/16.05 volumetric TOD energy rates ($0.34500/kWh Mon-Fri 5-9 PM excl. 6 holidays, $0.08625/kWh Off-Peak; $0.00/kWh export credit on non-net-metered TOD/Prepaid).
+		// - Last Verified: 2026-11-20
+		// - Modeling Notes: Preserves Jan-Sep 2026 pre-revision periods intact and applies MVEA's October 1, 2026 tariff revision starting 2026-10-01 through 2027-12-31: 16.01/16.06 volumetric energy rate $0.11269/kWh (excludes $39.50/mo Grid Access and $2.00/kW weekday demand charge; 1:1 net metering under 16.06) and 16.02 (legacy ID mvea_16_05; 16.05 is now Prepaid) volumetric TOD energy rates ($0.34500/kWh Mon-Fri 5-9 PM excl. 6 calendar holidays without weekend shifting, $0.08625/kWh Off-Peak; $0.00/kWh export credit on non-net-metered TOD/Prepaid).
 		{
 			ID:   "mvea",
 			Name: "Mountain View Electric Association (MVEA)",
@@ -977,13 +977,20 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Name: "Residential Rate (16.01)",
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						// Rate 16.01: Flat Residential Rate
-						// 2026 baseline: $0.12475/kWh; 2027 (eff. Oct 1, 2026 tariff): $0.11269/kWh
+						// Jan-Sep 2026: $0.12475/kWh; Oct 1, 2026+ (eff. Oct 1, 2026 tariff): $0.11269/kWh
 						return buildPeriods(mtLocation, []touSimplifiedPeriod{
 							{
 								Year:               2026,
 								MonthStart:         time.January,
-								MonthEnd:           time.December,
+								MonthEnd:           time.September,
 								OtherDollarsPerKWH: 0.12475,
+								OtherDescription:   "MVEA 16.01 Flat Rate",
+							},
+							{
+								Year:               2026,
+								MonthStart:         time.October,
+								MonthEnd:           time.December,
+								OtherDollarsPerKWH: 0.11269,
 								OtherDescription:   "MVEA 16.01 Flat Rate",
 							},
 							{
@@ -998,26 +1005,29 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 				{
 					ID:   "mvea_16_05",
-					Name: "Residential Time of Day Rate (16.05)",
+					Name: "Residential Time of Day Rate (16.02 / 16.05)",
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						// Rate 16.05 / 16.02: Residential Time-of-Day Service Rate
-						// 2026 baseline: On-Peak Mon-Sat 5-9 PM $0.32371/kWh, Off-Peak $0.08346/kWh
-						// 2027 (eff. Oct 1, 2026 tariff): On-Peak Mon-Fri 5-9 PM (excl. 6 holidays) $0.34500/kWh, Off-Peak $0.08625/kWh
+						// Rate 16.02 (legacy ID mvea_16_05; 16.05 is now Residential Prepaid): Residential Time-of-Day Service Rate
+						// Jan-Sep 2026: On-Peak Mon-Sat 5-9 PM $0.32371/kWh, Off-Peak $0.08346/kWh
+						// Oct 1, 2026+ (eff. Oct 1, 2026 tariff): On-Peak Mon-Fri 5-9 PM (excl. 6 calendar holidays) $0.34500/kWh, Off-Peak $0.08625/kWh
 						peakHours := []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}}
-						holidays2027 := formatHolidays([]time.Time{
-							shiftPECOWeekendHoliday(newYearsDay(2027)),
-							memorialDay(2027),
-							shiftPECOWeekendHoliday(independenceDay(2027)),
-							laborDay(2027),
-							thanksgivingDay(2027),
-							shiftPECOWeekendHoliday(christmasDay(2027)),
-							shiftPECOWeekendHoliday(newYearsDay(2028)),
-						}, 2027)
+						mveaHolidays := func(year int) []string {
+							return formatHolidays([]time.Time{
+								newYearsDay(year),
+								memorialDay(year),
+								independenceDay(year),
+								laborDay(year),
+								thanksgivingDay(year),
+								christmasDay(year),
+							}, year)
+						}
+						holidays2026 := mveaHolidays(2026)
+						holidays2027 := mveaHolidays(2027)
 						return buildPeriods(mtLocation, []touSimplifiedPeriod{
 							{
 								Year:       2026,
 								MonthStart: time.January,
-								MonthEnd:   time.December,
+								MonthEnd:   time.September,
 								HoursAndDays: []touSimplifiedHoursAndDays{
 									{
 										Name:  "On-Peak",
@@ -1039,13 +1049,41 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								OtherDescription:   "MVEA 16.05 Off-Peak",
 							},
 							{
+								Year:               2026,
+								MonthStart:         time.October,
+								MonthEnd:           time.December,
+								SpecificDates:      holidays2026,
+								OtherName:          "Off-Peak",
+								OtherDollarsPerKWH: 0.08625,
+								OtherDescription:   "MVEA 16.02 Holiday Off-Peak",
+							},
+							{
+								Year:             2026,
+								MonthStart:       time.October,
+								MonthEnd:         time.December,
+								SpecificDates:    holidays2026,
+								SpecificDatesNot: true,
+								HoursAndDays: []touSimplifiedHoursAndDays{
+									{
+										Name:          "On-Peak",
+										Hours:         peakHours,
+										Weekday:       true,
+										DollarsPerKWH: 0.34500,
+										Description:   "MVEA 16.02 On-Peak",
+									},
+								},
+								OtherName:          "Off-Peak",
+								OtherDollarsPerKWH: 0.08625,
+								OtherDescription:   "MVEA 16.02 Off-Peak",
+							},
+							{
 								Year:               2027,
 								MonthStart:         time.January,
 								MonthEnd:           time.December,
 								SpecificDates:      holidays2027,
 								OtherName:          "Off-Peak",
 								OtherDollarsPerKWH: 0.08625,
-								OtherDescription:   "MVEA 16.05 Holiday Off-Peak",
+								OtherDescription:   "MVEA 16.02 Holiday Off-Peak",
 							},
 							{
 								Year:             2027,
@@ -1059,12 +1097,12 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 										Hours:         peakHours,
 										Weekday:       true,
 										DollarsPerKWH: 0.34500,
-										Description:   "MVEA 16.05 On-Peak",
+										Description:   "MVEA 16.02 On-Peak",
 									},
 								},
 								OtherName:          "Off-Peak",
 								OtherDollarsPerKWH: 0.08625,
-								OtherDescription:   "MVEA 16.05 Off-Peak",
+								OtherDescription:   "MVEA 16.02 Off-Peak",
 							},
 
 							// Export credits:
@@ -1076,7 +1114,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								MonthEnd:                           time.December,
 								OnlySeparateGenerationCredit:       true,
 								OtherGenerationCreditDollarsPerKWH: 0.00,
-								OtherDescription:                   "MVEA 16.05 Export Credit (No Export Credit allowed on TOD)",
+								OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
 							},
 							{
 								Year:                               2027,
@@ -1084,7 +1122,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								MonthEnd:                           time.December,
 								OnlySeparateGenerationCredit:       true,
 								OtherGenerationCreditDollarsPerKWH: 0.00,
-								OtherDescription:                   "MVEA 16.05 Export Credit (No Export Credit allowed on TOD)",
+								OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
 							},
 						}), nil
 					},
@@ -1147,7 +1185,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		// - Effective Window: 2026-03-05 through until superseded (modeled for 2026-01-01 through 2027-12-31)
 		// - Revision Cadence: Annual (Rider EDG Marginal DG Price updated annually ~March 1; Rate RS base charges per IURC general rate orders; Appendices A-L tracking riders excluded)
 		// - Next Audit Due: 2027-03-05 (Check IURC annual Rider EDG Marginal DG Price update and Rate RS tariff sheet)
-		// - Last Verified: 2026-11-19
+		// - Last Verified: 2026-11-20
 		// - Modeling Notes: Models Rate RS Standard Customers base volumetric sum ($0.157230 Energy + $0.041220 Base Fuel + $0.001692 Variable Production = $0.200142/kWh); excludes $11.00/mo Customer Facilities Charge and variable Appendices A-L adjustment riders; Rider EDG outflow credit modeled at $0.05561/kWh (or legacy 1:1 net metering via netMeteringScheme).
 		{
 			ID:   "centerpoint_indiana",

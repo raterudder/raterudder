@@ -7,12 +7,12 @@ package utility
 //   - https://www.peco.com/cdn/assets/v3/assets/blt1b5616c79bacadb4/bltc70b88d49d2a1491/6abbe397d463362a37c0f102/Current_Electric_tariff_eff_Oct_1_2026_(003).pdf?branch=prod_alias
 //   - https://www.peco.com/my-account/my-dashboard/rates-tariffs/electric-service/proposed-electric
 //   - https://azure-na-assets.contentstack.com/v3/assets/blt1b5616c79bacadb4/bltf0a3b82010822345/6af61350a4c7f761ffba775c/TSC_Supp_no._40_eff_December_1_2026_clean.pdf
-//   - Tariff Electric Pa. P.U.C. No. 8: Supplement No. 25 (4th Rev. Pages 37-39 GSA Class 1), Supplement No. 27 (3rd Rev. Page 46 TSC), Supplement No. 32 (14th Rev. Pages 52-53 Rate R/RH), Supplement No. 40 (4th Rev. Page 46 TSC eff. Dec 1, 2026), Rate RS-2 Net Metering (Pages 54-56)
-// - Effective Window: 2025-12-01 through 2027-12-31 (Supplement No. 40 TSC $0.00995/kWh effective 2026-12-01)
+//   - Tariff Electric Pa. P.U.C. No. 8: Docket No. P-2024-3046008 (Dec 1, 2026 - May 31, 2027 GSA Class 1 & TOU), Supplement No. 25 (4th Rev. Pages 37-39 GSA Class 1), Supplement No. 27 (3rd Rev. Page 46 TSC), Supplement No. 32 (14th Rev. Pages 52-53 Rate R/RH), Supplement No. 40 (4th Rev. Page 46 TSC eff. Dec 1, 2026), Rate RS-2 Net Metering (Pages 54-56)
+// - Effective Window: 2025-12-01 through 2027-12-31 (Dec 1, 2026 GSA Class 1 & TOU + Supplement No. 40 TSC $0.00995/kWh effective 2026-12-01 through 2027-05-31, carried through 2027-12-31 until superseded)
 // - Revision Cadence: Semi-Annual (June 1 and December 1 for GSA Procurement Class 1 and TSC; quarterly distribution/GSA reconciliations as filed)
-// - Next Audit Due: 2026-12-01 (Check December 1, 2026 semi-annual GSA Procurement Class 1 supplement for Rate R/RH and Residential TOU)
-// - Last Verified: 2026-11-19
-// - Modeling Notes: Models PECO Default Service Price to Compare (GSA Procurement Class 1 + Transmission Service Charge: Jun-Nov 2026 TSC $0.00974/kWh, Dec 2026+ TSC $0.00995/kWh per Supplement No. 40); fixed monthly customer charge ($11.75/mo) excluded; 1:1 kWh net metering under Rate RS-2.
+// - Next Audit Due: 2027-05-15 (Check June 1, 2027 semi-annual GSA Procurement Class 1 and TSC filings for Rate R/RH and Residential TOU)
+// - Last Verified: 2026-11-20
+// - Modeling Notes: Models PECO Default Service Price to Compare (GSA Procurement Class 1 + Transmission Service Charge: Jun-Nov 2026 GSA $0.10785 + TSC $0.00974 = $0.11759/kWh; Dec 2026+ GSA $0.11970 + Supp. 40 TSC $0.00995 = $0.12965/kWh; TOU Dec 2026+ Peak $0.34885, Off-Peak $0.09281, Super Off-Peak $0.06401 + $0.00995 TSC); fixed monthly customer charge ($11.75/mo) excluded; 1:1 kWh net metering under Rate RS-2.
 
 import (
 	"time"
@@ -87,21 +87,21 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					OtherDollarsPerKWH: 0.11759,
 					OtherDescription:   "PECO Rate R/RH Standard Rate (Summer/Fall)",
 				})
-				// Dec 1, 2026 - Dec 31, 2026: $0.11780 / kWh ($0.10785 GSA + $0.00995 TSC per Supplement No. 40)
+				// Dec 1, 2026 - Dec 31, 2026: $0.12965 / kWh ($0.11970 GSA per Docket No. P-2024-3046008 + $0.00995 TSC per Supplement No. 40)
 				simplified = append(simplified, touSimplifiedPeriod{
 					Year:               2026,
 					MonthStart:         time.December,
 					MonthEnd:           time.December,
-					OtherDollarsPerKWH: 0.11780,
+					OtherDollarsPerKWH: 0.12965,
 					OtherDescription:   "PECO Rate R/RH Standard Rate (Winter)",
 				})
 			} else if year >= 2027 {
-				// 2027+: $0.11780 / kWh ($0.10785 GSA + $0.00995 TSC per Supplement No. 40 until superseded)
+				// 2027+: $0.12965 / kWh ($0.11970 GSA per Docket No. P-2024-3046008 + $0.00995 TSC per Supplement No. 40 until superseded)
 				simplified = append(simplified, touSimplifiedPeriod{
 					Year:               year,
 					MonthStart:         time.January,
 					MonthEnd:           time.December,
-					OtherDollarsPerKWH: 0.11780,
+					OtherDollarsPerKWH: 0.12965,
 					OtherDescription:   "PECO Rate R/RH Standard Rate",
 				})
 			}
@@ -127,11 +127,12 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				schedules = []touRates{
 					{time.January, time.May, 0.32747, 0.08382, 0.06061, "Winter/Spring 2026"},
 					{time.June, time.November, 0.32404, 0.09336, 0.06741, "Summer/Fall 2026"},
-					{time.December, time.December, 0.32425, 0.09357, 0.06762, "Winter 2026"},
+					// Dec 1, 2026+: GSA ($0.34885 Peak, $0.09281 Off-Peak, $0.06401 Super Off-Peak) + $0.00995 TSC (Supp. No. 40)
+					{time.December, time.December, 0.35880, 0.10276, 0.07396, "Winter 2026"},
 				}
 			} else if year >= 2027 {
 				schedules = []touRates{
-					{time.January, time.December, 0.32425, 0.09357, 0.06762, "2027"},
+					{time.January, time.December, 0.35880, 0.10276, 0.07396, "2027"},
 				}
 			}
 

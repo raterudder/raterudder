@@ -390,15 +390,29 @@ func TestTOUUtility(t *testing.T) {
 			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 
-		// 3. Test 2027 schedules (eff. Oct 1, 2026 MVEA tariff revision)
-		// 16.05: Mon-Fri 5-9 PM excl. holidays $0.34500/kWh; Off-Peak/weekends/holidays $0.08625/kWh
+		// 3. Test Oct 1, 2026+ and 2027 schedules (eff. Oct 1, 2026 MVEA tariff revision)
+		// 16.02 (legacy ID mvea_16_05): Mon-Fri 5-9 PM excl. 6 calendar holidays $0.34500/kWh; Off-Peak/weekends/holidays $0.08625/kWh
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 18, 0, 0, 0, mtLocation)) // Wednesday Oct 14, 2026
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.October, 17, 18, 0, 0, 0, mtLocation)) // Saturday Oct 17, 2026 (Off-Peak eff. Oct 1, 2026)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.November, 26, 18, 0, 0, 0, mtLocation)) // Thanksgiving Day 2026 (Thursday holiday)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
+		}
 		p, err = u.priceForTime(time.Date(2027, time.February, 10, 18, 0, 0, 0, mtLocation)) // Wednesday
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
-		p, err = u.priceForTime(time.Date(2027, time.February, 13, 18, 0, 0, 0, mtLocation)) // Saturday (Off-Peak in 2027)
+		p, err = u.priceForTime(time.Date(2027, time.February, 13, 18, 0, 0, 0, mtLocation)) // Saturday (Off-Peak)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
 		}
@@ -406,11 +420,20 @@ func TestTOUUtility(t *testing.T) {
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
 		}
+		p, err = u.priceForTime(time.Date(2027, time.July, 5, 18, 0, 0, 0, mtLocation)) // Monday after Sun Jul 4 (no weekend holiday shift -> On-Peak)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+		}
 
 		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "mvea",
 			UtilityRate:     "mvea_16_01",
 		}))
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 14, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.11269, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+		}
 		p, err = u.priceForTime(time.Date(2027, time.February, 10, 14, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11269, p.DollarsPerKWH, 1e-6)
