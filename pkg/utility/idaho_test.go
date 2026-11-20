@@ -143,4 +143,43 @@ func TestIdahoUtility(t *testing.T) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 	})
+
+	t.Run("2027 Forward Continuity", func(t *testing.T) {
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "idaho",
+			UtilityRate:     "idaho_std",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "on_site",
+			},
+		}))
+
+		p, err := u.priceForTime(time.Date(2027, time.February, 10, 12, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.099332, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.029019, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "idaho",
+			UtilityRate:     "idaho_tou",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "on_site",
+			},
+		}))
+		// Summer 2027 On-Peak: Mon, Jun 14, 2027 at 8:00 PM MT -> $0.299185 import / $0.156836 export
+		p, err = u.priceForTime(time.Date(2027, time.June, 14, 20, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.299185, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.156836, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+		// Sunday July 4, 2027 shifts to Monday July 5, 2027 -> Off-Peak ($0.074797 import / $0.033920 export)
+		p, err = u.priceForTime(time.Date(2027, time.July, 5, 20, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.074797, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.033920, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+	})
 }

@@ -162,4 +162,40 @@ func TestPSEGLIUtility(t *testing.T) {
 			assert.InDelta(t, 0.0929, p.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("2027 Schedule Continuity Across All Rates", func(t *testing.T) {
+		expectedWinterPeak2027 := map[string]float64{
+			"psegli_190": 0.2222,
+			"psegli_191": 0.1862,
+			"psegli_192": 0.1972,
+			"psegli_193": 0.1173,
+			"psegli_194": 0.1885,
+			"psegli_195": 0.2440,
+		}
+		// Tue, Feb 9, 2027 at 4:00 PM ET (in-peak for 190/191/192/194/195, daytime for 193)
+		febTue2027 := time.Date(2027, time.February, 9, 16, 0, 0, 0, etLocation)
+		for rateID, wantDollarsPerKWH := range expectedWinterPeak2027 {
+			u := &genericTOU{}
+			err := u.ApplySettings(context.Background(), types.Settings{
+				UtilityProvider: "psegli",
+				UtilityRate:     rateID,
+			})
+			require.NoError(t, err, "ApplySettings failed for %s", rateID)
+			p, err := u.priceForTime(febTue2027)
+			if assert.NoError(t, err, "priceForTime failed for %s", rateID) {
+				assert.InDelta(t, wantDollarsPerKWH, p.DollarsPerKWH, 1e-6, "unexpected 2027 rate for %s", rateID)
+			}
+		}
+
+		// New Year's Day 2027 (Fri, Jan 1, 2027 at 4:00 PM ET) -> holiday Off-Peak ($0.0929) on Rate 194
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "psegli",
+			UtilityRate:     "psegli_194",
+		}))
+		p, err := u.priceForTime(time.Date(2027, time.January, 1, 16, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.0929, p.DollarsPerKWH, 1e-6)
+		}
+	})
 }

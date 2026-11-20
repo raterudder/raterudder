@@ -1,6 +1,18 @@
 package utility
 
-// Walton EMC rates can be found at https://psc.ga.gov/search/facts-docket/?docketId=31536
+// Tariff Audit Metadata
+// - Provider(s): walton (Walton EMC)
+// - Official Sources:
+//   - https://www.waltonemc.com/residential/rates/
+//   - https://www.waltonemc.com/solar/rooftop-solar/selling-your-solar-power/
+//   - https://psc.ga.gov/search/facts-docket/?docketId=31536
+//   - https://psc.ga.gov/search/facts-document/?documentId=225050
+//   - Walton EMC Electric Rate Book (GA PSC Docket No. 31536): Schedule A-15 (Residential Service), Schedule TU-5 (Residential Time-of-Use Service), Avoided Energy Cost Rate ($0.026/kWh)
+// - Effective Window: 2026-01-01 through until superseded (modeled through 2027-12-31)
+// - Revision Cadence: Annual (Avoided Energy Cost updated annually effective January 1; retail rate schedules filed under GA PSC Docket 31536 as revised)
+// - Next Audit Due: 2027-01-10 (Check Walton EMC 2027 Avoided Energy Cost solar buyback update and GA PSC Docket 31536 filings)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Schedule A-15 models Tier 1 energy charges ($0.1205/kWh winter, $0.1225/kWh summer); excludes fixed $30.00/mo Service Charge and variable Power Cost Adjustment; Distributed Generation exports credited at Walton EMC Avoided Energy Cost ($0.026/kWh, 2026 published rate carried forward until 2027 update).
 
 import (
 	"fmt"
@@ -182,14 +194,14 @@ func waltonUtilityInfo() types.UtilityProviderInfo {
 				ID:   "walton_a15",
 				Name: "Residential Service (Schedule A-15)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return waltonPeriods("walton_a15", opts, []int{2026}), nil
+					return waltonPeriods("walton_a15", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
 				ID:   "walton_tu5",
 				Name: "Residential Time-of-Use (Schedule TU-5)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return waltonPeriods("walton_tu5", opts, []int{2026}), nil
+					return waltonPeriods("walton_tu5", opts, []int{2026, 2027}), nil
 				},
 			},
 		},

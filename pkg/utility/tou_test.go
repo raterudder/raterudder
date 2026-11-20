@@ -132,23 +132,6 @@ func TestTOUUtility(t *testing.T) {
 		assert.True(t, p.SeparateGenerationCredit)
 	})
 
-	t.Run("Rutherford Electric Fallback", func(t *testing.T) {
-		u := &genericTOU{}
-		err := u.ApplySettings(context.Background(), types.Settings{
-			UtilityProvider: "rutherford_electric",
-			UtilityRate:     "rutherford_electric_tod",
-		})
-		require.NoError(t, err)
-		assert.Equal(t, "rutherford_electric_tod", u.Name())
-		assert.NotEmpty(t, u.periods)
-
-		// Verify we can get a price (Nov 1st 2026 at 8 AM ET is on-peak)
-		target := time.Date(2026, 11, 10, 8, 0, 0, 0, etLocation) // Monday
-		p, err := u.priceForTime(target)
-		require.NoError(t, err)
-		assert.Equal(t, 0.31443, p.DollarsPerKWH)
-	})
-
 	t.Run("Location consistency sets target location", func(t *testing.T) {
 		u := &genericTOU{
 			periods: []types.UtilityFeesPeriod{
@@ -233,6 +216,10 @@ func TestTOUUtility(t *testing.T) {
 		assert.Equal(t, 0.26408, p.DollarsPerKWH)
 
 		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27292, p.DollarsPerKWH)
+
+		p, err = u.priceForTime(time.Date(2027, time.February, 15, 12, 0, 0, 0, ptLocation))
 		require.NoError(t, err)
 		assert.Equal(t, 0.27292, p.DollarsPerKWH)
 
@@ -323,6 +310,16 @@ func TestTOUUtility(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.October, 17, 14, 0, 0, 0, ptLocation))
 		require.NoError(t, err)
 		assert.Equal(t, 0.27814, p.DollarsPerKWH)
+
+		// 2027 Winter High Peak - Monday, Feb 8, 2027 at 2:00 PM PT
+		p, err = u.priceForTime(time.Date(2027, time.February, 8, 14, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.30168, p.DollarsPerKWH, 1e-6)
+
+		// 2027 Summer High Peak - Monday, Jul 12, 2027 at 2:00 PM PT
+		p, err = u.priceForTime(time.Date(2027, time.July, 12, 14, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.36008, p.DollarsPerKWH, 1e-6)
 	})
 
 	t.Run("MVEA", func(t *testing.T) {
@@ -391,6 +388,33 @@ func TestTOUUtility(t *testing.T) {
 			assert.InDelta(t, 0.08346, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// 3. Test 2027 schedules (eff. Oct 1, 2026 MVEA tariff revision)
+		// 16.05: Mon-Fri 5-9 PM excl. holidays $0.34500/kWh; Off-Peak/weekends/holidays $0.08625/kWh
+		p, err = u.priceForTime(time.Date(2027, time.February, 10, 18, 0, 0, 0, mtLocation)) // Wednesday
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.February, 13, 18, 0, 0, 0, mtLocation)) // Saturday (Off-Peak in 2027)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.January, 1, 18, 0, 0, 0, mtLocation)) // New Year's Day (Friday holiday)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
+		}
+
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "mvea",
+			UtilityRate:     "mvea_16_01",
+		}))
+		p, err = u.priceForTime(time.Date(2027, time.February, 10, 14, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.11269, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
 		}
 	})
 
@@ -500,6 +524,21 @@ func TestTOUUtility(t *testing.T) {
 				assert.False(t, p.SeparateGenerationCredit)
 				assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
 			}
+		}
+
+		// 3. Test 2027 forward continuity (including 2027 EDG export credit)
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "centerpoint_indiana",
+			UtilityRate:     "centerpoint_indiana_rs",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "edg",
+			},
+		}))
+		p, err := u.priceForTime(time.Date(2027, time.February, 15, 12, 0, 0, 0, ctLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.200142, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.05561, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 	})
 

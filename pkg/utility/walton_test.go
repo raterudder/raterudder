@@ -100,4 +100,33 @@ func TestWaltonUtility(t *testing.T) {
 			assert.InDelta(t, 0.0885, p.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("2027 Forward Continuity", func(t *testing.T) {
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "walton",
+			UtilityRate:     "walton_a15",
+		}))
+		p, err := u.priceForTime(time.Date(2027, time.February, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1205, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.026, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "walton",
+			UtilityRate:     "walton_tu5",
+		}))
+		// Labor Day 2027: Mon, Sept 6, 2027 at 4:00 PM ET -> Off-Peak ($0.0885)
+		p, err = u.priceForTime(time.Date(2027, time.September, 6, 16, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.0885, p.DollarsPerKWH, 1e-6)
+		}
+		// Regular early Sept 2027 weekday: Tue, Sept 7, 2027 at 4:00 PM ET -> On-Peak ($0.3225)
+		p, err = u.priceForTime(time.Date(2027, time.September, 7, 16, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.3225, p.DollarsPerKWH, 1e-6)
+		}
+	})
 }

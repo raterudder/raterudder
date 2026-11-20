@@ -1,5 +1,18 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): psegli (PSEG Long Island (PSEGLI))
+// - Official Sources:
+//   - https://www.psegliny.com/aboutpseglongisland/ratesandtariffs/rateinformation
+//   - https://www.psegliny.com/aboutpseglongisland/ratesandtariffs/-/media/A0FDA80A6FE44A45973922422E86BD9E.ashx
+//   - https://www.lipower.org/wp-content/uploads/2026/10/LIPA-Tariff-October-2026-linked.pdf
+//   - LIPA Tariff for Electric Service: Service Classification No. 1-VMRP (Rates 190, 191, 192, 193, 5th Rev. Leaf No. 196C & 196D) and Service Classification No. 1-TOD (Rates 194, 195, 19th Rev. Leaf No. 184)
+// - Effective Window: 2026-01-01 through until superseded (modeled through 2027-12-31)
+// - Revision Cadence: Annual (LIPA base delivery tariff revisions effective January 1; monthly variable Power Supply Charge excluded)
+// - Next Audit Due: 2027-01-05 (Check LIPA 2027 annual residential delivery rate sheets for Rates 190-195)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Models LIPA base volumetric Energy Delivery Charges per kWh; excludes daily fixed Service Charge ($0.56/day) and monthly variable Power Supply Charge / DER / Revenue Decoupling surcharges; 1:1 kWh net metering.
+
 import (
 	"time"
 
@@ -869,7 +882,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential, Time-of-Day, Off-Peak (Rate 194)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_194", opts, []int{2026}), nil
+					return psegliPeriods("psegli_194", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -877,7 +890,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential, Time-of-Day, Super Off-Peak (Rate 195)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_195", opts, []int{2026}), nil
+					return psegliPeriods("psegli_195", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -885,7 +898,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential TOU, Short Peak (3 hour) (Rate 190)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_190", opts, []int{2026}), nil
+					return psegliPeriods("psegli_190", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -893,7 +906,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential TOU, Late Peak (4 hour) (Rate 191)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_191", opts, []int{2026}), nil
+					return psegliPeriods("psegli_191", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -901,7 +914,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential TOU, Early Peak (4 hour) (Rate 192)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_192", opts, []int{2026}), nil
+					return psegliPeriods("psegli_192", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -909,7 +922,7 @@ func psegliUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Residential TOU, Overnight (Rate 193)",
 				Options: psegliOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return psegliPeriods("psegli_193", opts, []int{2026}), nil
+					return psegliPeriods("psegli_193", opts, []int{2026, 2027}), nil
 				},
 			},
 		},

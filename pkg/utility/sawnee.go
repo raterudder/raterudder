@@ -1,5 +1,17 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): sawnee (Sawnee EMC)
+// - Official Sources:
+//   - https://sawnee.coop/residential-rate-schedules
+//   - https://psc.ga.gov/search/facts-docket/?docketId=31536
+//   - Sawnee EMC Rate Book: Schedule H-26 (Residential Service, eff. 01/02/2026), Schedule TU-28 (Residential Time of Use, eff. 01/02/2026), Schedule CPPR-14 (Critical Peak Pricing - Residential, eff. 01/02/2026), Rider NEM-18 (Net Metering Rider, eff. 05/01/2026)
+// - Effective Window: 2026-01-01 through until superseded (modeled through 2027-12-31)
+// - Revision Cadence: Annual (Cooperative Board schedule updates typically effective January; NEM avoided-cost rider reviewed annually in May)
+// - Next Audit Due: 2027-01-10 (Check Sawnee EMC 2027 residential rate schedules H, TU, CPPR, and Rider NEM)
+// - Last Verified: 2026-11-19
+// - Modeling Notes: Schedule H-26 models Tier 1 (first 500 kWh) base energy charge ($0.0767/kWh); excludes fixed monthly customer charges ($28.85/mo H-26, $33.00/mo TU-28, $34.00/mo CPPR-14), Wholesale Power Cost Adjustment, and dynamic CPPR critical peak events ($0.950/kWh); Rider NEM-18 solar export credit modeled at $0.0379/kWh.
+
 import (
 	"fmt"
 	"time"
@@ -36,7 +48,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "sawnee_tu":
-			// Schedule TU-14 (Time of Use - Residential)
+			// Schedule TU-28 (Time of Use - Residential)
 			// On-Peak: $0.335/kWh (Monday - Friday, 2 PM - 8 PM, June 1 - August 31, excluding July 4)
 			// Off-Peak: $0.0445/kWh (all other hours)
 			peakHours := []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}}
@@ -189,21 +201,21 @@ func sawneeUtilityInfo() types.UtilityProviderInfo {
 				ID:   "sawnee_h",
 				Name: "Residential Service (Schedule H)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return sawneePeriods("sawnee_h", opts, []int{2026}), nil
+					return sawneePeriods("sawnee_h", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
 				ID:   "sawnee_tu",
 				Name: "Residential Time-of-Use (Schedule TU)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return sawneePeriods("sawnee_tu", opts, []int{2026}), nil
+					return sawneePeriods("sawnee_tu", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
 				ID:   "sawnee_cpp",
 				Name: "Critical Peak Pricing (Schedule CPPR)",
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return sawneePeriods("sawnee_cpp", opts, []int{2026}), nil
+					return sawneePeriods("sawnee_cpp", opts, []int{2026, 2027}), nil
 				},
 			},
 		},
