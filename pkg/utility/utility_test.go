@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +54,108 @@ func TestListUtilities(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("TariffAuditRegistryCoversAllUtilities", func(t *testing.T) {
+		raw, err := os.ReadFile("TARIFF_AUDIT.md")
+		require.NoError(t, err, "expected pkg/utility/TARIFF_AUDIT.md to exist")
+
+		const expectedHeader = "| Provider ID | Utility Name | Source File | Rate Plans | Revision Cadence | Repo Effective Horizon | Next Audit Due | Last Verified | Official Source URL(s) | Notes |"
+		lines := strings.Split(string(raw), "\n")
+
+		headerIdx := -1
+		for i, line := range lines {
+			if strings.TrimSpace(line) == expectedHeader {
+				headerIdx = i
+				break
+			}
+		}
+		require.NotEqual(t, -1, headerIdx, "TARIFF_AUDIT.md must contain exact registry table header %q", expectedHeader)
+		require.Less(t, headerIdx+2, len(lines), "TARIFF_AUDIT.md registry table must have separator and data rows")
+
+		documentedRows := make(map[string][]string)
+		for _, line := range lines[headerIdx+2:] {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "|") {
+				break
+			}
+			parts := strings.Split(strings.Trim(trimmed, "|"), "|")
+			require.Len(t, parts, 10, "TARIFF_AUDIT.md table row must have 10 columns: %s", trimmed)
+
+			providerID := strings.Trim(strings.TrimSpace(parts[0]), "`")
+			require.NotEmpty(t, providerID, "Provider ID must not be empty in row: %s", trimmed)
+			assert.NotContains(t, documentedRows, providerID, "duplicate Provider ID %q in TARIFF_AUDIT.md", providerID)
+			documentedRows[providerID] = parts
+
+			for colIdx, colName := range []string{
+				"Provider ID",
+				"Utility Name",
+				"Source File",
+				"Rate Plans",
+				"Revision Cadence",
+				"Repo Effective Horizon",
+				"Next Audit Due",
+				"Last Verified",
+				"Official Source URL(s)",
+				"Notes",
+			} {
+				assert.NotEmpty(t, strings.TrimSpace(parts[colIdx]), "column %q must not be empty for provider %q", colName, providerID)
+			}
+
+			for _, srcFile := range strings.Split(parts[2], ",") {
+				cleanFile := strings.Trim(strings.TrimSpace(srcFile), "`")
+				assert.Equal(t, filepath.Base(cleanFile), cleanFile, "Source File %q for provider %q must be a base filename in pkg/utility", cleanFile, providerID)
+				assert.True(t, strings.HasSuffix(cleanFile, ".go") && !strings.HasSuffix(cleanFile, "_test.go"), "Source File %q for provider %q must be a non-test .go file", cleanFile, providerID)
+				info, err := os.Stat(cleanFile)
+				if assert.NoError(t, err, "Source File %q for provider %q must exist in pkg/utility", cleanFile, providerID) {
+					assert.False(t, info.IsDir(), "Source File %q for provider %q must be a regular file, not a directory", cleanFile, providerID)
+				}
+			}
+
+			nextAuditDue := strings.Trim(strings.TrimSpace(parts[6]), "`")
+			_, err := time.Parse("2006-01-02", nextAuditDue)
+			assert.NoError(t, err, "Next Audit Due for %q must be YYYY-MM-DD, got %q", providerID, nextAuditDue)
+
+			lastVerified := strings.Trim(strings.TrimSpace(parts[7]), "`")
+			if lastVerified != "unverified" {
+				_, err := time.Parse("2006-01-02", lastVerified)
+				assert.NoError(t, err, "Last Verified for %q must be 'unverified' or YYYY-MM-DD, got %q", providerID, lastVerified)
+			}
+
+			assert.Contains(t, parts[8], "https://", "Official Source URL(s) for %q must contain an https:// URL", providerID)
+		}
+
+		visibleUtilities := make(map[string]bool)
+		for _, u := range utilities {
+			if !u.Hidden && u.ID != "tou_example" {
+				visibleUtilities[u.ID] = true
+				row, ok := documentedRows[u.ID]
+				if assert.True(t, ok, "visible utility %q (%s) must have a row in pkg/utility/TARIFF_AUDIT.md", u.ID, u.Name) {
+					documentedPlans := make(map[string]bool)
+					for _, rawPlan := range strings.Split(row[3], ",") {
+						planID := strings.Trim(strings.TrimSpace(rawPlan), "`")
+						if assert.NotEmpty(t, planID, "Rate Plans column for %q in TARIFF_AUDIT.md must not contain an empty plan ID", u.ID) {
+							assert.False(t, documentedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md has duplicate plan ID %q", u.ID, planID)
+							documentedPlans[planID] = true
+						}
+					}
+
+					expectedPlans := make(map[string]bool, len(u.Rates))
+					for _, r := range u.Rates {
+						expectedPlans[r.ID] = true
+						assert.True(t, documentedPlans[r.ID], "Rate Plans column for %q in TARIFF_AUDIT.md must list rate %q", u.ID, r.ID)
+					}
+
+					for planID := range documentedPlans {
+						assert.True(t, expectedPlans[planID], "Rate Plans column for %q in TARIFF_AUDIT.md lists unknown rate %q", u.ID, planID)
+					}
+				}
+			}
+		}
+
+		for docID := range documentedRows {
+			assert.True(t, visibleUtilities[docID], "TARIFF_AUDIT.md documents unknown or hidden provider ID %q", docID)
+		}
+	})
 }
 
 type mockUtility struct {
