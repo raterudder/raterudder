@@ -102,8 +102,11 @@ func TestListUtilities(t *testing.T) {
 
 			for _, srcFile := range strings.Split(parts[2], ",") {
 				cleanFile := strings.Trim(strings.TrimSpace(srcFile), "`")
-				_, err := os.Stat(cleanFile)
-				assert.NoError(t, err, "Source File %q for provider %q must exist in pkg/utility", cleanFile, providerID)
+				assert.True(t, strings.HasSuffix(cleanFile, ".go"), "Source File %q for provider %q must be a .go file", cleanFile, providerID)
+				info, err := os.Stat(cleanFile)
+				if assert.NoError(t, err, "Source File %q for provider %q must exist in pkg/utility", cleanFile, providerID) {
+					assert.False(t, info.IsDir(), "Source File %q for provider %q must be a regular file, not a directory", cleanFile, providerID)
+				}
 			}
 
 			nextAuditDue := strings.Trim(strings.TrimSpace(parts[6]), "`")
@@ -119,9 +122,8 @@ func TestListUtilities(t *testing.T) {
 			assert.Contains(t, parts[8], "https://", "Official Source URL(s) for %q must contain an https:// URL", providerID)
 		}
 
-		configuredUtilities := Configured(nil).ListUtilities()
 		visibleUtilities := make(map[string]bool)
-		for _, u := range configuredUtilities {
+		for _, u := range utilities {
 			if !u.Hidden && u.ID != "tou_example" {
 				visibleUtilities[u.ID] = true
 				row, ok := documentedRows[u.ID]
