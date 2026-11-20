@@ -3,16 +3,62 @@ package weather
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func isTransientOpenMeteoErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "returned status 429") || strings.Contains(msg, "returned status 5")
+}
+
+func retryOpenMeteoIntegration[T any](t *testing.T, fn func() (T, error)) (T, error) {
+	t.Helper()
+	const maxAttempts = 5
+	backoff := time.Second
+
+	var zero T
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		res, err := fn()
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !isTransientOpenMeteoErr(err) {
+			return zero, err
+		}
+		t.Logf("open-meteo integration attempt %d/%d failed with transient error: %v", attempt+1, maxAttempts, err)
+		if attempt < maxAttempts-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	t.Skipf("open-meteo API transiently unavailable after %d attempts: %v", maxAttempts, lastErr)
+	return zero, lastErr
+}
 
 func TestOpenMeteoService(t *testing.T) {
 	t.Run("Location", func(t *testing.T) {
@@ -483,9 +529,11 @@ func TestOpenMeteoService(t *testing.T) {
 		require.NoError(t, parseErr)
 		s := &OpenMeteo{
 			GeocodingURL: geoURL,
-			HTTPClient:   &http.Client{Timeout: 10 * time.Second},
+			HTTPClient:   common.HTTPClient(25 * time.Second),
 		}
-		loc, err := s.Location(context.Background(), "US", "90210")
+		loc, err := retryOpenMeteoIntegration(t, func() (types.SiteLocation, error) {
+			return s.Location(context.Background(), "US", "90210")
+		})
 		require.NoError(t, err)
 		require.NotNil(t, loc)
 		assert.Equal(t, "Beverly Hills", loc.City)
@@ -511,18 +559,12 @@ func TestOpenMeteoService(t *testing.T) {
 		require.NoError(t, parseErr)
 		s := &OpenMeteo{
 			ForecastURL: forecastURL,
-			HTTPClient:  &http.Client{Timeout: 10 * time.Second},
+			HTTPClient:  common.HTTPClient(25 * time.Second),
 		}
 
-		var weathers []types.Weather
-		// Retry up to 3 times to mitigate flaky OpenMeteo API network issues (like EOF)
-		for i := 0; i < 3; i++ {
-			weathers, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.07, Longitude: -118.40, TimeZone: "America/Los_Angeles"}, startDay, endDay)
-			if err == nil {
-				break
-			}
-			time.Sleep(time.Second)
-		}
+		weathers, err := retryOpenMeteoIntegration(t, func() ([]types.Weather, error) {
+			return s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.07, Longitude: -118.40, TimeZone: "America/Los_Angeles"}, startDay, endDay)
+		})
 
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(weathers), 2)
