@@ -1,6 +1,6 @@
 # Electric Utility Tariff Audit Registry
 
-This file is the authoritative tariff audit registry for all visible electric utility providers in `pkg/utility` (`!u.Hidden && u.ID != "tou_example"` in `utility.Configured(nil).ListUtilities()`).
+This file is the authoritative tariff audit registry for all visible electric utility providers in `pkg/utility` (`!u.Hidden && u.ID != "tou_example"` in `utility.NewMap(nil).ListUtilities()`).
 
 ## Maintenance & Audit Guidelines
 

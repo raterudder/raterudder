@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -102,7 +103,8 @@ func TestListUtilities(t *testing.T) {
 
 			for _, srcFile := range strings.Split(parts[2], ",") {
 				cleanFile := strings.Trim(strings.TrimSpace(srcFile), "`")
-				assert.True(t, strings.HasSuffix(cleanFile, ".go"), "Source File %q for provider %q must be a .go file", cleanFile, providerID)
+				assert.Equal(t, filepath.Base(cleanFile), cleanFile, "Source File %q for provider %q must be a base filename in pkg/utility", cleanFile, providerID)
+				assert.True(t, strings.HasSuffix(cleanFile, ".go") && !strings.HasSuffix(cleanFile, "_test.go"), "Source File %q for provider %q must be a non-test .go file", cleanFile, providerID)
 				info, err := os.Stat(cleanFile)
 				if assert.NoError(t, err, "Source File %q for provider %q must exist in pkg/utility", cleanFile, providerID) {
 					assert.False(t, info.IsDir(), "Source File %q for provider %q must be a regular file, not a directory", cleanFile, providerID)
