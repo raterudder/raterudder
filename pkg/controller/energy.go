@@ -270,6 +270,76 @@ func (c *Controller) BuildHourlyEnergyModel(
 	}
 
 	ignoredOutlierHours, outlierRefLoad, hourBaselineRef, siteEVMinThresholdKW, siteEVMinStepKW := detectIntermittentEVAndLoadSpikes(ctx, dayMap, weatherByHour, settings, standbyLoad)
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc)
+	if hvac.hasElectricHeating || hvac.hasElectricCooling {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"detected weather HVAC sensitivity",
+			slog.Bool("hasElectricHeating", hvac.hasElectricHeating),
+			slog.Bool("heatingWindowDetected", hvac.heatingWindowDetected),
+			slog.Any("heatingHours", activeHourList(hvac.heatingHours)),
+			slog.Bool("hasElectricCooling", hvac.hasElectricCooling),
+			slog.Bool("coolingWindowDetected", hvac.coolingWindowDetected),
+			slog.Any("coolingHours", activeHourList(hvac.coolingHours)),
+		)
+	}
+
+	// Build deduplicated maps of daily temperatures (average, min, max, morning average) from weather
+	// for IQR weather-surge exemption and Option G temperature-similarity matching.
+	type dedupWeatherHour struct {
+		dateStr string
+		localHr int
+		tempC   float64
+	}
+	latestWeatherByUTC := make(map[time.Time]dedupWeatherHour)
+	for _, w := range weather {
+		hwLoc := getLocation(w.TimeLocation, loc)
+		for _, hw := range w.ForecastHours {
+			if hw.TSHourStart.IsZero() {
+				continue
+			}
+			localTS := hw.TSHourStart.In(hwLoc)
+			latestWeatherByUTC[hw.TSHourStart.Truncate(time.Hour).UTC()] = dedupWeatherHour{
+				dateStr: localTS.Format("2006-01-02"),
+				localHr: localTS.Hour(),
+				tempC:   hw.TemperatureC,
+			}
+		}
+	}
+	dayAvgTempCMap := make(map[string]float64)
+	dayTempHourCountMap := make(map[string]int)
+	dayMinTempCMap := make(map[string]float64)
+	dayMaxTempCMap := make(map[string]float64)
+	dayMorningTempCSumMap := make(map[string]float64)
+	dayMorningTempCountMap := make(map[string]int)
+	for _, dwh := range latestWeatherByUTC {
+		dateStr := dwh.dateStr
+		dayAvgTempCMap[dateStr] += dwh.tempC
+		if dayTempHourCountMap[dateStr] == 0 {
+			dayMinTempCMap[dateStr] = dwh.tempC
+			dayMaxTempCMap[dateStr] = dwh.tempC
+		} else {
+			if dwh.tempC < dayMinTempCMap[dateStr] {
+				dayMinTempCMap[dateStr] = dwh.tempC
+			}
+			if dwh.tempC > dayMaxTempCMap[dateStr] {
+				dayMaxTempCMap[dateStr] = dwh.tempC
+			}
+		}
+		dayTempHourCountMap[dateStr]++
+		if dwh.localHr >= 0 && dwh.localHr <= 8 {
+			dayMorningTempCSumMap[dateStr] += dwh.tempC
+			dayMorningTempCountMap[dateStr]++
+		}
+	}
+	getDayAvgTemp := func(dStr string) (float64, bool) {
+		// Require at least minWeatherHoursForDailyAverage (12 hours) of unique hourly forecast readings
+		// to compute a trustworthy daily average temperature for date dStr.
+		if count := dayTempHourCountMap[dStr]; count >= minWeatherHoursForDailyAverage {
+			return dayAvgTempCMap[dStr] / float64(count), true
+		}
+		return 0, false
+	}
 
 	// Count how many historical days have at least 18 hours of valid load data.
 	// When history has >= 4 complete days, we require >= 18 hours for a day to participate
@@ -339,6 +409,47 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 	historicalVacationDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
 
+	// Calculate median historical daily average temperature across complete historical days
+	// to detect genuine cold snaps or heatwaves for upper-IQR exemption.
+	var completeDayAvgTemps []float64
+	for dateStr, d := range dayMap {
+		if isCompleteHistDay(dateStr, d) {
+			if t, ok := getDayAvgTemp(dateStr); ok {
+				completeDayAvgTemps = append(completeDayAvgTemps, t)
+			}
+		}
+	}
+	hasMedianDayTemp := len(completeDayAvgTemps) > 0
+	medianDayAvgTempC := 0.0
+	if hasMedianDayTemp {
+		medianDayAvgTempC = medianSortedOrCopy(completeDayAvgTemps)
+	}
+
+	isWeatherExtremeUpperIQRExempt := func(dateStr string) bool {
+		if !hasMedianDayTemp {
+			return false
+		}
+		dayAvgTempC, hasDayWeather := getDayAvgTemp(dateStr)
+		if !hasDayWeather {
+			return false
+		}
+		if hvac.hasElectricHeating && dayAvgTempC <= medianDayAvgTempC-weatherDrivenSurgeTempDeltaC {
+			morningAvgTempC := dayAvgTempC
+			if cnt := dayMorningTempCountMap[dateStr]; cnt > 0 {
+				morningAvgTempC = dayMorningTempCSumMap[dateStr] / float64(cnt)
+			}
+			if morningAvgTempC < coldHeatingMaxTempC || dayMinTempCMap[dateStr] < coldHeatingMaxTempC {
+				return true
+			}
+		}
+		if hvac.hasElectricCooling && dayAvgTempC >= medianDayAvgTempC+weatherDrivenSurgeTempDeltaC {
+			if dayMaxTempCMap[dateStr] >= extremeHeatwaveMinTempC {
+				return true
+			}
+		}
+		return false
+	}
+
 	// We use the Interquartile Range (IQR) method to identify and filter out anomaly days
 	// (e.g. vacation days when usage is abnormally low, or days with extreme charging spikes/events).
 	//
@@ -373,8 +484,22 @@ func (c *Controller) BuildHourlyEnergyModel(
 				validDaysMap[dateStr] = true
 				continue
 			}
-			if isCompleteHistDay(dateStr, dayMap[dateStr]) && avg >= lowerBound && avg <= upperBound {
-				validDaysMap[dateStr] = true
+			if isCompleteHistDay(dateStr, dayMap[dateStr]) && avg >= lowerBound {
+				if avg <= upperBound {
+					validDaysMap[dateStr] = true
+				} else if isWeatherExtremeUpperIQRExempt(dateStr) {
+					validDaysMap[dateStr] = true
+					dayAvgTempC, _ := getDayAvgTemp(dateStr)
+					log.Ctx(ctx).DebugContext(
+						ctx,
+						"exempting extreme-weather HVAC day from upper IQR filtering",
+						slog.String("date", dateStr),
+						slog.Float64("dayAvgLoadKWH", avg),
+						slog.Float64("upperBoundKWH", upperBound),
+						slog.Float64("dayAvgTempC", dayAvgTempC),
+						slog.Float64("medianDayAvgTempC", medianDayAvgTempC),
+					)
+				}
 			}
 		}
 	} else {
@@ -491,33 +616,47 @@ func (c *Controller) BuildHourlyEnergyModel(
 	//        the standard deviation (variance) of the differences. In the formula: zScore = meanDiff / stdDevDiff,
 	//        a larger standard deviation shrinks the z-score, keeping it below our threshold and preventing a false shift.
 	//
+	// Precompute clean (post-EV-filter) exact-hour (temp, load) observations across all valid
+	// historical days for per-hour HVAC slope extrapolation and temperature-matched pool inclusion.
+	var allValidExactHourTempLoads [24][]hourTempLoad
+	validDateHourTemp := make(map[string][24]float64)
+	validDateHasHourTemp := make(map[string][24]bool)
+	for dateStr, ok := range validDaysMap {
+		if !ok || dateStr == todayStr || (detectedShift == "none" && historicalVacationDays[dateStr]) {
+			continue
+		}
+		d := dayMap[dateStr]
+		if d == nil {
+			continue
+		}
+		var temps [24]float64
+		var hasTemps [24]bool
+		for _, pt := range d.points {
+			if pt.HomeKWH <= 0.0 {
+				continue
+			}
+			hr := pt.TSHourStart.Hour()
+			if hr < 0 || hr >= 24 || ignoredOutlierHours[dayHourKey{date: dateStr, hour: hr}] {
+				continue
+			}
+			if histTemp, hasHistTemp := weatherByHour[pt.TSHourStart.Truncate(time.Hour).UTC()]; hasHistTemp {
+				allValidExactHourTempLoads[hr] = append(allValidExactHourTempLoads[hr], hourTempLoad{
+					tempC:   histTemp,
+					loadKWH: pt.HomeKWH,
+				})
+				temps[hr] = histTemp
+				hasTemps[hr] = true
+			}
+		}
+		validDateHourTemp[dateStr] = temps
+		validDateHasHourTemp[dateStr] = hasTemps
+	}
+	seasonalMedians := computeSeasonalHourMedians(allValidExactHourTempLoads)
+
 	// We calculate the difference between actual daily averages and their respective weekday baseline expectations
 	// for the last 4 valid days. If these differences are consistent (low variance), the standard deviation remains small,
 	// yielding a high z-score. If they are volatile (high variance due to random EV charging), the standard deviation is large,
 	// yielding a low z-score.
-	// Build map of daily average temperatures from weather for temperature similarity matching
-	dayAvgTempMap := make(map[string]float64)
-	dayTempHourCountMap := make(map[string]int)
-	for _, w := range weather {
-		for _, hw := range w.ForecastHours {
-			if hw.TSHourStart.IsZero() {
-				continue
-			}
-			hwLoc := getLocation(w.TimeLocation, loc)
-			dateStr := hw.TSHourStart.In(hwLoc).Format("2006-01-02")
-			dayAvgTempMap[dateStr] += hw.TemperatureC
-			dayTempHourCountMap[dateStr]++
-		}
-	}
-	getDayAvgTemp := func(dStr string) (float64, bool) {
-		// Require at least minWeatherHoursForDailyAverage (12 hours) of forecast readings
-		// to compute a trustworthy daily average temperature for date dStr.
-		if count := dayTempHourCountMap[dStr]; count >= minWeatherHoursForDailyAverage {
-			return dayAvgTempMap[dStr] / float64(count), true
-		}
-		return 0, false
-	}
-
 	var diffs []float64
 	var recentDiffDetails []recentDiffDetail
 
@@ -806,6 +945,16 @@ func (c *Controller) BuildHourlyEnergyModel(
 		targetTimeHr := targetTime.Truncate(time.Hour).UTC()
 		targetTemp, hasTargetTemp := weatherByHour[targetTimeHr]
 
+		// Include temperature-matching valid days across all weekdays when forecasting an active
+		// heating or cooling hour so non-recent other-weekday cold snaps or heatwaves aren't dropped.
+		if hasTargetTemp && ((hvac.heatingHours[h] && targetTemp <= coldHeatingMaxTempC) || (hvac.coolingHours[h] && targetTemp >= hotCoolingMinTempC)) {
+			for dateStr, hasTemps := range validDateHasHourTemp {
+				if hasTemps[h] && math.Abs(validDateHourTemp[dateStr][h]-targetTemp) <= tempSimilarityScale {
+					selectedDatesMap[dateStr] = true
+				}
+			}
+		}
+
 		// Gather points at hours h, h-1, h+1 on all selected dates.
 		// We gather neighboring hours to account for daily variations in household activity timing.
 		var pts []weightedPoint
@@ -813,7 +962,10 @@ func (c *Controller) BuildHourlyEnergyModel(
 		var sumTempMult float64
 		var countTempMult int
 		maxHistTemp := -999.0
+		minHistTemp := math.MaxFloat64
 		hasHistTempForHour := false
+		var exactTempPts []weightedPoint
+		var loggedDampenedNeighbor [24]bool
 
 		var sortedSelectedDates []string
 		for dateStr := range selectedDatesMap {
@@ -881,10 +1033,16 @@ func (c *Controller) BuildHourlyEnergyModel(
 						sumTempMult += tempMult
 						countTempMult++
 
-						// Track the maximum temperature in history for this exact hour (excluding h-1/h+1 neighbors)
-						if hpLocalHour == h && histTemp > maxHistTemp {
-							maxHistTemp = histTemp
+						// Track historical min/max temperature and weighted pool temperatures for this exact hour (excluding h-1/h+1 neighbors)
+						if hpLocalHour == h {
+							if histTemp > maxHistTemp {
+								maxHistTemp = histTemp
+							}
+							if histTemp < minHistTemp {
+								minHistTemp = histTemp
+							}
 							hasHistTempForHour = true
+							exactTempPts = append(exactTempPts, weightedPoint{Value: histTemp, Weight: finalWeight})
 						}
 					}
 				}
@@ -896,10 +1054,19 @@ func (c *Controller) BuildHourlyEnergyModel(
 			}
 
 			neighborMult := func(hpLocalHour int, loadKWH float64) float64 {
-				if h >= 6 && h <= 11 && hpLocalHour < 9 && loadKWH <= standbyLoad*neighborHourStandbyFloorMultiplier {
-					return 0.0
+				mult := computeNeighborMultiplier(h, hpLocalHour, loadKWH, standbyLoad, targetTemp, hasTargetTemp, hvac, seasonalMedians)
+				if mult == sharpHVACNeighborMultiplier && hpLocalHour >= 0 && hpLocalHour < 24 && !loggedDampenedNeighbor[hpLocalHour] {
+					loggedDampenedNeighbor[hpLocalHour] = true
+					log.Ctx(ctx).DebugContext(
+						ctx,
+						"dampening neighbor hour blend for sharp HVAC setback",
+						slog.Int("hour", h),
+						slog.Int("neighborHour", hpLocalHour),
+						slog.Float64("multiplier", mult),
+						slog.Float64("targetTempC", targetTemp),
+					)
 				}
-				return neighborHourWeightMultiplier
+				return mult
 			}
 
 			// For h == 0 and h == 23, look up the true chronological neighbor on the adjacent calendar day
@@ -993,12 +1160,42 @@ func (c *Controller) BuildHourlyEnergyModel(
 			p75LoadA = overallAvgLoad
 		}
 
-		// Apply extreme heatwave safeguard: if today's forecasted temp is at least extremeHeatwaveThresholdC
-		// hotter than the hottest temperature seen in history for this hour, AND is above the minimum hot-day threshold
-		// (extremeHeatwaveMinTempC), apply the safety boost to protect the battery.
-		if hasTargetTemp && hasHistTempForHour && targetTemp > maxHistTemp+extremeHeatwaveThresholdC && targetTemp > extremeHeatwaveMinTempC {
-			avgLoadA *= extremeHeatwaveLoadMultiplier
-			p75LoadA *= extremeHeatwaveLoadMultiplier
+		// Apply symmetric extreme-weather safeguards and weighted-median pool temperature-gap extrapolation
+		// for both hot heatwaves (cooling) and cold snaps (electric heating). Using the weighted median
+		// (0.50) of exact-hour temperatures resists distant mild-day tails while decaying to zero once
+		// cold/hot snap days represent half the weighted pool.
+		effectivePoolTempC := 0.0
+		hasEffectivePoolTemp := len(exactTempPts) > 0
+		if hasEffectivePoolTemp {
+			effectivePoolTempC = getWeightedPercentile(exactTempPts, 0.50)
+		}
+		if extraKWH, reason := computeExtremeWeatherExtraKWH(
+			hvac,
+			allValidExactHourTempLoads[h],
+			h,
+			targetTemp,
+			hasTargetTemp,
+			hasHistTempForHour,
+			minHistTemp,
+			maxHistTemp,
+			effectivePoolTempC,
+			hasEffectivePoolTemp,
+			avgLoadA,
+		); extraKWH > 0 {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"applying extreme weather HVAC load adjustment",
+				slog.Int("hour", h),
+				slog.String("reason", reason),
+				slog.Float64("targetTempC", targetTemp),
+				slog.Float64("minHistTempC", minHistTemp),
+				slog.Float64("maxHistTempC", maxHistTemp),
+				slog.Float64("effectivePoolTempC", effectivePoolTempC),
+				slog.Float64("baseLoadKWH", avgLoadA),
+				slog.Float64("extraLoadKWH", extraKWH),
+			)
+			avgLoadA += extraKWH
+			p75LoadA += extraKWH
 		}
 
 		// Solar prediction.
@@ -2290,6 +2487,7 @@ func applyOutlierDayCalmMorningDampening(
 	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()].any() {
 		return
 	}
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc)
 	todayPts := dayMap[todayStr]
 	if todayPts == nil {
 		return
@@ -2324,27 +2522,49 @@ func applyOutlierDayCalmMorningDampening(
 	}
 	sort.Strings(sortedDates)
 
+	var allValidExactHourTempLoads [24][]hourTempLoad
+	for _, dateStr := range sortedDates {
+		d := dayMap[dateStr]
+		if d == nil {
+			continue
+		}
+		for _, pt := range d.points {
+			if pt.HomeKWH <= 0.0 {
+				continue
+			}
+			hr := pt.TSHourStart.In(loc).Hour()
+			if hr < 0 || hr >= 24 || ignoredOutlierHours[dayHourKey{date: dateStr, hour: hr}] {
+				continue
+			}
+			if histTemp, ok := weatherByHour[pt.TSHourStart.Truncate(time.Hour).UTC()]; ok {
+				allValidExactHourTempLoads[hr] = append(allValidExactHourTempLoads[hr], hourTempLoad{
+					tempC:   histTemp,
+					loadKWH: pt.HomeKWH,
+				})
+			}
+		}
+	}
+	seasonalMedians := computeSeasonalHourMedians(allValidExactHourTempLoads)
+
 	// computeAllDaysHourPts mirrors the main model's recency decay, +/-1h neighbor smoothing,
-	// cross-midnight stitches, temperature similarity weighting, and heatwave detection for hour h,
+	// cross-midnight stitches, temperature similarity weighting, and extreme-weather extrapolation for hour h,
 	// but treats every historical weekday equally (1x weight) without any same-weekday boost.
-	computeAllDaysHourPts := func(h int, targetTime time.Time) ([]weightedPoint, bool) {
+	computeAllDaysHourPts := func(h int, targetTime time.Time, basePct float64) ([]weightedPoint, float64) {
 		targetTemp, hasTargetTemp := weatherByHour[targetTime.Truncate(time.Hour).UTC()]
 		var pts []weightedPoint
 		var ptHasTemp []bool
 		var sumTempMult float64
 		var countTempMult int
 		maxHistTemp := -999.0
+		minHistTemp := math.MaxFloat64
 		hasHistTempForHour := false
+		var exactTempPts []weightedPoint
 		prevHr := (h - 1 + 24) % 24
 		nextHr := (h + 1) % 24
 
-		// Mirror the waking-hour ramp guard so overnight sleeping hours (< 09:00 at standby floor)
-		// don't dilute active morning hours [06:00..11:00].
+		// Mirror the waking-hour ramp guard and sharp HVAC peak dampening.
 		neighborMult := func(hpLocalHour int, loadKWH float64) float64 {
-			if h >= 6 && h <= 11 && hpLocalHour < 9 && loadKWH <= standbyLoad*neighborHourStandbyFloorMultiplier {
-				return 0.0
-			}
-			return neighborHourWeightMultiplier
+			return computeNeighborMultiplier(h, hpLocalHour, loadKWH, standbyLoad, targetTemp, hasTargetTemp, hvac, seasonalMedians)
 		}
 
 		for _, dateStr := range sortedDates {
@@ -2368,9 +2588,15 @@ func applyOutlierDayCalmMorningDampening(
 						hasTemp = true
 						sumTempMult += tempMult
 						countTempMult++
-						if hpLocalHour == h && histTemp > maxHistTemp {
-							maxHistTemp = histTemp
+						if hpLocalHour == h {
+							if histTemp > maxHistTemp {
+								maxHistTemp = histTemp
+							}
+							if histTemp < minHistTemp {
+								minHistTemp = histTemp
+							}
 							hasHistTempForHour = true
+							exactTempPts = append(exactTempPts, weightedPoint{Value: histTemp, Weight: finalWeight})
 						}
 					}
 				}
@@ -2430,8 +2656,29 @@ func applyOutlierDayCalmMorningDampening(
 			}
 		}
 
-		isHeatwave := hasTargetTemp && hasHistTempForHour && targetTemp > maxHistTemp+extremeHeatwaveThresholdC && targetTemp > extremeHeatwaveMinTempC
-		return pts, isHeatwave
+		extraKWH := 0.0
+		if basePct > 0 && len(pts) > 0 {
+			baseLoadKWH := getWeightedPercentile(pts, basePct)
+			effectivePoolTempC := 0.0
+			hasEffectivePoolTemp := len(exactTempPts) > 0
+			if hasEffectivePoolTemp {
+				effectivePoolTempC = getWeightedPercentile(exactTempPts, 0.50)
+			}
+			extraKWH, _ = computeExtremeWeatherExtraKWH(
+				hvac,
+				allValidExactHourTempLoads[h],
+				h,
+				targetTemp,
+				hasTargetTemp,
+				hasHistTempForHour,
+				minHistTemp,
+				maxHistTemp,
+				effectivePoolTempC,
+				hasEffectivePoolTemp,
+				baseLoadKWH,
+			)
+		}
+		return pts, extraKWH
 	}
 
 	// Compare today's observed waking-morning sum against the unboosted all-days P50 baseline
@@ -2444,7 +2691,7 @@ func applyOutlierDayCalmMorningDampening(
 			continue
 		}
 		mTargetTime := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), m, 0, 0, 0, loc)
-		pts, _ := computeAllDaysHourPts(m, mTargetTime)
+		pts, _ := computeAllDaysHourPts(m, mTargetTime, 0)
 		if len(pts) == 0 {
 			continue
 		}
@@ -2482,15 +2729,15 @@ func applyOutlierDayCalmMorningDampening(
 		if !hasHour[h] || targetTimes[h].In(loc).Format("2006-01-02") != todayStr {
 			continue
 		}
-		pts, isHeatwave := computeAllDaysHourPts(h, targetTimes[h])
+		pts, extraKWH := computeAllDaysHourPts(h, targetTimes[h], pct)
 		if len(pts) == 0 {
 			continue
 		}
 		allDaysPctKWH := getWeightedPercentile(pts, pct)
 		allDaysP75KWH := getWeightedPercentile(pts, 0.75)
-		if isHeatwave {
-			allDaysPctKWH *= extremeHeatwaveLoadMultiplier
-			allDaysP75KWH *= extremeHeatwaveLoadMultiplier
+		if extraKWH > 0 {
+			allDaysPctKWH += extraKWH
+			allDaysP75KWH += extraKWH
 		}
 		if allDaysPctKWH < rawAvgLoadA[h] {
 			rawAvgLoadA[h] = allDaysPctKWH

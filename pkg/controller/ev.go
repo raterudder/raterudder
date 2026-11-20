@@ -525,6 +525,7 @@ func prepareEVOutlierContext(
 
 	// Anchor overnight hours where frequent EV charging (5-7 nights/week, or configured EV periods)
 	// pulled the 30th percentile into an elevated EV tier despite the home having a quiet overnight baseline.
+	var anchoredOvernightEV [24]bool
 	for hr := 0; hr < 24; hr++ {
 		if !hasAllRef[hr] {
 			continue
@@ -587,6 +588,7 @@ func prepareEVOutlierContext(
 			}
 		}
 		if anchored {
+			anchoredOvernightEV[hr] = true
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"anchoring elevated overnight hourly reference load to non-EV baseline",
@@ -630,6 +632,11 @@ func prepareEVOutlierContext(
 		}
 	}
 
+	// Pass nil for loc so detectWeatherHVACSensitivity indexes hours via pt.TSHourStart.Hour(),
+	// matching allHourLoads, allHourWithTemp, and computePointRefLoad (dayMap points are already
+	// localized by buildHistoryDayMapAndStandby).
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, nil)
+
 	computePointRefLoad := func(pt types.EnergyStats, hr int, dayP65, dayP75 float64, hasDayStats bool) float64 {
 		refLoad := allRefByHour[hr]
 		// Apply same-day HVAC percentiles (dayP65/dayP75) only during daytime/evening hours (09:00-22:00)
@@ -644,9 +651,42 @@ func prepareEVOutlierContext(
 			if isDaytimeHVACHour && hasDayStats && ptTemp >= extremeHeatwaveMinTempC && dayP75 > refLoad {
 				refLoad = dayP75
 			}
+			isColdHeatingHour := hvac.heatingHours[hr] && ptTemp <= coldHeatingMaxTempC
+			isHotCoolingHour := hvac.coolingHours[hr] && ptTemp >= hotCoolingMinTempC
+			if isColdHeatingHour {
+				expectedColdKWH := min(
+					hvac.heatingHourInterceptKWH[hr]+hvac.heatingHourSlopeKWHPerC[hr]*max(0.0, coldHeatingBaseTempC-ptTemp),
+					hvacExpectedRefMaxKWH,
+				)
+				if expectedColdKWH > refLoad {
+					refLoad = expectedColdKWH
+				}
+			}
+			if isHotCoolingHour {
+				expectedHotKWH := min(
+					hvac.coolingHourInterceptKWH[hr]+hvac.coolingHourSlopeKWHPerC[hr]*max(0.0, ptTemp-hotCoolingBaseTempC),
+					hvacExpectedRefMaxKWH,
+				)
+				if expectedHotKWH > refLoad {
+					refLoad = expectedHotKWH
+				}
+			}
+
 			var tempMatchedLoads []float64
 			for _, hlt := range allHourWithTemp[hr] {
-				if hlt.hasTemp && math.Abs(hlt.tempC-ptTemp) <= tempSimilarityScale {
+				if !hlt.hasTemp {
+					continue
+				}
+				var matched bool
+				switch {
+				case isColdHeatingHour:
+					matched = hlt.tempC <= ptTemp+coldHeatingAsymmetricUpperBandC && hlt.tempC >= ptTemp-tempSimilarityScale
+				case isHotCoolingHour:
+					matched = hlt.tempC >= ptTemp-hotCoolingAsymmetricLowerBandC && hlt.tempC <= ptTemp+tempSimilarityScale
+				default:
+					matched = math.Abs(hlt.tempC-ptTemp) <= tempSimilarityScale
+				}
+				if matched {
 					tempMatchedLoads = append(tempMatchedLoads, hlt.load)
 				}
 			}
@@ -660,10 +700,12 @@ func prepareEVOutlierContext(
 					idx = int(math.Floor(float64(len(tempMatchedLoads)-1) * hourlyOutlierBaselinePercentile))
 				}
 				tempRef := tempMatchedLoads[idx]
-				// Only allow temperature-matched reference to raise refLoad during daytime HVAC hours
-				// or when tempRef is below EVMinThresholdKW so frequent overnight EV sessions at similar
-				// nighttime temperatures do not mask each other.
-				if tempRef > refLoad && (isDaytimeHVACHour || tempRef < EVMinThresholdKW) {
+				// Only allow temperature-matched reference to raise refLoad above EVMinThresholdKW during
+				// daytime HVAC hours or confirmed cold-heating/hot-cooling hours (excluding overnight hours
+				// already anchored down for frequent/configured EV charging so EV sessions do not mask each other).
+				allowElevatedTempRef := isDaytimeHVACHour ||
+					((isColdHeatingHour || isHotCoolingHour) && !(isNighttimeEVHour(hr) && anchoredOvernightEV[hr]))
+				if tempRef > refLoad && (allowElevatedTempRef || tempRef < EVMinThresholdKW) {
 					refLoad = tempRef
 				}
 			}
