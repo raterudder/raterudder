@@ -1522,6 +1522,10 @@ func (b *Tesla) computeTeslaModeTargets(
 		if b.settings.ManageTOUSchedules && sol == types.SolarModeExport {
 			plan.targetMode = "autonomous"
 		} else {
+			// we set the SOC to the minimum battery SOC to ensure we start discharging
+			// if we're somehow less than this soc, we'll charge from the solar, unless
+			// solar is unavailable then it'll charge from the grid
+			// it seems like this accepts an int value
 			plan.targetMode = "self_consumption"
 		}
 	case types.BatteryModeStandby:
@@ -1544,6 +1548,7 @@ func (b *Tesla) computeTeslaModeTargets(
 	if plan.newReserveSOC < 5 {
 		plan.newReserveSOC = 5
 	}
+	// if tesla overshot our reserve SOC by less than 1 percent, ignore it
 	if math.Abs(plan.newReserveSOC-plan.reserveSOC) <= 1.0 {
 		plan.newReserveSOC = plan.reserveSOC
 	}
@@ -1552,6 +1557,8 @@ func (b *Tesla) computeTeslaModeTargets(
 }
 
 func computeTeslaChargeTarget(ctx context.Context, opts types.ModesOptions, liveSOC float64) (string, float64) {
+	// if they want to charge the battery then set the SOC to 100 to force it to
+	// charge if its not charging already
 	targetSOC := 100
 	if opts.ChargeToSOC != 0 {
 		targetSOC = opts.ChargeToSOC
@@ -1583,7 +1590,9 @@ func (b *Tesla) computeTeslaStandbyTarget(
 	liveSOC float64,
 	targetAllowGridCharge bool,
 ) (string, float64, bool) {
-	// Floor the SOC so we don't set a value that forces charging, while respecting minSOC.
+	// we floor the SOC to ensure we don't set it to a value that would cause the
+	// battery to charge
+	// make sure we don't set it to less than the minimum battery SOC
 	newReserveSOC := max(math.Floor(liveSOC), minSOC)
 	if b.settings.ManageTOUSchedules && sol == types.SolarModeExport {
 		return "autonomous", newReserveSOC, targetAllowGridCharge
@@ -1616,6 +1625,8 @@ func (b *Tesla) applyTeslaAnomalyOverrides(
 	isMaxBackup := isMaxBackupCharging(siteInfo, liveStatus, batteryCount)
 
 	// Detect unexpected grid charging when in load or standby mode.
+	// If the hardware was already configured in self_consumption, SOC is above the configured reserve,
+	// and the battery is unexpectedly charging from the grid, log a warning and force re-posting reserve/mode settings.
 	unexpectedGridCharge := (bat == types.BatteryModeLoad || bat == types.BatteryModeStandby) &&
 		liveStatus.BatteryPowerW < -100 &&
 		(-liveStatus.BatteryPowerW)-liveStatus.SolarPowerW > 100
@@ -1646,6 +1657,9 @@ func (b *Tesla) applyTeslaAnomalyOverrides(
 	}
 
 	// Detect unexpected non-discharging when in load mode.
+	// If in BatteryModeLoad, hardware is configured in self_consumption, SOC is above configured reserve (+1%),
+	// home load is pulling from grid, but the battery is not discharging (> 100W),
+	// log a warning and force re-posting reserve/mode settings.
 	netUnservedLoadW := liveStatus.LoadPowerW - liveStatus.SolarPowerW
 	unexpectedNonDischarge := bat == types.BatteryModeLoad &&
 		liveStatus.BatteryPowerW <= 100 &&
@@ -1741,8 +1755,11 @@ func (b *Tesla) selectTeslaSolarAnyExportRule(schedule *types.TOUSchedule, siteI
 		return teslaExportRuleNever
 	}
 
-	// Switch to pv_only less than an hour ahead of an upcoming solar-only export period
-	// so the battery does not export when that ON_PEAK window begins.
+	// Since all planned export windows are included as ON_PEAK in the TOU schedule
+	// and we do not control the exact moment the Powerwall starts an ON_PEAK period
+	// (or our control loop may run slightly late), switch to pv_only less than an hour
+	// ahead of an upcoming solar-only export period so the battery does not export
+	// when that ON_PEAK window begins. There is no need to switch earlier than 1 hour ahead.
 	if hasUpcomingSolarOnlyExportWithinHour(schedule, now) {
 		return teslaExportRulePvOnly
 	}

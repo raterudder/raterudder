@@ -791,7 +791,9 @@ const ESSForm = ({
                                         {stageMessage}
                                     </div>
                                 )}
-                                {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => (
+                                {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => {
+                                    const isStage0LoginField = (cred.stage ?? 0) === 0 && (cred.required || cred.type === 'password');
+                                    return (
                                     <Field.Root key={cred.field} className="form-group">
                                         <Field.Label htmlFor={`ess-${cred.field}`}>{cred.name}</Field.Label>
                                         {cred.type === 'select' ? (
@@ -799,7 +801,7 @@ const ESSForm = ({
                                                 value={essCredentials[cred.field] || cred.default || ""}
                                                 disabled={isSaving || isStaging}
                                                 onValueChange={(value) => {
-                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                    if (isStage0LoginField && (currentStage > 0 || hasSavedCredentialsForRetry)) {
                                                         onStage0FieldChange?.();
                                                     }
                                                     setEssCredentials(prev => ({ ...prev, [cred.field]: value as string }));
@@ -836,7 +838,7 @@ const ESSForm = ({
                                                 disabled={isSaving || isStaging}
                                                 onChange={(e) => {
                                                     const nextVal = e.target.value;
-                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                    if (isStage0LoginField && (currentStage > 0 || hasSavedCredentialsForRetry)) {
                                                         onStage0FieldChange?.();
                                                     }
                                                     setEssCredentials(prev => ({ ...prev, [cred.field]: nextVal }));
@@ -847,7 +849,8 @@ const ESSForm = ({
                                         )}
                                         {cred.description && <Field.Description>{cred.description}</Field.Description>}
                                     </Field.Root>
-                                ))}
+                                    );
+                                })}
                                 {currentStage > 0 && maxStage > 0 && !hasSavedCredentialsForRetry && handleESSResendStage && (
                                     <div style={{ marginTop: '-0.25rem', marginBottom: '0.75rem' }}>
                                         <button
@@ -1079,6 +1082,7 @@ const Settings = ({
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
     const [isESSDirty, setIsESSDirty] = useState(false);
     const [savedCredentialsProviders, setSavedCredentialsProviders] = useState<Record<string, boolean>>({});
+    const [reconnectRequiredProviders, setReconnectRequiredProviders] = useState<Record<string, boolean>>({});
     const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
     const [essProviders, setEssProviders] = useState<ESSProviderInfo[]>([]);
     const [loadingLists, setLoadingLists] = useState(true);
@@ -1537,6 +1541,7 @@ const Settings = ({
         setIsConnectAIDialogOpen(false);
         setIsManualAppsOpen(false);
         setSavedCredentialsProviders({});
+        setReconnectRequiredProviders({});
         setStageMessage(null);
         setResendCooldownSeconds(0);
 
@@ -1715,6 +1720,7 @@ const Settings = ({
             setIsESSDirty(false);
             setEditESS(Boolean(restored.ess && !restored.hasCredentials?.[restored.ess]));
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setError(null);
@@ -1921,7 +1927,10 @@ const Settings = ({
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             const hasSavedCredentials = Boolean(
-                essProvider && savedCredentialsProviders[essProvider.id]
+                essProvider && (
+                    savedCredentialsProviders[essProvider.id] ||
+                    (settings.hasCredentials?.[essProvider.id] && !reconnectRequiredProviders[essProvider.id])
+                )
             );
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
@@ -1960,6 +1969,7 @@ const Settings = ({
                 setOauthStatus('idle');
             }
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
@@ -1994,6 +2004,7 @@ const Settings = ({
                 submittedESS &&
                 /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
             ) {
+                setReconnectRequiredProviders(prev => ({ ...prev, [submittedESS]: true }));
                 setSavedCredentialsProviders(prev => {
                     if (!prev[submittedESS]) return prev;
                     const next = { ...prev };
@@ -2025,6 +2036,7 @@ const Settings = ({
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
         }
         setSettings(prev => prev ? ({ ...prev, [field]: value }) : null);
     };
@@ -2080,7 +2092,10 @@ const Settings = ({
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             const hasSavedCredentials = Boolean(
-                essProvider && savedCredentialsProviders[essProvider.id]
+                essProvider && (
+                    savedCredentialsProviders[essProvider.id] ||
+                    (settings.hasCredentials?.[essProvider.id] && !reconnectRequiredProviders[essProvider.id])
+                )
             );
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
@@ -2104,6 +2119,7 @@ const Settings = ({
                 setOauthStatus('idle');
             }
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
@@ -2136,6 +2152,7 @@ const Settings = ({
                 submittedESS &&
                 /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
             ) {
+                setReconnectRequiredProviders(prev => ({ ...prev, [submittedESS]: true }));
                 setSavedCredentialsProviders(prev => {
                     if (!prev[submittedESS]) return prev;
                     const next = { ...prev };
@@ -2243,6 +2260,7 @@ const Settings = ({
             oauthListenerRef.current = null;
         }
 
+        const targetESS = settings?.ess;
         setOauthStatus('popup_open');
         setError(null);
 
@@ -2270,11 +2288,12 @@ const Settings = ({
                     ...prev,
                     [fieldName]: event.data.code
                 }));
-                if (settings?.ess) {
+                if (targetESS) {
+                    setReconnectRequiredProviders(prev => ({ ...prev, [targetESS]: true }));
                     setSavedCredentialsProviders(prev => {
-                        if (!prev[settings.ess]) return prev;
+                        if (!prev[targetESS]) return prev;
                         const next = { ...prev };
-                        delete next[settings.ess];
+                        delete next[targetESS];
                         return next;
                     });
                 }

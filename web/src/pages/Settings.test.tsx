@@ -1197,6 +1197,137 @@ describe('App & Settings', () => {
         windowOpenSpy.mockRestore();
     });
 
+    it('blocks Tesla reconnect retry from reusing the old account when new authCode exchange fails without credentialsSaved', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+        });
+
+        await navigateToSettings();
+
+        const editBtn = await screen.findByLabelText('Edit Energy Storage System');
+        await user.click(editBtn);
+
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'expired-reconnect-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
+        });
+
+        // Token exchange fails BEFORE credentialsSaved (old account tokens are still in storage)
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: authorization code is invalid'), { credentialsSaved: false })
+        );
+
+        const saveBtn = screen.getByText('Save Settings');
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText(/The authorization code expired\. Please click 'Login to link account' again/i)).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenCalledTimes(1);
+        expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            ess: 'tesla',
+        }), expect.any(String), {
+            tesla: {
+                authCode: 'expired-reconnect-code',
+            },
+        });
+
+        // Clicking Save Settings again without re-authenticating MUST NOT reuse hasCredentials.tesla on the old account
+        await user.click(saveBtn);
+        await waitFor(() => {
+            expect(screen.getByText('Login to connect your energy system.')).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenCalledTimes(1);
+
+        // Fresh login whose token exchange succeeds (credentialsSaved: true) before site verification fails CAN retry
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'fresh-reconnect-code', state: defaultAuthStatus.sites![0].id }
+            }));
+        });
+
+        (updateSettings as any).mockRejectedValueOnce(
+            Object.assign(new Error('failed to verify ess credentials: upstream status 503'), { credentialsSaved: true })
+        );
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('failed to verify ess credentials: upstream status 503')).toBeInTheDocument();
+            expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenCalledTimes(2);
+
+        // Opening another OAuth popup and cancelling/closing it without receiving a new code must NOT erase saved-token retry state
+        await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: {
+                    type: 'OAUTH_ERROR',
+                    error: 'access_denied',
+                    state: defaultAuthStatus.sites![0].id,
+                }
+            }));
+        });
+        await waitFor(() => {
+            expect(screen.getByText(/Authorization was cancelled or permissions were not granted/i)).toBeInTheDocument();
+            expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
+        });
+
+        // Also verify closing the popup directly without receiving a new code preserves retry state
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            mockPopup.closed = false;
+            await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+            mockPopup.closed = true;
+            act(() => {
+                vi.advanceTimersByTime(600);
+            });
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /Login to link account/i })).not.toBeDisabled();
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // Editing an optional non-login field (e.g. serialNumber / energySiteID) after credentialsSaved: true must NOT require another login
+        const optionalSiteInput = screen.getByLabelText(/Energy Site ID \(Optional\)/i);
+        await user.type(optionalSiteInput, 'TG-SERIAL-42');
+        expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
+
+        (updateSettings as any).mockResolvedValueOnce(undefined);
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+        });
+        expect(updateSettings).toHaveBeenCalledTimes(3);
+        expect(updateSettings).toHaveBeenNthCalledWith(3, expect.objectContaining({
+            ess: 'tesla',
+        }), expect.any(String), {
+            tesla: {
+                energySiteID: 'TG-SERIAL-42',
+            },
+        });
+
+        windowOpenSpy.mockRestore();
+    });
+
     it('handles Tesla OAuth permission rejection cleanly so user can immediately retry', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({

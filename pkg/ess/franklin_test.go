@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -5517,6 +5518,14 @@ func TestFranklin(t *testing.T) {
 		var saveDispatchCalls int
 		var getDetailCalls int
 		var updateSocCalls int
+		var sleptDurations []time.Duration
+		var seqMu sync.Mutex
+		var callSequence []string
+		recordCall := func(step string) {
+			seqMu.Lock()
+			callSequence = append(callSequence, step)
+			seqMu.Unlock()
+		}
 		currentReserveSOC := 20.0
 
 		sched := &types.TOUSchedule{
@@ -5588,9 +5597,11 @@ func TestFranklin(t *testing.T) {
 				})
 			case "/hes-gateway/terminal/tou/saveTouDispatch":
 				saveDispatchCalls++
+				recordCall("saveTouDispatch")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 			case "/hes-gateway/terminal/tou/updateSocV2":
 				updateSocCalls++
+				recordCall("updateSocV2")
 				require.NoError(t, r.ParseForm())
 				if r.Form.Get("soc") == "100" {
 					currentReserveSOC = 100.0
@@ -5599,6 +5610,7 @@ func TestFranklin(t *testing.T) {
 				}
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 			case "/hes-gateway/terminal/tou/updateTouModeV2":
+				recordCall("updateTouModeV2")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 			default:
 				http.Error(w, "not found: "+r.URL.Path, 404)
@@ -5613,6 +5625,11 @@ func TestFranklin(t *testing.T) {
 			md5Password:      "p",
 			gatewayID:        "g",
 			touDispatchDelay: 25 * time.Millisecond,
+			sleepFunc: func(ctx context.Context, d time.Duration) error {
+				sleptDurations = append(sleptDurations, d)
+				recordCall("sleep")
+				return nil
+			},
 		}
 		require.NoError(t, f.ApplySettings(context.Background(), types.Settings{
 			ManageTOUSchedules:  true,
@@ -5674,6 +5691,10 @@ func TestFranklin(t *testing.T) {
 
 		// 5. Transition to export (SolarModeExport) when schedule changes:
 		// Saves new TOU schedule and waits touDispatchDelay before calling updateTouModeV2.
+		assert.Empty(t, sleptDurations, "should not wait touDispatchDelay when mode/SOC did not follow saveTouDispatch")
+		seqMu.Lock()
+		callSequence = nil
+		seqMu.Unlock()
 		exportSched := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 17, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
@@ -5681,14 +5702,24 @@ func TestFranklin(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 			},
 		}
-		startExport := time.Now()
 		changed, err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
 			Schedule: exportSched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 2, saveDispatchCalls)
-		assert.GreaterOrEqual(t, time.Since(startExport), f.touDispatchDelay, "should wait touDispatchDelay after saving TOU schedule before switching mode")
+		assert.Equal(t, []time.Duration{f.touDispatchDelay}, sleptDurations, "should wait touDispatchDelay after saving TOU schedule before switching mode")
+		seqMu.Lock()
+		gotSeq := append([]string(nil), callSequence...)
+		seqMu.Unlock()
+		assert.Equal(t, []string{"saveTouDispatch", "sleep", "updateTouModeV2"}, gotSeq, "should wait touDispatchDelay strictly between saveTouDispatch and updateTouModeV2")
+
+		// Verify default sleep helper honors both timer completion and context cancellation.
+		defaultFranklin := &Franklin{}
+		require.NoError(t, defaultFranklin.sleep(context.Background(), time.Millisecond))
+		cancelCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		assert.ErrorIs(t, defaultFranklin.sleep(cancelCtx, time.Second), context.Canceled)
 	})
 
 	t.Run("SetModes Stores Export Dispatches And Keeps NonExport On SelfConsumption", func(t *testing.T) {

@@ -3127,11 +3127,59 @@ func TestHandleUpdateSettings(t *testing.T) {
 			CustomGridSettings:       true,
 			EncryptedCredentials:     encExisting,
 		}
-		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
-
 		mockTesla.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESS == "tesla"
 		})).Return(nil)
+
+		// Attempt 0: Failed AuthCode exchange (credsUpdated=false) omits credentialsSaved and preserves existing encrypted credentials.
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockTesla.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Tesla != nil &&
+				c.Tesla.AuthCode == "expired-oauth-code" &&
+				c.Tesla.EnergySiteID == 0 &&
+				c.Tesla.SerialNumber == "" &&
+				c.Tesla.AccessToken == "" &&
+				c.Tesla.RefreshToken == ""
+		})).Return(types.Credentials{}, false, fmt.Errorf("authorization code is invalid")).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "tesla" &&
+				bytes.Equal(s.EncryptedCredentials, encExisting) &&
+				s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		reqBody0, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "tesla",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode: "expired-oauth-code",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		req0 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(reqBody0)), "admin@example.com", true)
+		w0 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w0, req0)
+		assert.Equal(t, http.StatusBadRequest, w0.Result().StatusCode)
+		var errResp0 struct {
+			Error            string `json:"error"`
+			CredentialsSaved bool   `json:"credentialsSaved"`
+		}
+		require.NoError(t, json.NewDecoder(w0.Body).Decode(&errResp0))
+		assert.Contains(t, errResp0.Error, "authorization code is invalid")
+		assert.False(t, errResp0.CredentialsSaved)
+
+		existingSettings.ESSAuthStatus.ConsecutiveFailures = 1
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		// Attempt 1: Fresh OAuth AuthCode without SerialNumber must clear old EnergySiteID/SerialNumber/tokens so Authenticate discovers site 22222.
 		redeemedTesla := types.Credentials{
@@ -3153,7 +3201,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		var savedOnFailure types.Settings
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			savedOnFailure = s
-			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 1
+			return s.ESS == "tesla" && s.ESSAuthStatus.ConsecutiveFailures == 2
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		reqBody1, err := json.Marshal(struct {
@@ -3445,7 +3493,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}, true, nil).Once()
 
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Twice()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "enphase" && s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Twice()
 
 		reqOTP, err := json.Marshal(struct {
 			types.Settings

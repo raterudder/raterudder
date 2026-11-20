@@ -58,6 +58,8 @@ type Franklin struct {
 
 	// delay after saveTouDispatch before updating reserve SOC or switching modes
 	touDispatchDelay time.Duration
+
+	sleepFunc func(context.Context, time.Duration) error
 }
 
 type franklinWorkMode int
@@ -582,10 +584,8 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 					attrs...,
 				)
 			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return franklinDeviceCompositeInfoResult{}, ctx.Err()
+			if err := f.sleep(ctx, delay); err != nil {
+				return franklinDeviceCompositeInfoResult{}, err
 			}
 		}
 	}
@@ -1497,6 +1497,18 @@ func (f *Franklin) now() time.Time {
 	return now
 }
 
+func (f *Franklin) sleep(ctx context.Context, d time.Duration) error {
+	if f.sleepFunc != nil {
+		return f.sleepFunc(ctx, d)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUSchedule, now time.Time) bool {
 	if sched == nil || len(sched.Periods) == 0 {
 		return false
@@ -1737,8 +1749,9 @@ func (f *Franklin) syncFranklinTOUIfNeeded(
 	plan *franklinModePlan,
 ) (bool, error) {
 	// When not exporting, skip TOU schedule updates if we are actively changing the
-	// operating mode or reserve SOC so saveTouDispatch never reloads the gateway's
-	// dispatch package in the same cycle as an active mode or reserve SOC update.
+	// operating mode or reserve SOC (e.g. starting/stopping a charge or entering standby)
+	// so saveTouDispatch never reloads the gateway's dispatch package in the same cycle
+	// as an active mode or reserve SOC update.
 	shouldCheck := f.settings.ManageTOUSchedules && opts.Schedule != nil && (plan.needsExport || (!plan.modeChanged && !plan.socChanged))
 	if !shouldCheck {
 		return false, nil
@@ -1822,6 +1835,7 @@ func (f *Franklin) provisionMissingTOUMode(
 	if math.Abs(plan.newReserveSOC-plan.targetMode.ReserveSOC) <= 1.0 {
 		plan.newReserveSOC = plan.targetMode.ReserveSOC
 	}
+	// we know it changed because we just created tou mode
 	plan.modeChanged = true
 	plan.socChanged = math.Round(plan.newReserveSOC) != math.Round(plan.targetMode.ReserveSOC)
 	return nil
@@ -1852,10 +1866,8 @@ func (f *Franklin) applyFranklinModeUpdates(
 			"waiting after saving franklin tou schedule before updating mode/soc",
 			slog.Duration("delay", f.touDispatchDelay),
 		)
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-time.After(f.touDispatchDelay):
+		if err := f.sleep(ctx, f.touDispatchDelay); err != nil {
+			return false, err
 		}
 	}
 
