@@ -175,16 +175,16 @@ const ForecastChart = React.memo(function ForecastChart({
     timeZone,
 }: ForecastChartProps) {
     const dataTimestampsMs = useMemo(
-        () => data.map((d) => new Date(d.ts).getTime()),
-        [data]
+        () => (showCurrentTime && data.length > 0 ? data.map((d) => new Date(d.ts).getTime()) : null),
+        [data, showCurrentTime]
     );
 
     const currentTimeStr = useMemo(() => {
-        if (!showCurrentTime || data.length === 0) return undefined;
+        if (!dataTimestampsMs) return undefined;
         // find closest hour in data
         let closest = data[0].ts;
         let minDiff = Infinity;
-        for (let i = 0; i < data.length; i++) {
+        for (let i = 0; i < dataTimestampsMs.length; i++) {
             const diff = Math.abs(dataTimestampsMs[i] - nowMs);
             if (diff < minDiff) {
                 minDiff = diff;
@@ -192,7 +192,7 @@ const ForecastChart = React.memo(function ForecastChart({
             }
         }
         return closest;
-    }, [data, dataTimestampsMs, showCurrentTime, nowMs]);
+    }, [data, dataTimestampsMs, nowMs]);
 
     const firstTs = data[0]?.ts;
     const isDollarUnit = config.unit.includes('$');

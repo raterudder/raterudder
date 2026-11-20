@@ -278,7 +278,14 @@ const History: React.FC<{ siteID?: string; settings?: SettingsType | null }> = (
                     return { point, timeMs: eTime };
                 });
 
-                mergedWithTime.sort((a, b) => a.timeMs - b.timeMs);
+                mergedWithTime.sort((a, b) => {
+                    const aInvalid = isNaN(a.timeMs);
+                    const bInvalid = isNaN(b.timeMs);
+                    if (aInvalid || bInvalid) {
+                        return aInvalid === bInvalid ? 0 : aInvalid ? 1 : -1;
+                    }
+                    return a.timeMs - b.timeMs;
+                });
                 setData(mergedWithTime.map((entry) => entry.point));
             } catch (err) {
                 if (!isCancelled) {

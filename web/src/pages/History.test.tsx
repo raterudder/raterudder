@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
@@ -7,7 +8,47 @@ import * as api from '../api';
 
 const { fetchHistoryEnergy, fetchSettings } = api;
 
+const { capturedAreaCharts } = vi.hoisted(() => ({
+    capturedAreaCharts: [] as Array<{ data?: any[]; syncId?: string }>,
+}));
+
 vi.mock('../api');
+
+vi.mock('recharts', async () => {
+    const OriginalModule = await vi.importActual('recharts');
+    return {
+        ...OriginalModule,
+        ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
+            <div className="recharts-responsive-container" style={{ width: 800, height: 800 }}>
+                {children}
+            </div>
+        ),
+        AreaChart: ({
+            data,
+            syncId,
+            children,
+        }: {
+            data?: any[];
+            syncId?: string;
+            children?: React.ReactNode;
+        }) => {
+            capturedAreaCharts.push({ data, syncId });
+            return (
+                <div data-testid="area-chart">
+                    {React.Children.toArray(children).filter(
+                        (child: any) => child && child.type !== 'defs'
+                    )}
+                </div>
+            );
+        },
+        Area: () => <div data-testid="area" />,
+        Line: () => <div data-testid="line" />,
+        XAxis: () => <div data-testid="x-axis" />,
+        YAxis: () => <div data-testid="y-axis" />,
+        CartesianGrid: () => <div data-testid="cartesian-grid" />,
+        Tooltip: () => <div data-testid="tooltip" />,
+    };
+});
 
 const renderWithRouter = (component: React.ReactNode) => {
     return render(
@@ -20,6 +61,7 @@ const renderWithRouter = (component: React.ReactNode) => {
 describe('History', () => {
     beforeEach(() => {
         window.history.replaceState({}, '', '/history');
+        capturedAreaCharts.length = 0;
         vi.resetAllMocks();
     });
 
@@ -116,19 +158,19 @@ describe('History', () => {
                     gridExportKWH: 0.85,
                 },
                 {
-                    tsHourStart: '2023-10-27T10:00:00Z',
-                    maxBatterySOC: 75,
-                    solarKWH: 2.0,
-                    homeKWH: 1.15,
-                    gridImportKWH: 0.4,
-                    gridExportKWH: 0,
-                },
-                {
                     tsHourStart: 'invalid-energy-ts',
                     maxBatterySOC: 70,
                     solarKWH: 0,
                     homeKWH: 0.5,
                     gridImportKWH: 0.5,
+                    gridExportKWH: 0,
+                },
+                {
+                    tsHourStart: '2023-10-27T10:00:00Z',
+                    maxBatterySOC: 75,
+                    solarKWH: 2.0,
+                    homeKWH: 1.15,
+                    gridImportKWH: 0.4,
                     gridExportKWH: 0,
                 },
             ],
@@ -159,6 +201,49 @@ describe('History', () => {
         expect(firstMatchIrradianceReads).toBe(1);
         expect(duplicateIrradianceReads).toBe(0);
         expect(invalidWeatherReads).toBe(0);
+
+        expect(capturedAreaCharts).toHaveLength(5);
+        const chartData = capturedAreaCharts[0].data;
+        for (const chart of capturedAreaCharts) {
+            expect(chart.syncId).toBe('history');
+            expect(chart.data).toBe(chartData);
+        }
+
+        expect(chartData).toEqual([
+            {
+                tsHourStart: '2023-10-27T10:00:00Z',
+                maxBatterySOC: 75,
+                solarKWH: 2.0,
+                homeKWH: 1.1,
+                gridImportKWH: 0.4,
+                gridExportKWH: 0,
+                irradiance: 480,
+                improvedSolarGeneration: 2.1,
+                improvedHomeLoad: 1.2,
+            },
+            {
+                tsHourStart: '2023-10-27T12:00:00Z',
+                maxBatterySOC: 90,
+                solarKWH: 3.1,
+                homeKWH: 1.4,
+                gridImportKWH: 0.1,
+                gridExportKWH: 0.8,
+                irradiance: 620,
+                improvedSolarGeneration: 3.0,
+                improvedHomeLoad: 1.3,
+            },
+            {
+                tsHourStart: 'invalid-energy-ts',
+                maxBatterySOC: 70,
+                solarKWH: 0,
+                homeKWH: 0.5,
+                gridImportKWH: 0.5,
+                gridExportKWH: 0,
+                irradiance: undefined,
+                improvedSolarGeneration: undefined,
+                improvedHomeLoad: undefined,
+            },
+        ]);
     });
 
     it('renders error message on fetch failure', async () => {

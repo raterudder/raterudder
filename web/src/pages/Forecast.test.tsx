@@ -383,6 +383,89 @@ describe('Forecast Page', () => {
         expect(invalidPriceReads).toBe(0);
     });
 
+    it('skips ForecastChart timestamp parsing when Show Previous 24 Hours is off and computes Now when enabled', async () => {
+        const user = userEvent.setup();
+        const plan = makeTestPlan();
+        const sentinelTs = '2026-02-11T16:00:00.123Z';
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            futurePrices: [
+                {
+                    tsHourStart: '2026-02-11T14:00:00Z',
+                    dollarsPerKWH: 0.10,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.05,
+                },
+                {
+                    tsHourStart: sentinelTs,
+                    dollarsPerKWH: 0.18,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.06,
+                },
+                {
+                    tsHourStart: '2026-02-11T17:00:00Z',
+                    dollarsPerKWH: 0.22,
+                    gridUseDollarsPerKWH: 0.02,
+                    exportDollarsPerKWH: 0.07,
+                },
+            ],
+            energyHistory: [
+                {
+                    tsHourStart: '2026-02-11T13:00:00Z',
+                    avgBatterySOC: 44,
+                    solarKWH: 1.2,
+                    homeLoadKWH: 0.9,
+                },
+            ],
+            priceHistory: [
+                {
+                    tsHourStart: '2026-02-11T13:00:00Z',
+                    dollarsPerKWH: 0.12,
+                    gridUseDollarsPerKWH: 0.02,
+                },
+            ],
+            weather: [],
+        });
+
+        const OriginalDate = globalThis.Date;
+        let sentinelParseCount = 0;
+        const DateProxy = new Proxy(OriginalDate, {
+            construct(target, args, newTarget) {
+                if (args[0] === sentinelTs) {
+                    sentinelParseCount++;
+                }
+                return Reflect.construct(target, args, newTarget);
+            },
+            apply(target, thisArg, args) {
+                return Reflect.apply(target, thisArg, args);
+            },
+        });
+        globalThis.Date = DateProxy as DateConstructor;
+
+        try {
+            renderForecast({ settings: { location: { timeZone: 'America/Chicago' } } });
+
+            await waitFor(() => {
+                expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            });
+
+            // While Show Previous 24 Hours is off, sentinelTs is parsed only once in buildPlanPriceSeries
+            // and never parsed inside ForecastChart for currentTimeStr.
+            expect(screen.queryAllByText('Now')).toHaveLength(0);
+            expect(sentinelParseCount).toBe(1);
+
+            const toggle = screen.getByRole('switch', { name: /Show Previous 24 Hours/i });
+            await user.click(toggle);
+
+            expect(toggle).toBeChecked();
+            expect(screen.getAllByText('Now')).toHaveLength(3);
+            expect(sentinelParseCount).toBe(3);
+        } finally {
+            globalThis.Date = OriginalDate;
+        }
+    });
+
     it('snaps sub-hourly 20-minute hover labels to hourly ticks and caches parsed ticks in syncByTimestamp', () => {
         let valueReads = 0;
         const hourlyIsos = [
