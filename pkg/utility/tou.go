@@ -962,21 +962,22 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		//   - https://mvea.coop/wp-content/uploads/2026/08/16.02-RESIDENTIAL-TIME-OF-DAY-RATE.pdf
 		//   - https://mvea.coop/wp-content/uploads/2026/08/16.05-RESIDENTIAL-PREPAID-RATE.pdf
 		//   - https://mvea.coop/wp-content/uploads/2026/11/16.06-RESIDENTIAL-NET-METERING-DEMAND-RATE_RM-final-v2.pdf
+		//   - https://mvea.coop/wp-content/uploads/2026/11/16.08-RESIDENTIAL-NET-METERING-TOD-RATE_rm_v2.pdf
 		//   - MVEA General Rules and Regulations: 16.01 Residential Demand Rate, 16.02 Residential Time-of-Day Rate, 16.05 Residential Prepaid Rate, 16.06 Residential Net Metering Demand Rate, 16.08 Residential Net Metering TOD Rate (Effective October 1, 2026)
 		// - Effective Window: 2026-01-01 through until superseded (Jan-Sep 2026 pre-revision baseline preserved; October 1, 2026 tariff revision applied from 2026-10-01 through 2027-12-31)
 		// - Revision Cadence: Annual (Cooperative Board General Rules & Regulations rate updates)
 		// - Next Audit Due: 2027-09-01 (Check MVEA General Rules & Regulations for annual October residential rate adjustments)
 		// - Last Verified: 2026-11-20
-		// - Modeling Notes: Preserves Jan-Sep 2026 pre-revision periods intact and applies MVEA's October 1, 2026 tariff revision starting 2026-10-01 through 2027-12-31: 16.01/16.06 volumetric energy rate $0.11269/kWh (excludes $39.50/mo Grid Access and $2.00/kW weekday demand charge; 1:1 net metering under 16.06) and 16.02 (legacy ID mvea_16_05; 16.05 is now Prepaid) volumetric TOD energy rates ($0.34500/kWh Mon-Fri 5-9 PM excl. 6 calendar holidays without weekend shifting, $0.08625/kWh Off-Peak; $0.00/kWh export credit on non-net-metered TOD/Prepaid).
+		// - Modeling Notes: Preserves Jan-Sep 2026 pre-revision periods intact and applies MVEA's October 1, 2026 tariff revision starting 2026-10-01 through 2027-12-31: 16.01/16.06 volumetric energy rate $0.11269/kWh (excludes $39.50/mo Grid Access and $2.00/kW weekday demand charge; 1:1 net metering under 16.06) and 16.02/16.08 (legacy ID mvea_16_05; 16.05 is now Prepaid) volumetric TOD energy rates ($0.34500/kWh Mon-Fri 5-9 PM excl. 6 calendar holidays without weekend shifting, $0.08625/kWh Off-Peak; selectable netMeteringScheme between "none" $0.00/kWh export credit on 16.02/16.05 and "tou_net" 1:1 TOU period kWh credit bank under 16.08).
 		{
 			ID:   "mvea",
 			Name: "Mountain View Electric Association (MVEA)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "mvea_16_01",
-					Name: "Residential Rate (16.01)",
+					Name: "Residential Demand Rate (16.01 / 16.06)",
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						// Rate 16.01: Flat Residential Rate
+						// Rate 16.01 / 16.06: Flat Residential Demand / Net Metering Demand Rate
 						// Jan-Sep 2026: $0.12475/kWh; Oct 1, 2026+ (eff. Oct 1, 2026 tariff): $0.11269/kWh
 						return buildPeriods(mtLocation, []touSimplifiedPeriod{
 							{
@@ -1005,9 +1006,22 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 				{
 					ID:   "mvea_16_05",
-					Name: "Residential Time of Day Rate (16.02 / 16.05)",
+					Name: "Residential Time of Day Rate (16.02 / 16.08)",
+					Options: []types.UtilityRateOption{
+						{
+							Field:       "netMeteringScheme",
+							Name:        "Net Metering",
+							Type:        types.UtilityOptionTypeSelect,
+							Description: "Select 16.08 Net Metering TOD if enrolled in MVEA's Residential Net Metering Time-of-Day tariff (separate On-Peak and Off-Peak 1:1 kWh credit banks), or Standard TOD (16.02 / 16.05) if no export credit applies.",
+							Default:     "none",
+							Choices: []types.UtilityOptionChoice{
+								{Value: "none", Name: "Standard TOD - No Export Credit (16.02 / 16.05)"},
+								{Value: "tou_net", Name: "Net Metering TOD - 1:1 TOU Credit Bank (16.08)"},
+							},
+						},
+					},
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						// Rate 16.02 (legacy ID mvea_16_05; 16.05 is now Residential Prepaid): Residential Time-of-Day Service Rate
+						// Rate 16.02 / 16.08 (legacy ID mvea_16_05; 16.05 is now Residential Prepaid): Residential Time-of-Day Service Rate
 						// Jan-Sep 2026: On-Peak Mon-Sat 5-9 PM $0.32371/kWh, Off-Peak $0.08346/kWh
 						// Oct 1, 2026+ (eff. Oct 1, 2026 tariff): On-Peak Mon-Fri 5-9 PM (excl. 6 calendar holidays) $0.34500/kWh, Off-Peak $0.08625/kWh
 						peakHours := []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}}
@@ -1023,7 +1037,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 						}
 						holidays2026 := mveaHolidays(2026)
 						holidays2027 := mveaHolidays(2027)
-						return buildPeriods(mtLocation, []touSimplifiedPeriod{
+						periods := []touSimplifiedPeriod{
 							{
 								Year:       2026,
 								MonthStart: time.January,
@@ -1104,27 +1118,42 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								OtherDollarsPerKWH: 0.08625,
 								OtherDescription:   "MVEA 16.02 Off-Peak",
 							},
+						}
 
-							// Export credits:
-							// TOD rate customers do not get any export rate credit.
-							// We model this by setting SeparateGenerationCredit to true and DollarsPerKWH to 0.00.
-							{
-								Year:                               2026,
-								MonthStart:                         time.January,
-								MonthEnd:                           time.December,
-								OnlySeparateGenerationCredit:       true,
-								OtherGenerationCreditDollarsPerKWH: 0.00,
-								OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
-							},
-							{
-								Year:                               2027,
-								MonthStart:                         time.January,
-								MonthEnd:                           time.December,
-								OnlySeparateGenerationCredit:       true,
-								OtherGenerationCreditDollarsPerKWH: 0.00,
-								OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
-							},
-						}), nil
+						// Export credits:
+						// Prior to October 1, 2026, legacy Schedule 16.05 TOD had no export credit ($0.00/kWh).
+						// Starting October 1, 2026, Standard TOD (16.02 / 16.05) still has $0.00/kWh export credit,
+						// while Schedule 16.08 (Residential Net Metering TOD, netMeteringScheme == "tou_net")
+						// banks On-Peak and Off-Peak kWh exports separately to offset consumption in the same TOU period.
+						periods = append(periods, touSimplifiedPeriod{
+							Year:                               2026,
+							MonthStart:                         time.January,
+							MonthEnd:                           time.September,
+							OnlySeparateGenerationCredit:       true,
+							OtherGenerationCreditDollarsPerKWH: 0.00,
+							OtherDescription:                   "MVEA 16.05 Export Credit (No Export Credit allowed on TOD)",
+						})
+						if opts.NetMeteringScheme != "tou_net" {
+							periods = append(periods,
+								touSimplifiedPeriod{
+									Year:                               2026,
+									MonthStart:                         time.October,
+									MonthEnd:                           time.December,
+									OnlySeparateGenerationCredit:       true,
+									OtherGenerationCreditDollarsPerKWH: 0.00,
+									OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
+								},
+								touSimplifiedPeriod{
+									Year:                               2027,
+									MonthStart:                         time.January,
+									MonthEnd:                           time.December,
+									OnlySeparateGenerationCredit:       true,
+									OtherGenerationCreditDollarsPerKWH: 0.00,
+									OtherDescription:                   "MVEA 16.02/16.05 Export Credit (No Export Credit allowed on TOD)",
+								},
+							)
+						}
+						return buildPeriods(mtLocation, periods), nil
 					},
 				},
 			},

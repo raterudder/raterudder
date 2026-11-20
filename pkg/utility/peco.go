@@ -6,8 +6,9 @@ package utility
 //   - https://www.peco.com/my-account/my-dashboard/rates-tariffs/electric-service/current-electric
 //   - https://www.peco.com/cdn/assets/v3/assets/blt1b5616c79bacadb4/bltc70b88d49d2a1491/6abbe397d463362a37c0f102/Current_Electric_tariff_eff_Oct_1_2026_(003).pdf?branch=prod_alias
 //   - https://www.peco.com/my-account/my-dashboard/rates-tariffs/electric-service/proposed-electric
-//   - https://azure-na-assets.contentstack.com/v3/assets/blt1b5616c79bacadb4/bltf0a3b82010822345/6af61350a4c7f761ffba775c/TSC_Supp_no._40_eff_December_1_2026_clean.pdf
-//   - Tariff Electric Pa. P.U.C. No. 8: Docket No. P-2024-3046008 (Dec 1, 2026 - May 31, 2027 GSA Class 1 & TOU), Supplement No. 25 (4th Rev. Pages 37-39 GSA Class 1), Supplement No. 27 (3rd Rev. Page 46 TSC), Supplement No. 32 (14th Rev. Pages 52-53 Rate R/RH), Supplement No. 40 (4th Rev. Page 46 TSC eff. Dec 1, 2026), Rate RS-2 Net Metering (Pages 54-56)
+//   - https://www.puc.pa.gov/pcdocs/1954821.pdf (Supplement No. 39 to Tariff Electric Pa. P.U.C. No. 8, Docket Nos. M-2026-3065967 / P-2024-3046008, 5th Rev. Pages 37-39 GSA Class 1 & TOU eff. Dec 1, 2026 - May 31, 2027)
+//   - https://www.puc.pa.gov/pcdocs/1960168.pdf & https://azure-na-assets.contentstack.com/v3/assets/blt1b5616c79bacadb4/bltf0a3b82010822345/6af61350a4c7f761ffba775c/TSC_Supp_no._40_eff_December_1_2026_clean.pdf (Supplement No. 40, Docket No. M-2026-3066560, 4th Rev. Page 46 TSC eff. Dec 1, 2026)
+//   - Tariff Electric Pa. P.U.C. No. 8: Supplement No. 25 (4th Rev. Pages 37-39 GSA Class 1), Supplement No. 27 (3rd Rev. Page 46 TSC), Supplement No. 32 (14th Rev. Pages 52-53 Rate R/RH), Supplement No. 39 (5th Rev. Pages 37-39 GSA Class 1 & TOU eff. Dec 1, 2026), Supplement No. 40 (4th Rev. Page 46 TSC eff. Dec 1, 2026, superseding 3rd Rev. Page 46), Rate RS-2 Net Metering (Pages 54-56)
 // - Effective Window: 2025-12-01 through 2027-12-31 (Dec 1, 2026 GSA Class 1 & TOU + Supplement No. 40 TSC $0.00995/kWh effective 2026-12-01 through 2027-05-31, carried through 2027-12-31 until superseded)
 // - Revision Cadence: Semi-Annual (June 1 and December 1 for GSA Procurement Class 1 and TSC; quarterly distribution/GSA reconciliations as filed)
 // - Next Audit Due: 2027-05-15 (Check June 1, 2027 semi-annual GSA Procurement Class 1 and TSC filings for Rate R/RH and Residential TOU)
