@@ -884,11 +884,17 @@ func expandBlockAction(
 			testState, _ = stepPhysics(testState, cand, timeline[k], settings, effRT)
 		}
 		effectiveTarget := min(choice.targetSOC, testState.soc)
+		inReserveDeficit := startState.soc < block.minSOC-reserveDeficitChargeTolerancePct
+		chargingDisabled := startState.chargingDisabled || currentStatus.BatteryChargingDisabled
 
 		// If the battery enters the block already at or above effectiveTarget (e.g. after prior solar gain
 		// or when Pass 2 tests a lower targetSOC candidate) or if charging is disabled so no SOC can be
-		// added, no ChargeAny intervals are needed; hold the block in Standby.
-		if effectiveTarget <= startState.soc+socTargetTolerancePct {
+		// added, no ChargeAny intervals are needed; hold the block in Standby. During an active reserve
+		// deficit with grid charging enabled, keep ChargeAny active even if grid import caps prevent
+		// testState.soc from rising.
+		if chargingDisabled || (inReserveDeficit && !settings.GridChargeBatteries) ||
+			(effectiveTarget <= startState.soc+socTargetTolerancePct &&
+				(!inReserveDeficit || !settings.GridChargeBatteries || choice.targetSOC <= startState.soc+socTargetTolerancePct)) {
 			for i := 0; i < L; i++ {
 				actions[i] = actionCandidate{batteryMode: types.BatteryModeStandby, solarMode: defaultSolarMode}
 			}
@@ -903,7 +909,6 @@ func expandBlockAction(
 		chosenTarget := max(effectiveTarget, min(choice.targetSOC, block.minSOC))
 
 		isContinuingCharge := block.startIdx == 0 && lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
-		inReserveDeficit := startState.soc < block.minSOC-reserveDeficitChargeTolerancePct
 		hasVPPAhead := false
 		for _, vpp := range vppEvents {
 			if vpp.eventStart.After(timeline[block.startIdx].startTime) {
@@ -960,6 +965,7 @@ func expandBlockAction(
 			st := startState
 			peakReached := st.soc
 			windowEndSOC := effectiveTarget
+			windowReachedReserve := !inReserveDeficit
 			for k := block.startIdx; k <= block.endIdx; k++ {
 				cand := actionCandidate{batteryMode: types.BatteryModeStandby, solarMode: defaultSolarMode}
 				if k >= bestStart && k < bestStart+K {
@@ -968,13 +974,14 @@ func expandBlockAction(
 				st, _ = stepPhysics(st, cand, timeline[k], settings, effRT)
 				if k == bestStart+K-1 {
 					windowEndSOC = min(effectiveTarget, st.soc)
+					windowReachedReserve = st.soc >= block.minSOC-reserveDeficitChargeTolerancePct
 				}
 				if st.soc > peakReached {
 					peakReached = st.soc
 				}
 			}
 			// if we already hit 100 then there's no need to keep finding a longer window
-			if windowEndSOC >= effectiveTarget-socTargetTolerancePct || peakReached >= 100.0-socTargetTolerancePct {
+			if windowReachedReserve && (windowEndSOC >= effectiveTarget-socTargetTolerancePct || peakReached >= 100.0-socTargetTolerancePct) {
 				chosenK = K
 				chosenStart = bestStart
 				chosenTarget = max(windowEndSOC, min(choice.targetSOC, block.minSOC))
@@ -1147,9 +1154,9 @@ func isBlockActionAllowed(
 			return false
 		}
 		isContinuingCharge := blockIdx == 0 && lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
-		almostFullLimit := almostFullSOC
+		almostFullLimit := max(almostFullSOC, block.minSOC-reserveDeficitChargeTolerancePct)
 		if hasVPPAhead || isContinuingCharge {
-			almostFullLimit = vppMinFullCapacitySOC
+			almostFullLimit = max(almostFullLimit, vppMinFullCapacitySOC)
 		}
 		if (blockIdx == 0 || block.minImportRate >= 0) &&
 			(startState.soc >= almostFullLimit || cand.targetSOC <= startState.soc+socTargetTolerancePct) {
@@ -1645,7 +1652,7 @@ func validateCandidateTrajectory(
 	// Whenever grid charging is enabled and an interval i starts and ends below its active reserve floor
 	// (timeline[i].minSOC - reserveDeficitChargeTolerancePct), the plan must actively charge (BatteryModeChargeAny)
 	// in that interval unless:
-	//   (a) Step i is controlled by a hard override (EVChargingStandby, VPPActive, VPPPrep), or
+	//   (a) Step i is controlled by a hard override (GridUnavailable, EVChargingStandby, VPPActive, VPPPrep), or
 	//   (b) No grid charge has occurred yet (firstChargeIdx == -1 || i < firstChargeIdx) and either charging
 	//       begins within chargeCompletionBufferDuration of deficitStartIdx (respecting initialDeficitWait when
 	//       the deficit started at step 0) or solar recovers timeline[i].minSOC within 2*chargeCompletionBufferDuration
@@ -1661,10 +1668,7 @@ func validateCandidateTrajectory(
 				deficitStartIdx = -1
 				continue
 			}
-			if actions[i].batteryMode == types.BatteryModeChargeAny ||
-				actions[i].reason == types.ActionReasonEVChargingStandby ||
-				actions[i].reason == types.ActionReasonVPPActive ||
-				actions[i].reason == types.ActionReasonVPPPrep {
+			if isReserveDeficitExemptAction(actions[i]) {
 				deficitStartIdx = -1
 				continue
 			}
@@ -1676,23 +1680,11 @@ func validateCandidateTrajectory(
 				if deficitStartIdx == 0 {
 					waitOffset = initialDeficitWait
 				}
-				recoveredInBuffer := false
 				if !(deficitStartIdx == 0 && waitOffset >= chargeCompletionBufferDuration) {
 					deficitStartTime := timeline[deficitStartIdx].startTime
-					for k := i + 1; k < len(timeline); k++ {
-						if timeline[k].startTime.Sub(deficitStartTime)+waitOffset > chargeCompletionBufferDuration+time.Minute {
-							break
-						}
-						if actions[k].batteryMode == types.BatteryModeChargeAny ||
-							(timeline[k].endTime.Sub(deficitStartTime)+waitOffset <= 2*chargeCompletionBufferDuration+time.Minute &&
-								states[k+1].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct) {
-							recoveredInBuffer = true
-							break
-						}
+					if isDeficitRecoveredInBuffer(i, 0, actions, states, timeline, deficitStartTime, waitOffset) {
+						continue
 					}
-				}
-				if recoveredInBuffer {
-					continue
 				}
 				if i == 0 {
 					if firstChargeIdx == -1 {
@@ -1706,6 +1698,89 @@ func validateCandidateTrajectory(
 	}
 
 	return true, ""
+}
+
+// isReserveDeficitExemptAction reports whether an interval action is exempt from
+// reserve deficit grid-charge enforcement (either because it already charges from
+// the grid or because a hard operational override controls the interval).
+func isReserveDeficitExemptAction(act actionCandidate) bool {
+	return act.batteryMode == types.BatteryModeChargeAny ||
+		act.reason == types.ActionReasonGridUnavailable ||
+		act.reason == types.ActionReasonEVChargingStandby ||
+		act.reason == types.ActionReasonVPPActive ||
+		act.reason == types.ActionReasonVPPPrep
+}
+
+// isDeficitRecoveredInBuffer reports whether a deficit at actions[stepOffset]
+// (corresponding to timeline[baseIdx+stepOffset]) starts charging within
+// chargeCompletionBufferDuration of deficitStartTime (plus waitOffset) or recovers
+// at or above timeline[baseIdx+stepOffset].minSOC within 2*chargeCompletionBufferDuration.
+func isDeficitRecoveredInBuffer(
+	stepOffset int,
+	baseIdx int,
+	actions []actionCandidate,
+	states []planState,
+	timeline []planInterval,
+	deficitStartTime time.Time,
+	waitOffset time.Duration,
+) bool {
+	requiredMinSOC := timeline[baseIdx+stepOffset].minSOC - reserveDeficitChargeTolerancePct
+	for j := stepOffset + 1; j < len(actions); j++ {
+		tIdx := baseIdx + j
+		if timeline[tIdx].startTime.Sub(deficitStartTime)+waitOffset > chargeCompletionBufferDuration+time.Minute {
+			break
+		}
+		if actions[j].batteryMode == types.BatteryModeChargeAny ||
+			(timeline[tIdx].endTime.Sub(deficitStartTime)+waitOffset <= 2*chargeCompletionBufferDuration+time.Minute &&
+				states[j+1].soc >= requiredMinSOC) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUnrecoveredBlockDeficit reports whether a simulated block (spanning blockLen steps starting at
+// block.startIdx, optionally followed by buffer-window lookahead steps in checkActs/checkStates)
+// contains any reserve deficit step that stays unrecovered past chargeCompletionBufferDuration.
+func hasUnrecoveredBlockDeficit(
+	block timelineBlock,
+	blockLen int,
+	checkActs []actionCandidate,
+	checkStates []planState,
+	timeline []planInterval,
+	hasPriorCharge bool,
+	priorDeficitStartIdx int,
+	initialDeficitWait time.Duration,
+) bool {
+	seenCharge := hasPriorCharge
+	deficitStartIdx := priorDeficitStartIdx
+	for idx := 0; idx < blockLen; idx++ {
+		tIdx := block.startIdx + idx
+		act := checkActs[idx]
+		floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+		if checkStates[idx].soc >= floorSOC ||
+			checkStates[idx+1].soc >= floorSOC ||
+			isReserveDeficitExemptAction(act) {
+			deficitStartIdx = -1
+		} else {
+			if deficitStartIdx == -1 {
+				deficitStartIdx = tIdx
+			}
+			waitOffset := time.Duration(0)
+			if deficitStartIdx == 0 {
+				waitOffset = initialDeficitWait
+			}
+			if seenCharge ||
+				(deficitStartIdx == 0 && waitOffset >= chargeCompletionBufferDuration) ||
+				!isDeficitRecoveredInBuffer(idx, block.startIdx, checkActs, checkStates, timeline, timeline[deficitStartIdx].startTime, waitOffset) {
+				return true
+			}
+		}
+		if act.batteryMode == types.BatteryModeChargeAny {
+			seenCharge = true
+		}
+	}
+	return false
 }
 
 // scoreCandidateTrajectory evaluates the exact physical economics, wear,
@@ -1857,11 +1932,17 @@ func critiqueBlockPlan(
 		currentChoices[b] = blockActionChoice{actionType: blockActionLoad}
 	}
 
+	stepStatesBuf := make([]planState, len(timeline)+1)
+	blockEntryStates := make([]planState, len(blocks))
+	blockDrainedSOC := make([]float64, len(blocks))
 	// ensureReserveRecoveryBlocks returns a copy of tc where any Load block k (excluding skipIdxA and skipIdxB)
-	// that starts and ends below blocks[k].minSOC - reserveDeficitChargeTolerancePct (when grid charging is enabled)
-	// is upgraded to a reserve recovery charge (blockActionCharge, targetSOC = blocks[k].minSOC), allowing
-	// multi-block reserve deficits or downstream minSOC step-ups to be satisfied automatically.
-	ensureReserveRecoveryBlocks := func(tc []blockActionChoice, skipIdxA, skipIdxB int) ([]blockActionChoice, bool) {
+	// containing a reserve deficit step that remains unrecovered past chargeCompletionBufferDuration (when grid
+	// charging is enabled) is upgraded to a reserve recovery charge (blockActionCharge, targetSOC = blocks[k].minSOC),
+	// and any previously added reserve-only recovery block whose deficit was eliminated by an upstream change is
+	// reverted to blockActionLoad. When allowAvoidable is false, downstream deficits that were caused solely by
+	// discharging battery energy in an earlier cheaper-or-equal Load block (where Standby is allowed) are left
+	// unmasked so Pass 1 holds energy in Standby rather than cycling Load -> GridCharge at the same rate.
+	ensureReserveRecoveryBlocks := func(tc []blockActionChoice, skipIdxA, skipIdxB int, allowAvoidable bool) ([]blockActionChoice, bool) {
 		if !settings.GridChargeBatteries || initialState.chargingDisabled {
 			return tc, false
 		}
@@ -1869,28 +1950,121 @@ func critiqueBlockPlan(
 		copy(tcRec, tc)
 		changed := false
 		blockStartState := initialState
+		hasPriorCharge := false
+		deficitStartIdx := -1
+		decoupleIdx := 0
 		for k := 0; k < len(blocks); k++ {
-			startSOC := blockStartState.soc
-			expanded := expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-			endState := blockStartState
-			for idx, act := range expanded {
-				endState, _ = stepPhysics(endState, act, timeline[blocks[k].startIdx+idx], settings, roundTripEff)
-			}
+			blockEntryStates[k] = blockStartState
+			blockDrainedSOC[k] = 0
+			wasRecoveryCharge := false
 			if k != skipIdxA && k != skipIdxB &&
-				tcRec[k].actionType == blockActionLoad &&
-				startSOC < blocks[k].minSOC-reserveDeficitChargeTolerancePct &&
-				endState.soc < blocks[k].minSOC-reserveDeficitChargeTolerancePct {
-				cand := blockActionChoice{actionType: blockActionCharge, targetSOC: blocks[k].minSOC}
-				if isBlockActionAllowed(k, blocks[k], cand, blocks, blockStartState, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
-					tcRec[k] = cand
-					changed = true
-					expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-					endState = blockStartState
-					for idx, act := range expanded {
-						endState, _ = stepPhysics(endState, act, timeline[blocks[k].startIdx+idx], settings, roundTripEff)
-					}
+				tcRec[k].actionType == blockActionCharge &&
+				tcRec[k].targetSOC <= blocks[k].minSOC+socTargetTolerancePct {
+				tcRec[k] = blockActionChoice{actionType: blockActionLoad}
+				wasRecoveryCharge = true
+			}
+			expanded := expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+			stepStates := stepStatesBuf[:len(expanded)+1]
+			stepStates[0] = blockStartState
+			blockDeficitStartIdx := deficitStartIdx
+			for idx, act := range expanded {
+				tIdx := blocks[k].startIdx + idx
+				stepStates[idx+1], _ = stepPhysics(stepStates[idx], act, timeline[tIdx], settings, roundTripEff)
+				floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+				if stepStates[idx].soc >= floorSOC || stepStates[idx+1].soc >= floorSOC || isReserveDeficitExemptAction(act) {
+					blockDeficitStartIdx = -1
+				} else if blockDeficitStartIdx == -1 {
+					blockDeficitStartIdx = tIdx
 				}
 			}
+			endState := stepStates[len(expanded)]
+			if k != skipIdxA && k != skipIdxB && tcRec[k].actionType == blockActionLoad {
+				checkActs := expanded
+				checkStates := stepStates
+				if !hasPriorCharge && blockDeficitStartIdx != -1 && blocks[k].endIdx+1 < len(timeline) {
+					peekWait := time.Duration(0)
+					if blockDeficitStartIdx == 0 {
+						peekWait = initialDeficitWait
+					}
+					peekStartTime := timeline[blockDeficitStartIdx].startTime
+					if !(blockDeficitStartIdx == 0 && peekWait >= chargeCompletionBufferDuration) &&
+						timeline[blocks[k].endIdx+1].startTime.Sub(peekStartTime)+peekWait <= chargeCompletionBufferDuration+time.Minute {
+						checkActs = append([]actionCandidate(nil), expanded...)
+						checkStates = append([]planState(nil), stepStates...)
+						peekState := endState
+						for nextB := k + 1; nextB < len(blocks); nextB++ {
+							if timeline[blocks[nextB].startIdx].startTime.Sub(peekStartTime)+peekWait > chargeCompletionBufferDuration+time.Minute {
+								break
+							}
+							nextExp := expandBlockAction(blocks[nextB], tcRec[nextB], peekState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							for idx, act := range nextExp {
+								tIdx := blocks[nextB].startIdx + idx
+								if timeline[tIdx].startTime.Sub(peekStartTime)+peekWait > chargeCompletionBufferDuration+time.Minute {
+									break
+								}
+								peekState, _ = stepPhysics(peekState, act, timeline[tIdx], settings, roundTripEff)
+								checkActs = append(checkActs, act)
+								checkStates = append(checkStates, peekState)
+							}
+						}
+					}
+				}
+				avoidableByEarlierHold := false
+				if !allowAvoidable && k > 0 && blockStartState.soc < blocks[k].minSOC {
+					var drainedCheaperSOC float64
+					standbyChoice := blockActionChoice{actionType: blockActionStandby}
+					for j := decoupleIdx; j < k; j++ {
+						if blockDrainedSOC[j] > 0 &&
+							blocks[j].avgImportRate <= blocks[k].minImportRate+priceEpsilonForEquality &&
+							isBlockActionAllowed(j, blocks[j], standbyChoice, blocks, blockEntryStates[j], vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
+							drainedCheaperSOC += blockDrainedSOC[j]
+						}
+					}
+					if drainedCheaperSOC >= blocks[k].minSOC-blockStartState.soc+socTargetTolerancePct {
+						avoidableByEarlierHold = true
+					}
+				}
+				if !avoidableByEarlierHold && hasUnrecoveredBlockDeficit(blocks[k], len(expanded), checkActs, checkStates, timeline, hasPriorCharge, deficitStartIdx, initialDeficitWait) {
+					cand := blockActionChoice{actionType: blockActionCharge, targetSOC: blocks[k].minSOC}
+					if isBlockActionAllowed(k, blocks[k], cand, blocks, blockStartState, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
+						tcRec[k] = cand
+						if !wasRecoveryCharge {
+							changed = true
+						}
+						expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+						endState = blockStartState
+						blockDeficitStartIdx = deficitStartIdx
+						for idx, act := range expanded {
+							tIdx := blocks[k].startIdx + idx
+							nextState, _ := stepPhysics(endState, act, timeline[tIdx], settings, roundTripEff)
+							floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+							if endState.soc >= floorSOC || nextState.soc >= floorSOC || isReserveDeficitExemptAction(act) {
+								blockDeficitStartIdx = -1
+							} else if blockDeficitStartIdx == -1 {
+								blockDeficitStartIdx = tIdx
+							}
+							endState = nextState
+						}
+					} else if wasRecoveryCharge {
+						changed = true
+					}
+				} else if wasRecoveryCharge {
+					changed = true
+				}
+			}
+			if tcRec[k].actionType == blockActionLoad && blockStartState.soc > endState.soc+socTargetTolerancePct {
+				blockDrainedSOC[k] = blockStartState.soc - endState.soc
+			}
+			if tcRec[k].actionType == blockActionExport || endState.soc >= almostFullSOC {
+				decoupleIdx = k + 1
+			}
+			for _, act := range expanded {
+				if act.batteryMode == types.BatteryModeChargeAny {
+					hasPriorCharge = true
+					break
+				}
+			}
+			deficitStartIdx = blockDeficitStartIdx
 			blockStartState = endState
 		}
 		return tcRec, changed
@@ -1903,7 +2077,7 @@ func critiqueBlockPlan(
 	baseActs := expandBlockPlan(currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 	baseValid, baseValidReason := validateCandidateTrajectory(baseActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
 	if !baseValid {
-		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1); ok {
+		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1, false); ok {
 			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 			if recValid, recReason := validateCandidateTrajectory(recActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait); recValid {
 				currentChoices = tcRec
@@ -2142,7 +2316,7 @@ func critiqueBlockPlan(
 					trialVariants = append(trialVariants, holdInterveningOffPeakBlocks(baseTrial, b, len(blocks))...)
 				}
 				for _, sv := range trialVariants {
-					if tcRec, ok := ensureReserveRecoveryBlocks(sv, b, -1); ok {
+					if tcRec, ok := ensureReserveRecoveryBlocks(sv, b, -1, false); ok {
 						trialVariants = append(trialVariants, tcRec)
 					}
 				}
@@ -2551,7 +2725,7 @@ func critiqueBlockPlan(
 						trialVariants = append(trialVariants, holdInterveningOffPeakBlocks(baseTrial, b, len(blocks))...)
 					}
 					for _, tv := range trialVariants {
-						if tcRec, ok := ensureReserveRecoveryBlocks(tv, a, b); ok {
+						if tcRec, ok := ensureReserveRecoveryBlocks(tv, a, b, false); ok {
 							trialVariants = append(trialVariants, tcRec)
 						}
 					}
@@ -2585,6 +2759,16 @@ func critiqueBlockPlan(
 			)
 		} else {
 			break
+		}
+	}
+
+	if currentScore == math.MaxFloat64 {
+		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1, true); ok {
+			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+			if valid, _ := validateCandidateTrajectory(recActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait); valid {
+				currentChoices = tcRec
+				currentScore, _, _, _ = scoreCandidateTrajectory(recActs, timeline, initialState, vppEvents, postHorizon, settings, roundTripEff)
+			}
 		}
 	}
 

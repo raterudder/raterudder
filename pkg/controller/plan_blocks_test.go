@@ -796,6 +796,144 @@ func TestExpandBlockAction(t *testing.T) {
 			assert.Equal(t, types.BatteryModeStandby, partialStandbyActs[3].batteryMode)
 		}
 	})
+
+	t.Run("BlockCharge_ReserveDeficitStaysActiveUnderImportCapAndRespectsStandbyGuards", func(t *testing.T) {
+		t.Parallel()
+		// 3x20m block where 6.0 kW home load (2.0 kWh per 20m) saturates a 5.0 kW MaxGridImportKW cap,
+		// preventing testState.soc from rising above 15.0% (< 20.0% minSOC).
+		timeline := make([]planInterval, 3)
+		for i := 0; i < 3; i++ {
+			ti := now.Add(time.Duration(i*20) * time.Minute)
+			timeline[i] = planInterval{
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.12,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				loadKWH:           2.0,
+				minSOC:            20.0,
+			}
+		}
+		block := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.12, avgImportRate: 0.12, maxImportRate: 0.12}
+		cappedDeficitState := planState{
+			soc:             15.0,
+			energyKWH:       13.5 * 0.15,
+			capacityKWH:     13.5,
+			maxChargeKW:     5.0,
+			maxDischargeKW:  5.0,
+			maxGridImportKW: 5.0,
+			time:            now,
+		}
+
+		// 1. Eligible deficit recovery keeps ChargeAny across all intervals despite 0% simulated SOC gain.
+		cappedActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, cappedDeficitState, timeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, cappedActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeChargeAny, cappedActs[i].batteryMode, "Import-capped deficit recovery must keep ChargeAny at interval %d", i)
+				assert.InDelta(t, 20.0, cappedActs[i].targetSOC, 0.01)
+			}
+		}
+
+		// 2. Keep Standby when GridChargeBatteries is false.
+		noGridCharge := settings
+		noGridCharge.GridChargeBatteries = false
+		noGridActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, cappedDeficitState, timeline, nil, noGridCharge, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, noGridActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeStandby, noGridActs[i].batteryMode)
+			}
+		}
+
+		// 3. Keep Standby when chargingDisabled is true (on state or status).
+		disabledState := cappedDeficitState
+		disabledState.chargingDisabled = true
+		disabledActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, disabledState, timeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, disabledActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeStandby, disabledActs[i].batteryMode)
+			}
+		}
+		statusDisabledActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, cappedDeficitState, timeline, nil, settings, types.SystemStatus{BatteryChargingDisabled: true}, nil, nil)
+		if assert.Len(t, statusDisabledActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeStandby, statusDisabledActs[i].batteryMode)
+			}
+		}
+
+		// 4. Keep Standby when choice.targetSOC does not exceed startState.soc + socTargetTolerancePct.
+		lowTargetActs := expandBlockAction(block, blockActionChoice{actionType: blockActionCharge, targetSOC: 15.0}, cappedDeficitState, timeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, lowTargetActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeStandby, lowTargetActs[i].batteryMode)
+			}
+		}
+	})
+
+	t.Run("BlockCharge_ReserveDeficitReachesMinSOCBeforeBreakingOnSolarPeakAndPreservesDeferral", func(t *testing.T) {
+		t.Parallel()
+		// 1. Late-block solar reaches 100% SOC (peakReached == 100%), while starting at 15% SOC below a 50% minSOC.
+		// On a 13.5 kWh battery at 5 kW (30m steps), K=1 only reaches ~32.5% SOC (< 48.95%), whereas K=2 reaches ~50% SOC.
+		// expandBlockAction must not break at K=1 on peakReached, and must stop at K=2 so intervals 2..5 stay in Standby for solar.
+		sunnyTimeline := make([]planInterval, 6)
+		for i := 0; i < 6; i++ {
+			ti := now.Add(time.Duration(i*30) * time.Minute)
+			solar := 0.0
+			if i >= 4 {
+				solar = 5.0
+			}
+			sunnyTimeline[i] = planInterval{
+				startTime:         ti,
+				endTime:           ti.Add(30 * time.Minute),
+				durationHours:     0.5,
+				importRate:        0.10,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          solar,
+				loadKWH:           0.2,
+				minSOC:            50.0,
+			}
+		}
+		sunnyBlock := timelineBlock{startIdx: 0, endIdx: 5, durationHours: 3.0, minSOC: 50.0, minImportRate: 0.10, avgImportRate: 0.10, maxImportRate: 0.10}
+		deficit15 := planState{soc: 15.0, energyKWH: 13.5 * 0.15, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		sunnyDeficit := planState{soc: 15.0, energyKWH: 13.5 * 0.15, capacityKWH: 13.5, maxChargeKW: 6.5, maxDischargeKW: 5.0, time: now}
+
+		sunnyActs := expandBlockAction(sunnyBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, sunnyDeficit, sunnyTimeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, sunnyActs, 6) {
+			assert.Equal(t, types.BatteryModeChargeAny, sunnyActs[0].batteryMode)
+			assert.Equal(t, types.BatteryModeChargeAny, sunnyActs[1].batteryMode, "Must continue charging through interval 1 until minSOC (50%%) is reached despite late-block solar hitting 100%%")
+			assert.Equal(t, types.BatteryModeStandby, sunnyActs[2].batteryMode, "Once minSOC is reached and late-block solar hits 100%%, remaining intervals hold in Standby for solar")
+		}
+
+		// 2. Single-period deferral preserved when step 1 is cheaper within chargeCompletionBufferDuration and reaches minSOC.
+		deferTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.05, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(40 * time.Minute), endTime: now.Add(60 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.05, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+		}
+		deferBlock := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 1.0, minSOC: 20.0, minImportRate: 0.05, avgImportRate: 0.10, maxImportRate: 0.20}
+		deferActs := expandBlockAction(deferBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficit15, deferTimeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, deferActs, 3) {
+			assert.Equal(t, types.BatteryModeStandby, deferActs[0].batteryMode, "Step 0 may defer 20 minutes to capture cheaper step 1 rate")
+			assert.Equal(t, types.BatteryModeChargeAny, deferActs[1].batteryMode, "Step 1 must recharge to minSOC")
+			assert.Equal(t, types.BatteryModeStandby, deferActs[2].batteryMode)
+		}
+
+		// 3. Continuous ChargeAny across all intervals when inverter limits prevent reaching minSOC inside the block.
+		unreachTimeline := make([]planInterval, 3)
+		copy(unreachTimeline, deferTimeline)
+		for i := range unreachTimeline {
+			unreachTimeline[i].minSOC = 80.0
+		}
+		unreachBlock := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 1.0, minSOC: 80.0, minImportRate: 0.05, avgImportRate: 0.10, maxImportRate: 0.20}
+		largePackDeficit := planState{soc: 15.0, energyKWH: 27.0 * 0.15, capacityKWH: 27.0, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		unreachActs := expandBlockAction(unreachBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 80.0}, largePackDeficit, unreachTimeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, unreachActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.BatteryModeChargeAny, unreachActs[i].batteryMode, "Inverter-limited unreachable minSOC must keep continuous ChargeAny at interval %d", i)
+			}
+		}
+	})
 }
 
 func TestIsBlockActionAllowed(t *testing.T) {
@@ -1335,6 +1473,45 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		assert.False(t, isBlockActionAllowed(0, trickleBlocks[0], blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 60.0}, trickleBlocks, state50, nil, 0.05, sett, types.SystemStatus{}, tlTrickle, lastAct),
 			"Continuing trickle DirectSolarExport must be rejected when targetSOC exceeds startState.soc")
 	})
+
+	t.Run("Charge_AllowedAt98SOCFor100PercentReserveDeficit", func(t *testing.T) {
+		t.Parallel()
+		fullReserveBlock := blockExpensive
+		fullReserveBlock.startIdx = 0
+		fullReserveBlock.endIdx = 2
+		fullReserveBlock.minSOC = 100.0
+		fullReserveTimeline := make([]planInterval, 3)
+		for i := 0; i < 3; i++ {
+			ti := now.Add(time.Duration(i*20) * time.Minute)
+			fullReserveTimeline[i] = planInterval{
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.40,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				loadKWH:           0.3,
+				minSOC:            100.0,
+			}
+		}
+
+		// 98.0% and 98.8% SOC (< 100.0 - 1.05 = 98.95%) are genuine reserve deficits and must be allowed to charge to 100%.
+		state98 := planState{soc: 98.0, capacityKWH: 13.5, time: now}
+		state988 := planState{soc: 98.8, capacityKWH: 13.5, time: now}
+		assert.True(t, isBlockActionAllowed(0, fullReserveBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, []timelineBlock{fullReserveBlock}, state98, nil, 0.0, settings, types.SystemStatus{}, fullReserveTimeline, nil),
+			"98.0%% SOC deficit on a 100%% reserve block must be allowed to charge")
+		assert.True(t, isBlockActionAllowed(0, fullReserveBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, []timelineBlock{fullReserveBlock}, state988, nil, 0.0, settings, types.SystemStatus{}, fullReserveTimeline, nil),
+			"98.8%% SOC deficit (< 98.95%%) on a 100%% reserve block must be allowed to charge")
+
+		// 99.0% SOC (>= 98.95%, within reserveDeficitChargeTolerancePct) must remain disallowed to avoid nuisance top-ups.
+		state99 := planState{soc: 99.0, capacityKWH: 13.5, time: now}
+		assert.False(t, isBlockActionAllowed(0, fullReserveBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, []timelineBlock{fullReserveBlock}, state99, nil, 0.0, settings, types.SystemStatus{}, fullReserveTimeline, nil),
+			"99.0%% SOC within 1.05%% BMS tolerance of 100%% reserve must remain disallowed")
+
+		// Normal 20% reserve block at 98.0% SOC must still be pruned by almostFullSOC.
+		assert.False(t, isBlockActionAllowed(0, blockCheap, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, blocks, state98, nil, 0.40, settings, types.SystemStatus{}, baseTimeline, nil),
+			"98.0%% SOC on a 20%% reserve block must still be pruned by almostFullSOC")
+	})
 }
 
 func TestValidateCandidateTrajectory(t *testing.T) {
@@ -1789,6 +1966,24 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		validCoarse, reasonCoarse := validateCandidateTrajectory(allLoad, tlCoarseRecovery, settings, wear, 0.90, state115, 0)
 		assert.False(t, validCoarse)
 		assert.Equal(t, "UnrecoveredReserveDeficit", reasonCoarse)
+	})
+
+	t.Run("ExemptsGridUnavailableDuringReserveDeficit", func(t *testing.T) {
+		t.Parallel()
+		outageTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.15, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.15, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(40 * time.Minute), endTime: now.Add(60 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.15, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+		}
+		outageActs := []actionCandidate{
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonGridUnavailable},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonGridUnavailable},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonGridUnavailable},
+		}
+		stateBelowReserve := planState{soc: 12.0, energyKWH: 13.5 * 0.12, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		valid, reason := validateCandidateTrajectory(outageActs, outageTimeline, settings, wear, 0.90, stateBelowReserve, 0)
+		assert.True(t, valid, "Grid outage actions (ActionReasonGridUnavailable) must be exempt from reserve deficit rejection: "+reason)
+		assert.Empty(t, reason)
 	})
 }
 
@@ -2359,6 +2554,158 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			assert.Equal(t, types.BatteryModeLoad, path3.actions[0].batteryMode)
 			assert.Equal(t, types.SolarModeAny, path3.actions[0].solarMode, "Post-sunset (0.0 kW) must exit SolarModeExport")
 			assert.Equal(t, types.BatteryModeExport, path3.actions[1].batteryMode, "Tail of On-Peak must still dump surplus battery")
+		}
+	})
+
+	t.Run("RecoversMidBlockDeficitsInSunnyLoadBlocksAndStepUpsWhilePreservingBufferSolarRecovery", func(t *testing.T) {
+		t.Parallel()
+		c := NewController()
+
+		// 1. Initial SOC deficit (12% < 20% minSOC) in a sunny block where the first two 20m intervals are dark
+		// (40m > chargeCompletionBufferDuration) and later intervals have strong solar lifting block-end SOC to 100%.
+		sunnyDeficitTimeline := make([]planInterval, 6)
+		for i := 0; i < 6; i++ {
+			ti := now.Add(time.Duration(i*20) * time.Minute)
+			solar := 0.0
+			if i >= 2 {
+				solar = 4.0
+			}
+			sunnyDeficitTimeline[i] = planInterval{
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        0.15,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				solarKWH:          solar,
+				loadKWH:           0.3,
+				minSOC:            20.0,
+			}
+		}
+		sunnyBlocks := buildTimelineBlocks(ctx, sunnyDeficitTimeline, nil, settings, types.SystemStatus{}, nil)
+		state12 := planState{soc: 12.0, energyKWH: 13.5 * 0.12, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		winSunny, sunnyScore := critiqueBlockPlan(ctx, sunnyBlocks, sunnyDeficitTimeline, state12, nil, postHorizonValuation{knownPostHorizonRate: 0.15}, settings, types.SystemStatus{}, nil, 0, nil)
+		assert.Less(t, sunnyScore, math.MaxFloat64, "critiqueBlockPlan must find a valid recovery plan for sunny initial deficit")
+		if assert.NotEmpty(t, winSunny) {
+			assert.Equal(t, blockActionCharge, winSunny[0].actionType, "Sunny Load block with unrecovered early deficit steps must upgrade to Charge")
+		}
+
+		// 2. Downstream minSOC step-up (20% -> 50%) on a sunny block with dark early steps and sunny late steps.
+		stepUpTimeline := make([]planInterval, 7)
+		stepUpTimeline[0] = planInterval{
+			startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
+			importRate: 0.12, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 1.0, minSOC: 20.0,
+		}
+		for i := 0; i < 6; i++ {
+			ti := now.Add(time.Hour + time.Duration(i*20)*time.Minute)
+			solar := 0.0
+			if i >= 2 {
+				solar = 4.0
+			}
+			stepUpTimeline[i+1] = planInterval{
+				startTime: ti, endTime: ti.Add(20 * time.Minute), durationHours: 1.0 / 3.0,
+				importRate: 0.18, exportRate: 0.04, batteryExportRate: 0.04, solarKWH: solar, loadKWH: 0.3, minSOC: 50.0,
+			}
+		}
+		stepUpBlocks := buildTimelineBlocks(ctx, stepUpTimeline, nil, settings, types.SystemStatus{}, nil)
+		require.Len(t, stepUpBlocks, 2)
+		state25 := planState{soc: 25.0, energyKWH: 13.5 * 0.25, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		winStepUp, stepUpScore := critiqueBlockPlan(ctx, stepUpBlocks, stepUpTimeline, state25, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, settings, types.SystemStatus{}, nil, 0, nil)
+		assert.Less(t, stepUpScore, math.MaxFloat64, "critiqueBlockPlan must find a valid plan for downstream sunny minSOC step-up")
+		assert.True(t, winStepUp[0].actionType == blockActionCharge || winStepUp[1].actionType == blockActionCharge,
+			"Planner must schedule grid recovery before or at the start of the sunny minSOC step-up")
+		pathStepUp := c.searchOptimalPlanBlocks(ctx, stepUpTimeline, state25, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, settings, types.SystemStatus{}, nil, nil)
+		require.NotNil(t, pathStepUp)
+		validStepUp, reasonStepUp := validateCandidateTrajectory(pathStepUp.actions, stepUpTimeline, settings, getWearRates(settings, settings.GetOptimizationParams()), 0.90, state25, 0)
+		assert.True(t, validStepUp, "Optimized trajectory for sunny step-up must be valid: "+reasonStepUp)
+
+		// 3. Deficit that recovers from solar within chargeCompletionBufferDuration (two 10m intervals: 0..10m dark,
+		// 10..20m sunny lifting SOC above 20% by minute 20) stays in Load without unnecessary grid charging.
+		fastSolarTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(10 * time.Minute), durationHours: 10.0 / 60.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, solarKWH: 0.0, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(10 * time.Minute), endTime: now.Add(20 * time.Minute), durationHours: 10.0 / 60.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, solarKWH: 1.5, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 20.0 / 60.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, solarKWH: 1.5, loadKWH: 0.2, minSOC: 20.0},
+		}
+		fastSolarBlocks := buildTimelineBlocks(ctx, fastSolarTimeline, nil, settings, types.SystemStatus{}, nil)
+		state16 := planState{soc: 16.0, energyKWH: 13.5 * 0.16, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		winFastSolar, fastSolarScore := critiqueBlockPlan(ctx, fastSolarBlocks, fastSolarTimeline, state16, nil, postHorizonValuation{knownPostHorizonRate: 0.20}, settings, types.SystemStatus{}, nil, 0, nil)
+		assert.Less(t, fastSolarScore, math.MaxFloat64)
+		if assert.NotEmpty(t, winFastSolar) {
+			assert.Equal(t, blockActionLoad, winFastSolar[0].actionType, "Solar recovery within 20m buffer must preserve Load without forcing grid charge")
+		}
+	})
+
+	t.Run("HandlesImportCapsOutagesAnd100PercentReserveDeficitsWithoutFallback", func(t *testing.T) {
+		t.Parallel()
+		c := NewController()
+
+		// 1. Grid import cap saturating Block 0 (6.0 kW load vs 5.0 kW MaxGridImportKW) during an initial deficit,
+		// followed by lighter load in Block 1 where recovery finishes.
+		capTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
+			{startTime: now.Add(40 * time.Minute), endTime: now.Add(60 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 2.0, minSOC: 20.0},
+			{startTime: now.Add(60 * time.Minute), endTime: now.Add(80 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.18, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(80 * time.Minute), endTime: now.Add(100 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.18, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.2, minSOC: 20.0},
+		}
+		capStatus := types.SystemStatus{MaxGridImportKW: 5.0}
+		capBlocks := buildTimelineBlocks(ctx, capTimeline, nil, settings, capStatus, nil)
+		require.Len(t, capBlocks, 2)
+		capState := planState{soc: 15.0, energyKWH: 13.5 * 0.15, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, maxGridImportKW: 5.0, time: now}
+		winCap, capScore := critiqueBlockPlan(ctx, capBlocks, capTimeline, capState, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, capStatus, nil, 0, nil)
+		assert.Less(t, capScore, math.MaxFloat64, "Import-capped initial deficit must produce a valid trajectory")
+		if assert.Len(t, winCap, 2) {
+			assert.Equal(t, blockActionCharge, winCap[0].actionType)
+			assert.Equal(t, blockActionCharge, winCap[1].actionType)
+		}
+		pathCap := c.searchOptimalPlanBlocks(ctx, capTimeline, capState, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, capStatus, nil, nil)
+		if assert.Len(t, pathCap.actions, 5) {
+			for i := 0; i < 4; i++ {
+				assert.Equal(t, types.BatteryModeChargeAny, pathCap.actions[i].batteryMode, "Must maintain ChargeAny across import-capped intervals and into Block 1 recovery")
+			}
+			assert.GreaterOrEqual(t, pathCap.states[5].soc, 20.0-reserveDeficitChargeTolerancePct)
+		}
+
+		// 2. Grid outage (GridUnavailable) while battery is below reserve floor (10% < 20% minSOC).
+		outageStatus := types.SystemStatus{GridUnavailable: true}
+		outageBlocks := buildTimelineBlocks(ctx, timeline, nil, settings, outageStatus, nil)
+		outageState := planState{soc: 10.0, energyKWH: 13.5 * 0.10, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		_, outageScore := critiqueBlockPlan(ctx, outageBlocks, timeline, outageState, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, outageStatus, nil, 0, nil)
+		assert.Less(t, outageScore, math.MaxFloat64, "Grid outage below reserve must not fail all trajectories in critiqueBlockPlan")
+		pathOutage := c.searchOptimalPlanBlocks(ctx, timeline, outageState, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, settings, outageStatus, nil, nil)
+		if assert.Len(t, pathOutage.actions, len(timeline)) {
+			for i, act := range pathOutage.actions {
+				assert.Equal(t, types.BatteryModeLoad, act.batteryMode, "Outage interval %d must stay in Load", i)
+				assert.Equal(t, types.ActionReasonGridUnavailable, act.reason)
+			}
+		}
+
+		// 3. 100% reserve floor with 98.2% SOC (< 98.95%) recharges to 100%, while 99.2% SOC (>= 98.95%) stays in Load.
+		fullReserveSettings := settings
+		fullReserveSettings.MinBatterySOC = 100.0
+		fullReserveTimeline := make([]planInterval, 4)
+		copy(fullReserveTimeline, timeline)
+		for i := range fullReserveTimeline {
+			fullReserveTimeline[i].minSOC = 100.0
+		}
+		fullReserveBlocks := buildTimelineBlocks(ctx, fullReserveTimeline, nil, fullReserveSettings, types.SystemStatus{}, nil)
+		state982 := planState{soc: 98.2, energyKWH: 13.5 * 0.982, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		win982, score982 := critiqueBlockPlan(ctx, fullReserveBlocks, fullReserveTimeline, state982, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, fullReserveSettings, types.SystemStatus{}, nil, 0, nil)
+		assert.Less(t, score982, math.MaxFloat64, "98.2%% SOC on 100%% reserve must find a valid recovery plan")
+		if assert.NotEmpty(t, win982) {
+			assert.Equal(t, blockActionCharge, win982[0].actionType)
+		}
+		path982 := c.searchOptimalPlanBlocks(ctx, fullReserveTimeline, state982, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, fullReserveSettings, types.SystemStatus{}, nil, nil)
+		if assert.NotEmpty(t, path982.actions) {
+			assert.Equal(t, types.BatteryModeChargeAny, path982.actions[0].batteryMode)
+			assert.GreaterOrEqual(t, path982.states[1].soc, 99.5)
+		}
+
+		state992 := planState{soc: 99.2, energyKWH: 13.5 * 0.992, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		win992, score992 := critiqueBlockPlan(ctx, fullReserveBlocks, fullReserveTimeline, state992, nil, postHorizonValuation{knownPostHorizonRate: 0.05}, fullReserveSettings, types.SystemStatus{}, nil, 0, nil)
+		assert.Less(t, score992, math.MaxFloat64)
+		if assert.NotEmpty(t, win992) {
+			assert.Equal(t, blockActionLoad, win992[0].actionType, "99.2%% SOC within BMS tolerance of 100%% reserve must stay in Load")
 		}
 	})
 }
