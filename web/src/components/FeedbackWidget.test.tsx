@@ -99,4 +99,30 @@ describe('FeedbackWidget Component', () => {
             );
         });
     });
+
+    it('submits empty siteID when rendered in Overview mode (siteID=ALL)', async () => {
+        (api.submitFeedback as any).mockResolvedValue({ success: true });
+
+        render(
+            <Router>
+                <FeedbackWidget siteID="ALL" />
+            </Router>
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /Feedback/i }));
+
+        const happyBtn = await screen.findByRole('button', { name: 'Happy' });
+        fireEvent.click(happyBtn);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+        await waitFor(() => {
+            expect(api.submitFeedback).toHaveBeenCalledWith(
+                '',
+                'happy',
+                '',
+                expect.any(Object)
+            );
+        });
+    });
 });

@@ -91,6 +91,32 @@ const dayOfWeekOutlierDownWeightMultiplier = 0.33
 // safeguard takes care of protecting the battery during extreme summer heatwaves.
 const tempSimilarityScale = 3.0
 
+// tempDeadbandCoreLowC (15°C) .. tempDeadbandCoreHighC (21°C) defines the mild-weather core where
+// neither electric heating nor AC cooling is typically active, with a smooth 2°C linear ramp out to
+// tempDeadbandOuterLowC (13°C) and tempDeadbandOuterHighC (23°C). Inside the core, temperature
+// differences are compressed by tempDeadbandSlope (0.25x) so mild days (e.g., 15°C vs. 21°C) retain
+// ~61% weight instead of losing 86.5%. Outside [13°C, 23°C], full 1:1 separation is preserved with
+// zero boundary cliff so heating and cooling days are never blurred into mild-weather days.
+const (
+	tempDeadbandOuterLowC  = 13.0
+	tempDeadbandCoreLowC   = 15.0
+	tempDeadbandCoreHighC  = 21.0
+	tempDeadbandOuterHighC = 23.0
+	tempDeadbandSlope      = 0.25
+)
+
+// Afternoon-to-evening thermal lag parameters: after a hot (>= 26.5°C) afternoon, building thermal
+// mass keeps indoor cooling loads elevated into the evening (18:00-23:00) even after outdoor air
+// cools into the 19-26°C range. Blending 50% of the daily peak temperature difference into evening
+// temperature similarity ensures hot-afternoon evenings match other hot-afternoon evenings rather
+// than cool-day evenings at the same instantaneous temperature, consistently across h-1/h/h+1.
+const (
+	eveningThermalLagStartHour    = 18
+	eveningThermalLagEndHour      = 23
+	eveningThermalLagMinPeakTempC = 26.5
+	eveningThermalLagWeight       = 0.5
+)
+
 // minWeatherHoursForDailyAverage specifies the minimum number of hourly weather forecast readings required
 // (at least 12 out of 24 hours) to calculate a representative 24-hour daily average temperature.
 // This prevents partial weather records (e.g. a single morning or late-night reading) from distorting the day's temperature.
@@ -231,6 +257,41 @@ type dayPoints struct {
 	points  []types.EnergyStats
 }
 
+func tempDeadbandFactor(tempC float64) float64 {
+	if tempC <= tempDeadbandOuterLowC || tempC >= tempDeadbandOuterHighC {
+		return 0.0
+	}
+	if tempC < tempDeadbandCoreLowC {
+		return (tempC - tempDeadbandOuterLowC) / (tempDeadbandCoreLowC - tempDeadbandOuterLowC)
+	}
+	if tempC > tempDeadbandCoreHighC {
+		return (tempDeadbandOuterHighC - tempC) / (tempDeadbandOuterHighC - tempDeadbandCoreHighC)
+	}
+	return 1.0
+}
+
+// tempSimilarityDiffC computes the effective temperature distance (°C) between two temperatures
+// for exponential similarity weighting, smoothly compressing mild-weather differences inside
+// [13°C, 23°C] (full 0.25x compression inside [15°C, 21°C]) while preserving 1:1 separation
+// whenever either temperature lies in an active heating (<=13°C) or cooling (>=23°C) regime.
+func tempSimilarityDiffC(t1, t2 float64) float64 {
+	blend := min(tempDeadbandFactor(t1), tempDeadbandFactor(t2))
+	scale := 1.0 - blend*(1.0-tempDeadbandSlope)
+	return math.Abs(t1-t2) * scale
+}
+
+// eveningThermalLagDiffC returns the additional effective temperature distance (°C) for evening
+// hours (18:00-23:00) when either the target or candidate day had a hot afternoon peak (>= 26.5°C).
+func eveningThermalLagDiffC(targetPeakC float64, hasTargetPeak bool, histPeakC float64, hasHistPeak bool) float64 {
+	if !hasTargetPeak || !hasHistPeak {
+		return 0.0
+	}
+	if targetPeakC < eveningThermalLagMinPeakTempC && histPeakC < eveningThermalLagMinPeakTempC {
+		return 0.0
+	}
+	return eveningThermalLagWeight * tempSimilarityDiffC(targetPeakC, histPeakC)
+}
+
 // BuildHourlyEnergyModel averages usage and solar by hour of day from history,
 // taking into account weekend days and day-of-the-week differences, while ignoring outlier days
 // (e.g. vacation days with significantly below-average usage) and aligning AC temperature baseline calculations.
@@ -339,6 +400,28 @@ func (c *Controller) BuildHourlyEnergyModel(
 			return dayAvgTempCMap[dStr] / float64(count), true
 		}
 		return 0, false
+	}
+	getDayMaxTemp := func(dStr string) (float64, bool) {
+		if count := dayTempHourCountMap[dStr]; count >= minWeatherHoursForDailyAverage {
+			return dayMaxTempCMap[dStr], true
+		}
+		return 0, false
+	}
+	// Compute mean forecast temperature across the upcoming 24-hour planning horizon (now..now+23h)
+	// so Option G's ongoing-regime check reflects the actual hours being forecasted rather than only todayStr.
+	var forecastWindowTempSumC float64
+	var forecastWindowTempCount int
+	nowHrUTC := now.Truncate(time.Hour).UTC()
+	for offset := 0; offset < 24; offset++ {
+		if tC, ok := weatherByHour[nowHrUTC.Add(time.Duration(offset)*time.Hour)]; ok {
+			forecastWindowTempSumC += tC
+			forecastWindowTempCount++
+		}
+	}
+	forecastWindowTempC := 0.0
+	hasForecastWindowTemp := forecastWindowTempCount >= minWeatherHoursForDailyAverage
+	if hasForecastWindowTemp {
+		forecastWindowTempC = forecastWindowTempSumC / float64(forecastWindowTempCount)
 	}
 
 	// Count how many historical days have at least 18 hours of valid load data.
@@ -698,7 +781,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 						w := 1.0
 						hasBothTemp := hasTargetTemp && hasOtherTemp
 						if hasBothTemp {
-							w = math.Exp(-math.Abs(targetDayTemp-otherDayTemp) / tempSimilarityScale)
+							w = math.Exp(-tempSimilarityDiffC(targetDayTemp, otherDayTemp) / tempSimilarityScale)
 							sumOtherTemp += otherDayTemp
 							countOtherTemp++
 							tempSimW += w
@@ -741,7 +824,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 				for otherDateStr, ok := range validDaysMap {
 					if ok && otherDateStr != dStr && otherDateStr != todayStr {
 						if otherTemp, hasOT := getDayAvgTemp(otherDateStr); hasOT {
-							allDaysSimW += math.Exp(-math.Abs(targetDayTemp-otherTemp) / tempSimilarityScale)
+							allDaysSimW += math.Exp(-tempSimilarityDiffC(targetDayTemp, otherTemp) / tempSimilarityScale)
 						}
 					}
 				}
@@ -778,22 +861,31 @@ func (c *Controller) BuildHourlyEnergyModel(
 				// targetDayTemp or fewer than 2 prior occurrences of this weekday had weather):
 				// - If actualLoad <= unweightedExpected (a cool-day load drop), setting expectedLoad = actualLoad
 				//   produces diff = 0 so seasonal cooling does not trigger a downward shift.
-				// - If actualLoad > unweightedExpected, we check whether the surge is weather-driven:
-				//   (a) this day's temperature differed by >= 2.0°C from the mean of prior same-weekday temperatures, OR
-				//   (b) other weekdays in history had similar temperatures (allDaysSimW >= 1.5) so the hourly model's
-				//       temperature weighting already accounts for this temperature regime.
-				//   Only non-weather surges keep expectedLoad = unweightedExpected so Option G shifts upward.
+				// - If actualLoad > unweightedExpected, we check whether the surge is already accounted for or transient:
+				//   (a) other weekdays in history had similar temperatures (allDaysSimW >= 1.5) so the hourly model's
+				//       temperature weighting already accounts for this temperature regime, OR
+				//   (b) this day's temperature differed by >= 2.0°C from prior same-weekday temperatures AND the upcoming
+				//       24-hour forecast window has already moved away from that temperature regime (a transient weather spike).
+				//   When allDaysSimW < 1.5 AND the upcoming 24-hour forecast window remains in the same unprecedented
+				//   cold/hot regime, we keep expectedLoad = unweightedExpected so Option G can bridge the gap until
+				//   cold/hot history builds.
 				if hasTargetTemp && len(weather) > 0 {
 					if actualLoad > unweightedExpected {
 						isWeatherDrivenSurge := false
-						if countOtherTemp > 0 {
-							meanOtherTemp := sumOtherTemp / float64(countOtherTemp)
-							if math.Abs(targetDayTemp-meanOtherTemp) >= weatherDrivenSurgeTempDeltaC {
-								isWeatherDrivenSurge = true
-							}
-						}
 						if allDaysSimW >= minTempSimilarityWeightSum {
 							isWeatherDrivenSurge = true
+						} else if countOtherTemp > 0 {
+							meanOtherTempC := sumOtherTemp / float64(countOtherTemp)
+							deltaFromBaselineC := targetDayTemp - meanOtherTempC
+							if tempSimilarityDiffC(targetDayTemp, meanOtherTempC) >= weatherDrivenSurgeTempDeltaC {
+								sameDirection := (deltaFromBaselineC < 0 && forecastWindowTempC < meanOtherTempC) ||
+									(deltaFromBaselineC > 0 && forecastWindowTempC > meanOtherTempC)
+								ongoingRegime := hasForecastWindowTemp && sameDirection &&
+									tempSimilarityDiffC(forecastWindowTempC, meanOtherTempC) >= weatherDrivenSurgeTempDeltaC
+								if !ongoingRegime {
+									isWeatherDrivenSurge = true
+								}
+							}
 						}
 						if !isWeatherDrivenSurge {
 							expectedLoad = unweightedExpected
@@ -944,12 +1036,35 @@ func (c *Controller) BuildHourlyEnergyModel(
 		// Target weather time and temperature for current hour h
 		targetTimeHr := targetTime.Truncate(time.Hour).UTC()
 		targetTemp, hasTargetTemp := weatherByHour[targetTimeHr]
+		var targetAfternoonPeakC float64
+		hasTargetAfternoonPeak := false
+		if hasTargetTemp && h >= eveningThermalLagStartHour && h <= eveningThermalLagEndHour {
+			targetDateStr := targetTime.In(loc).Format("2006-01-02")
+			targetAfternoonPeakC, hasTargetAfternoonPeak = getDayMaxTemp(targetDateStr)
+		}
 
 		// Include temperature-matching valid days across all weekdays when forecasting an active
-		// heating or cooling hour so non-recent other-weekday cold snaps or heatwaves aren't dropped.
-		if hasTargetTemp && ((hvac.heatingHours[h] && targetTemp <= coldHeatingMaxTempC) || (hvac.coolingHours[h] && targetTemp >= hotCoolingMinTempC)) {
+		// heating or cooling hour (or an evening following a hot afternoon) so non-recent
+		// other-weekday cold snaps or heatwaves aren't dropped.
+		isHeatingHour := hvac.heatingHours[h] && targetTemp <= coldHeatingMaxTempC
+		isCoolingHour := hvac.coolingHours[h] && targetTemp >= hotCoolingMinTempC
+		isHotAfternoonEvening := hasTargetAfternoonPeak && targetAfternoonPeakC >= eveningThermalLagMinPeakTempC
+		if hasTargetTemp && (isHeatingHour || isCoolingHour || (hvac.hasElectricCooling && isHotAfternoonEvening)) {
 			for dateStr, hasTemps := range validDateHasHourTemp {
-				if hasTemps[h] && math.Abs(validDateHourTemp[dateStr][h]-targetTemp) <= tempSimilarityScale {
+				if !hasTemps[h] {
+					continue
+				}
+				if hvac.hasElectricCooling && isHotAfternoonEvening && !isHeatingHour && !isCoolingHour {
+					histPeakC, hasHistPeak := getDayMaxTemp(dateStr)
+					if !hasHistPeak || histPeakC < eveningThermalLagMinPeakTempC {
+						continue
+					}
+					if tempSimilarityDiffC(validDateHourTemp[dateStr][h], targetTemp)+eveningThermalLagDiffC(targetAfternoonPeakC, true, histPeakC, true) <= tempSimilarityScale*1.5 {
+						selectedDatesMap[dateStr] = true
+					}
+					continue
+				}
+				if tempSimilarityDiffC(validDateHourTemp[dateStr][h], targetTemp) <= tempSimilarityScale {
 					selectedDatesMap[dateStr] = true
 				}
 			}
@@ -1026,7 +1141,11 @@ func (c *Controller) BuildHourlyEnergyModel(
 				if hasTargetTemp {
 					ptTime := pt.TSHourStart.Truncate(time.Hour).UTC()
 					if histTemp, hasHistTemp := weatherByHour[ptTime]; hasHistTemp {
-						tempDiff := math.Abs(targetTemp - histTemp)
+						tempDiff := tempSimilarityDiffC(targetTemp, histTemp)
+						if hasTargetAfternoonPeak {
+							histPeakC, hasHistPeak := getDayMaxTemp(dateStr)
+							tempDiff += eveningThermalLagDiffC(targetAfternoonPeakC, hasTargetAfternoonPeak, histPeakC, hasHistPeak)
+						}
 						tempMult := math.Exp(-tempDiff / tempSimilarityScale)
 						finalWeight *= tempMult
 						hasTemp = true
@@ -2546,11 +2665,34 @@ func applyOutlierDayCalmMorningDampening(
 	}
 	seasonalMedians := computeSeasonalHourMedians(allValidExactHourTempLoads)
 
+	// Precompute daily max temperatures per local date from weatherByHour to mirror the main
+	// model's afternoon-to-evening thermal lag weighting in computeAllDaysHourPts.
+	dampDayMaxTempC := make(map[string]float64)
+	dampDayTempCount := make(map[string]int)
+	for tsUTC, tempC := range weatherByHour {
+		dStr := tsUTC.In(loc).Format("2006-01-02")
+		if dampDayTempCount[dStr] == 0 || tempC > dampDayMaxTempC[dStr] {
+			dampDayMaxTempC[dStr] = tempC
+		}
+		dampDayTempCount[dStr]++
+	}
+	getDampDayMaxTemp := func(dStr string) (float64, bool) {
+		if dampDayTempCount[dStr] >= minWeatherHoursForDailyAverage {
+			return dampDayMaxTempC[dStr], true
+		}
+		return 0, false
+	}
+
 	// computeAllDaysHourPts mirrors the main model's recency decay, +/-1h neighbor smoothing,
 	// cross-midnight stitches, temperature similarity weighting, and extreme-weather extrapolation for hour h,
 	// but treats every historical weekday equally (1x weight) without any same-weekday boost.
 	computeAllDaysHourPts := func(h int, targetTime time.Time, basePct float64) ([]weightedPoint, float64) {
 		targetTemp, hasTargetTemp := weatherByHour[targetTime.Truncate(time.Hour).UTC()]
+		var targetAfternoonPeakC float64
+		hasTargetAfternoonPeak := false
+		if hasTargetTemp && h >= eveningThermalLagStartHour && h <= eveningThermalLagEndHour {
+			targetAfternoonPeakC, hasTargetAfternoonPeak = getDampDayMaxTemp(targetTime.In(loc).Format("2006-01-02"))
+		}
 		var pts []weightedPoint
 		var ptHasTemp []bool
 		var sumTempMult float64
@@ -2583,7 +2725,12 @@ func applyOutlierDayCalmMorningDampening(
 				hasTemp := false
 				if hasTargetTemp {
 					if histTemp, ok := weatherByHour[pt.TSHourStart.Truncate(time.Hour).UTC()]; ok {
-						tempMult := math.Exp(-math.Abs(targetTemp-histTemp) / tempSimilarityScale)
+						tempDiff := tempSimilarityDiffC(targetTemp, histTemp)
+						if hasTargetAfternoonPeak {
+							histPeakC, hasHistPeak := getDampDayMaxTemp(dateStr)
+							tempDiff += eveningThermalLagDiffC(targetAfternoonPeakC, hasTargetAfternoonPeak, histPeakC, hasHistPeak)
+						}
+						tempMult := math.Exp(-tempDiff / tempSimilarityScale)
 						finalWeight *= tempMult
 						hasTemp = true
 						sumTempMult += tempMult

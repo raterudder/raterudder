@@ -123,8 +123,9 @@ type Server struct {
 	mcpHandlerOnce sync.Once
 	mcpHandler     http.Handler
 
-	mcpToolsOnce sync.Once
-	mcpTools     []*mcp.Tool
+	mcpToolsMu       sync.Mutex
+	mcpTools         []*mcp.Tool
+	listMCPToolsFunc func(context.Context) ([]*mcp.Tool, error)
 }
 
 // Configured initializes the Server with dependencies.

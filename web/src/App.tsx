@@ -128,6 +128,7 @@ function AppContent() {
     const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
+    const [lastFeatures, setLastFeatures] = useState<Record<string, boolean> | undefined>(undefined);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
     const [showTutorial, setShowTutorial] = useState(false);
     const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
@@ -162,6 +163,7 @@ function AppContent() {
         try {
             const data = await fetchSettings(siteID);
             setSettings(data);
+            setLastFeatures(data.features);
             setSettingsSiteID(siteID);
         } catch (err) {
             console.error("Failed to fetch settings", err);
@@ -177,7 +179,12 @@ function AppContent() {
     }, [loadSettings, effectiveSiteID]);
 
     useEffect(() => {
-        if (!loggedIn || !effectiveSiteID || effectiveSiteID === 'ALL') {
+        if (effectiveSiteID === 'ALL') {
+            setSettings(null);
+            setSettingsSiteID("");
+            return;
+        }
+        if (!loggedIn || !effectiveSiteID) {
             return;
         }
 
@@ -192,6 +199,7 @@ function AppContent() {
                 const data = await fetchSettings(effectiveSiteID);
                 if (active) {
                     setSettings(data);
+                    setLastFeatures(data.features);
                     setSettingsSiteID(effectiveSiteID);
                 }
             } catch (err) {
@@ -232,6 +240,7 @@ function AppContent() {
 
         if (!status.loggedIn) {
             setSettings(null);
+            setLastFeatures(undefined);
             setSettingsSiteID("");
             setCurrentUserID("");
         }
@@ -239,6 +248,9 @@ function AppContent() {
         // Default select first site if not selected or invalid
         if (newSites.length > 0) {
             setSelectedSiteID(current => {
+                if (current === 'ALL' && newSites.length > 1) {
+                    return 'ALL';
+                }
                 if (!current || !newSites.some(site => site.id === current)) {
                     return newSites[0].id;
                 }
@@ -247,6 +259,7 @@ function AppContent() {
         } else {
             setSelectedSiteID("");
             setSettings(null);
+            setLastFeatures(undefined);
             setSettingsSiteID("");
         }
 
@@ -269,6 +282,7 @@ function AppContent() {
                 try {
                     const settingsData = await fetchSettings(targetSiteID);
                     setSettings(settingsData);
+                    setLastFeatures(settingsData.features);
                     setSettingsSiteID(targetSiteID);
 
                     if (!settingsData.utilityProvider || !settingsData.ess) {
@@ -362,6 +376,7 @@ function AppContent() {
             setSites([]);
             setSelectedSiteID("");
             setSettings(null);
+            setLastFeatures(undefined);
             setSettingsSiteID("");
             setTermsAccepted(true);
             navigate('/', { preserveViewSite: false }); // Go back to landing page on logout
@@ -373,9 +388,15 @@ function AppContent() {
     const settingsLoading = !!(loggedIn && effectiveSiteID && effectiveSiteID !== 'ALL' && settingsSiteID !== effectiveSiteID);
     const showLoading = (loading || (!isHome && !hasAttemptedFetch) || settingsLoading) && !isHome;
 
-    const effectiveSites = viewSiteOverride && !sites.some(site => site.id === viewSiteOverride)
+    const effectiveSites = viewSiteOverride && viewSiteOverride !== 'ALL' && !sites.some(site => site.id === viewSiteOverride)
         ? [...sites, { id: viewSiteOverride, name: "" }]
         : sites;
+
+    useEffect(() => {
+        if (selectedSiteID === 'ALL' && effectiveSites.length <= 1) {
+            setSelectedSiteID(sites[0]?.id || "");
+        }
+    }, [selectedSiteID, effectiveSites.length, sites]);
 
     const handleSiteChange = (id: string) => {
         if (id === effectiveSiteID && !viewSiteOverride) {
@@ -388,10 +409,13 @@ function AppContent() {
         const params = new URLSearchParams(window.location.search);
         params.delete('viewSite');
         const searchStr = params.toString();
+        const nextSiteID = id === 'ALL' && (effectiveSites.length <= 1 || sites.length <= 1)
+            ? (sites[0]?.id || "")
+            : id;
         const nextLocation = id === 'ALL' ? '/dashboard' : location;
         navigate(nextLocation + (searchStr ? '?' + searchStr : ''), { preserveViewSite: false });
 
-        setSelectedSiteID(id);
+        setSelectedSiteID(nextSiteID);
 
         // Immediately reset settings when switching sites to prevent stale flashes
         setSettings(null);
@@ -399,7 +423,7 @@ function AppContent() {
     };
 
     return (
-        <FeaturesProvider features={settings?.features}>
+        <FeaturesProvider features={settings?.features ?? lastFeatures}>
             <div className={isHome ? "app-container-home" : "app-container"}>
                 <Header
                     loggedIn={loggedIn}
@@ -501,6 +525,8 @@ function AppContent() {
                                     <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                         {!effectiveSiteID && effectiveSites.length === 0 ? (
                                             <Redirect to="/welcome" replace />
+                                        ) : effectiveSiteID === 'ALL' ? (
+                                            <Redirect to="/dashboard" replace />
                                         ) : (
                                             <Forecast siteID={effectiveSiteID} settings={settings} />
                                         )}
@@ -510,6 +536,8 @@ function AppContent() {
                                     <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                         {!effectiveSiteID && effectiveSites.length === 0 ? (
                                             <Redirect to="/welcome" replace />
+                                        ) : effectiveSiteID === 'ALL' ? (
+                                            <Redirect to="/dashboard" replace />
                                         ) : (
                                             <History siteID={effectiveSiteID} settings={settings} />
                                         )}
@@ -519,6 +547,8 @@ function AppContent() {
                                     <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                         {!effectiveSiteID && effectiveSites.length === 0 ? (
                                             <Redirect to="/welcome" replace />
+                                        ) : effectiveSiteID === 'ALL' ? (
+                                            <Redirect to="/dashboard" replace />
                                         ) : (
                                             <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} beforeLeaveRef={settingsBeforeLeaveRef} />
                                         )}

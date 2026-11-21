@@ -1342,6 +1342,40 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, resLA, 1, "should retrieve weather for LA when querying at 4pm")
 		})
+
+		t.Run("Upsert Multi-Day and GetLatestWeatherTime", func(t *testing.T) {
+			multiSiteID := "test-site-weather-multiday"
+			yesterday := time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC)
+			today := yesterday.AddDate(0, 0, 1)
+			tomorrow := yesterday.AddDate(0, 0, 2)
+			preMidnight := time.Date(2026, 6, 4, 22, 5, 0, 0, time.UTC)
+			postMidnight := time.Date(2026, 6, 5, 0, 10, 0, 0, time.UTC)
+
+			require.NoError(t, f.UpsertWeather(ctx, multiSiteID, []types.Weather{
+				{TSDayStart: yesterday, TimeLocation: "UTC", TSUpdated: preMidnight},
+				{TSDayStart: today, TimeLocation: "UTC", TSUpdated: preMidnight},
+			}, types.CurrentWeatherVersion))
+
+			require.NoError(t, f.UpsertWeather(ctx, multiSiteID, []types.Weather{
+				{TSDayStart: yesterday, TimeLocation: "UTC", TSUpdated: postMidnight},
+				{TSDayStart: today, TimeLocation: "UTC", TSUpdated: postMidnight},
+				{TSDayStart: tomorrow, TimeLocation: "UTC", TSUpdated: postMidnight},
+			}, types.CurrentWeatherVersion))
+
+			results, err := f.GetWeather(ctx, multiSiteID, yesterday, tomorrow.AddDate(0, 0, 1))
+			require.NoError(t, err)
+			if assert.Len(t, results, 3) {
+				assert.Equal(t, postMidnight, results[0].TSUpdated.UTC())
+				assert.Equal(t, postMidnight, results[1].TSUpdated.UTC())
+				assert.Equal(t, postMidnight, results[2].TSUpdated.UTC())
+			}
+
+			latestDay, lastUpdated, ver, err := f.GetLatestWeatherTime(ctx, multiSiteID)
+			require.NoError(t, err)
+			assert.Equal(t, tomorrow, latestDay)
+			assert.Equal(t, postMidnight, lastUpdated.UTC())
+			assert.Equal(t, int(types.CurrentWeatherVersion), ver)
+		})
 	})
 
 	t.Run("UtilityPrices", func(t *testing.T) {

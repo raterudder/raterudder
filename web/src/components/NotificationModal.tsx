@@ -63,7 +63,7 @@ const flavorPreviews: Record<MorningSummaryFlavor, { name: string; desc: string;
     },
     pilot: {
         name: 'Autonomous Pilot',
-        desc: 'Real-time reasoning from RateRudder explaining how the battery is being automated.',
+        desc: 'Automation-focused outlook showing forecasted solar, battery refill timing, and daytime self-consumption plan.',
         title: '🤖 RateRudder: Morning Outlook',
         body: 'Battery at 74%. Forecast shows 38.0 kWh solar refilling battery by 1:15 PM. Optimizing daytime self-consumption.'
     }
@@ -72,7 +72,7 @@ const flavorPreviews: Record<MorningSummaryFlavor, { name: string; desc: string;
 const eveningFlavorPreviews: Record<EveningSummaryFlavor, { name: string; desc: string; title: string; body: string }> = {
     metrics_heavy: {
         name: 'Metrics Heavy',
-        desc: 'Complete totals for the day: generation, consumption, grid export, and battery reserve.',
+        desc: 'End-of-day totals for solar generation, home usage, grid export/import, and overnight battery projection.',
         title: '🌙 38.4 kWh Solar • 🔋 85% SOC (11.6 kWh)',
         body: 'Today: 38.4 kWh solar, 22.1 kWh home (12.0 kWh exported). Battery: 11.6 kWh powers home through sunrise.'
     },
@@ -80,7 +80,7 @@ const eveningFlavorPreviews: Record<EveningSummaryFlavor, { name: string; desc: 
         name: 'Home Planner',
         desc: 'Actionable evening status on how long the battery will last overnight.',
         title: '🌙 Evening Energy Wrap-up',
-        body: 'Battery at 85% (11.6 kWh). Projected to supply home until ~1:15 AM before drawing from the grid.'
+        body: 'Battery at 85% (11.6 kWh). Projected to supply home until ~1:15 AM.'
     },
     executive: {
         name: 'Executive Summary',
@@ -90,7 +90,7 @@ const eveningFlavorPreviews: Record<EveningSummaryFlavor, { name: string; desc: 
     },
     pilot: {
         name: 'Autonomous Pilot',
-        desc: 'Real-time explanation of nighttime battery strategy and grid switchover projection.',
+        desc: 'Automation-focused wrap-up summarizing solar managed today and overnight battery duration or scheduled grid charging.',
         title: '🤖 RateRudder: Evening Wrap-up',
         body: 'Automated battery managed 38.4 kWh solar today. Stored 11.6 kWh projected to power home through sunrise.'
     }
@@ -126,6 +126,9 @@ const alertSensitivityLabels: Record<AlertSensitivity, string> = {
     medium: 'Medium Sensitivity',
     high: 'High Sensitivity'
 };
+
+const normalizePerAlertSensitivity = (val?: AnomalyAlertSensitivity): AnomalyAlertSensitivity =>
+    (!val || val === 'disabled') ? '' : val;
 
 interface NotificationSampleProps {
     headerLabel?: string;
@@ -226,6 +229,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     const [removingEndpoint, setRemovingEndpoint] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    const isAllSites = siteID === 'ALL';
     const hasAnyDeviceConnected = isSubscribedLocally || subscriptions.length > 0;
 
     const isIOS = isIOSDevice();
@@ -319,9 +323,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     : defaultSettingsValues.eveningSummaryHour,
                 eveningSummaryFlavor: server.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
                 gridOutageAlert: server.gridOutageAlert ?? defaultSettingsValues.gridOutageAlert,
-                priceSpikeAlert: server.priceSpikeAlert || '',
-                solarUnderproductionAlert: server.solarUnderproductionAlert || '',
-                highHomeLoadAlert: server.highHomeLoadAlert || '',
+                priceSpikeAlert: normalizePerAlertSensitivity(server.priceSpikeAlert),
+                solarUnderproductionAlert: normalizePerAlertSensitivity(server.solarUnderproductionAlert),
+                highHomeLoadAlert: normalizePerAlertSensitivity(server.highHomeLoadAlert),
                 vppDispatchAlert: server.vppDispatchAlert ?? defaultSettingsValues.vppDispatchAlert,
                 quietPeriods: server.quietPeriods || [],
             } : defaultSettingsValues;
@@ -446,14 +450,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSwitchToCustom = () => {
-        const sens = draftSettings.allAlertSensitivity || 'medium';
+        const sens: AnomalyAlertSensitivity = draftSettings.allAlertSensitivity === 'disabled'
+            ? ''
+            : (draftSettings.allAlertSensitivity || 'medium');
         handleUpdateDraft({
             allAlertSensitivity: '',
             gridOutageAlert: draftSettings.gridOutageAlert ?? true,
             vppDispatchAlert: draftSettings.vppDispatchAlert ?? true,
-            priceSpikeAlert: (draftSettings.priceSpikeAlert && draftSettings.priceSpikeAlert !== 'disabled') ? draftSettings.priceSpikeAlert : sens,
-            solarUnderproductionAlert: (draftSettings.solarUnderproductionAlert && draftSettings.solarUnderproductionAlert !== 'disabled') ? draftSettings.solarUnderproductionAlert : sens,
-            highHomeLoadAlert: (draftSettings.highHomeLoadAlert && draftSettings.highHomeLoadAlert !== 'disabled') ? draftSettings.highHomeLoadAlert : sens,
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert) || sens,
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert) || sens,
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert) || sens,
         });
     };
 
@@ -464,13 +470,21 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSavePreferences = async () => {
-        if (!siteID || isQuietPeriodInvalid) return;
+        if (!siteID || isAllSites || isQuietPeriodInvalid) {
+            if (isAllSites) {
+                setError('Please select a specific site to save alert preferences.');
+            }
+            return;
+        }
         setSaving(true);
         setError(null);
 
         const settingsToSave: UserNotificationSettings = {
             ...draftSettings,
             allAlertSensitivity: draftSettings.allAlertSensitivity ?? '',
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert),
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert),
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert),
             morningSummaryFlavor: draftSettings.morningSummaryFlavor || defaultSettingsValues.morningSummaryFlavor,
             morningSummaryHour: draftSettings.morningSummaryHour ?? defaultSettingsValues.morningSummaryHour,
             eveningSummaryFlavor: draftSettings.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
@@ -547,7 +561,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             <Dialog.Title className="dialog-title" id="notification-modal-title">
                                 Notifications
                             </Dialog.Title>
-                            {siteName && (
+                            {siteName && !isAllSites && (
                                 <span className="modal-site-subtitle">
                                     Configuring alerts for {siteName}
                                 </span>
@@ -726,7 +740,17 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 </div>
 
                                 {/* Preferences Area (Shown once at least 1 device is connected) */}
-                                {!hasAnyDeviceConnected ? (
+                                {isAllSites ? (
+                                    <div className="notif-connect-prompt" data-testid="select-site-prompt">
+                                        <span className="notif-prompt-icon" aria-hidden="true">🏠</span>
+                                        <div className="notif-prompt-text">
+                                            <strong>Select a site to configure alert preferences</strong>
+                                            <p>
+                                                Subscribed devices above apply across your account. Select a specific site from the header menu to customize daily summaries, real-time alerts, and quiet hours.
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : !hasAnyDeviceConnected ? (
                                     <div className="notif-connect-prompt">
                                         <span className="notif-prompt-icon">🔔</span>
                                         <div className="notif-prompt-text">
@@ -786,7 +810,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                             title="Morning Summary"
                                                             description={
                                                                 <p>
-                                                                    A daily morning briefing sent at your chosen hour with your current battery SOC, solar generation forecast for today compared to yesterday, and full-charge ETA.
+                                                                    A daily morning briefing sent at your chosen hour with your current battery charge, today&apos;s solar outlook, and projected charge peak or full-charge ETA (details vary by flavor).
                                                                 </p>
                                                             }
                                                         />
@@ -888,10 +912,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                                 <div>
                                                                                     <p>Choose how you want your daily morning briefing presented:</p>
                                                                                     <ul>
-                                                                                        <li><strong>Metrics Heavy:</strong> Detailed numerical data including battery SOC (kWh), solar output percentage vs yesterday, and full-charge ETA.</li>
-                                                                                        <li><strong>Home Planner:</strong> Practical lifestyle scheduling highlighting optimal hours to run heavy appliances or charge your EV.</li>
-                                                                                        <li><strong>Executive Summary:</strong> High-level overview of expected solar harvest and battery status in concise bullet points.</li>
-                                                                                        <li><strong>Autonomous Pilot:</strong> RateRudder&apos;s AI reasoning explaining the strategy behind today&apos;s battery automation.</li>
+                                                                                        <li><strong>Metrics Heavy:</strong> Detailed numbers including current battery SOC (and kWh), forecasted solar kWh, comparison to yesterday, and full-charge ETA or projected peak.</li>
+                                                                                        <li><strong>Home Planner:</strong> Plain-language solar outlook (great, moderate, or low), current battery SOC, and full-charge ETA or peak projection.</li>
+                                                                                        <li><strong>Executive Summary:</strong> Concise headline with forecasted solar kWh and current SOC, plus a brief sentence on expected battery charging.</li>
+                                                                                        <li><strong>Autonomous Pilot:</strong> Automation-focused summary showing current battery SOC, forecasted solar kWh, refill timing, and daytime self-consumption posture.</li>
                                                                                     </ul>
                                                                                 </div>
                                                                             }
@@ -973,7 +997,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                             title="Evening Summary"
                                                             description={
                                                                 <p>
-                                                                    A daily evening wrap-up sent at your chosen hour detailing total solar generated today, home consumption, grid energy exported, and battery reserve entering the overnight period.
+                                                                    A daily evening wrap-up sent at your chosen hour with your battery level entering the night, overnight duration or scheduled grid charging, and—depending on flavor—today&apos;s solar generation, home usage, and grid export/import totals.
                                                                 </p>
                                                             }
                                                         />
@@ -1075,10 +1099,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                                 <div>
                                                                                     <p>Choose how today&apos;s daily wrap-up is delivered:</p>
                                                                                     <ul>
-                                                                                        <li><strong>Metrics Heavy:</strong> Complete end-of-day accounting of solar generated, household energy consumed, grid export, and battery reserve.</li>
-                                                                                        <li><strong>Home Planner:</strong> Overnight preparedness report advising on evening energy usage until tomorrow&apos;s sunrise.</li>
-                                                                                        <li><strong>Executive Summary:</strong> Concise recap summarizing total solar harvest and battery reserve entering the night.</li>
-                                                                                        <li><strong>Autonomous Pilot:</strong> Recap of automation actions taken during peak rate hours and handover to overnight self-consumption.</li>
+                                                                                        <li><strong>Metrics Heavy:</strong> End-of-day totals for solar generated, home usage, and grid export/import, plus stored battery kWh and overnight projection.</li>
+                                                                                        <li><strong>Home Planner:</strong> Plain-language overnight status with battery SOC/kWh and whether it will last through the night, switch to grid around a projected time, or charge on schedule.</li>
+                                                                                        <li><strong>Executive Summary:</strong> Concise recap of today&apos;s solar harvest (and grid export or home coverage) along with battery SOC entering the night.</li>
+                                                                                        <li><strong>Autonomous Pilot:</strong> Automation-focused recap of today&apos;s solar managed by the battery and how long stored energy will cover overnight load (or when grid charging is scheduled).</li>
                                                                                     </ul>
                                                                                 </div>
                                                                             }
@@ -1384,7 +1408,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                 <NotificationSample
                                                                     headerLabel="Sample Solar Underproduction Alert"
                                                                     title="⚠️ Solar Underproduction Alert"
-                                                                    body="Current generation (1.2 kW) is significantly below the 5.4 kW forecast for 1:00 PM under clear sky conditions."
+                                                                    body="Solar panels are generating 1.2 kW, significantly below the 5.4 kW forecast for this hour. Check your solar inverter or breakers."
                                                                 />
                                                             </div>
                                                         }
@@ -1442,12 +1466,12 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                         description={
                                                             <div>
                                                                 <p>
-                                                                    Alerts you when home electricity consumption surges abnormally, warning whether your battery will run out or has already reached reserve, with actionable electricity price guidance. Automatically suppressed during scheduled EV charging periods, solar coverage, and off-peak cheapest rate hours (on low/medium sensitivity).
+                                                                    Alerts you when home electricity consumption surges abnormally, warning whether your battery will run out or has already reached reserve, with actionable electricity price guidance. Automatically suppressed during detected overnight EV charging (when EV Charging Standby is enabled), solar coverage, and off-peak cheapest rate hours (on low/medium sensitivity).
                                                                 </p>
                                                                 <ul>
-                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during extreme surges (&ge; 3.5 kW) that exceed 95th percentile for this time of day.</li>
-                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts on large surges (&ge; 3.0 kW) that exceed 90th percentile for this time of day.</li>
-                                                                    <li><strong>High Sensitivity:</strong> Alerts on elevated loads (&ge; 2.5 kW) exceeding 80th percentile for closer monitoring.</li>
+                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during extreme, unusually high home load surges for this time of day.</li>
+                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts on large, unusual home load surges for this time of day.</li>
+                                                                    <li><strong>High Sensitivity:</strong> Alerts on elevated home loads above your typical usage for closer monitoring.</li>
                                                                 </ul>
                                                                 <NotificationSample
                                                                     headerLabel="Sample High Home Load Alert"
@@ -1525,8 +1549,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                 </p>
                                                                 <NotificationSample
                                                                     headerLabel="Sample VPP Dispatch Alert"
-                                                                    title="🔋 Virtual Power Plant Event Active"
-                                                                    body="Battery is discharging to support the grid during an unscheduled demand response event."
+                                                                    title="⚡ Virtual Power Plant Active"
+                                                                    body="Your battery is discharging to support the electric grid during an unscheduled VPP event."
                                                                 />
                                                             </div>
                                                         }
@@ -1562,10 +1586,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 description={
                                                     <div>
                                                         <p>
-                                                            Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
+                                                            Set a daily window where real-time push alerts (such as price spikes, solar deficits, high home loads, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
                                                         </p>
                                                         <p>
-                                                            If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
+                                                            If an alert condition is still active when quiet hours end, RateRudder will deliver a notification upon wakeup. Grid power restoration alerts muted during quiet hours are only delivered upon wakeup if power returned within the past hour.
                                                         </p>
                                                         <p>
                                                             Scheduled morning and evening summaries are not affected by this window.
@@ -1657,8 +1681,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
                                             <div className="quiet-period-info">
                                                 <p>
-                                                    Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
-                                                    If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
+                                                    Alert-style notifications (price spikes, solar deficits, high home loads, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
+                                                    If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup (grid restoration alerts are only delivered if power returned within the past hour).
                                                     Daily morning and evening summaries are excluded and follow their scheduled delivery times.
                                                 </p>
                                             </div>
@@ -1682,14 +1706,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             >
                                 Cancel
                             </button>
-                            <button
-                                type="button"
-                                className="btn btn-primary"
-                                onClick={handleSavePreferences}
-                                disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
-                            >
-                                {saving ? 'Saving...' : 'Save Preferences'}
-                            </button>
+                            {!isAllSites && (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleSavePreferences}
+                                    disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
+                                >
+                                    {saving ? 'Saving...' : 'Save Preferences'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </Dialog.Popup>

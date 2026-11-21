@@ -428,6 +428,9 @@ type OptimizationParams struct {
 // BatteryExportDegradationDollarsPerKWH represents the full round-trip cycle degradation hurdle ($0.04 conservative,
 // $0.03 balanced, $0.02 aggressive); when evaluating battery exports, GridChargeDegradationDollarsPerKWH is subtracted
 // from BatteryExportDegradationDollarsPerKWH at the export step so the total cycle hurdle equals BatteryExportDegradationDollarsPerKWH.
+//
+// NOTE: Keep degradation hurdle thresholds synchronized with the static frontend warning thresholds
+// in web/src/pages/Settings.tsx whenever these values change.
 func (s Settings) GetOptimizationParams() OptimizationParams {
 	var params OptimizationParams
 	switch strings.ToLower(s.OptimizationProfile) {

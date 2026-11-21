@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText, STALE_DASHBOARD_TIMEOUT_MS } from './Dashboard';
+import Dashboard, { whatsNewVersion, whatsNewText, STALE_DASHBOARD_TIMEOUT_MS } from './Dashboard';
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
@@ -1013,12 +1013,29 @@ describe('Dashboard', () => {
             expect(screen.getByText('Direct Solar & Battery Export')).toBeInTheDocument();
             expect(screen.getByText('EV Standby Charging')).toBeInTheDocument();
             expect(screen.getByText('Updated Dashboard & Forecast')).toBeInTheDocument();
-            if (whatsNewLinkText) {
-                const link = screen.getByRole('link', { name: whatsNewLinkText });
-                expect(link).toBeInTheDocument();
-                expect(link).toHaveAttribute('href', '/settings');
-            }
+            expect(screen.getByRole('link', { name: /Configure in Settings/i })).toHaveAttribute('href', '/settings?tou=1');
+            expect(screen.getByRole('link', { name: /Enable in Settings/i })).toHaveAttribute('href', '/settings?ev=1');
+            expect(screen.getByRole('link', { name: /View Forecast/i })).toHaveAttribute('href', '/forecast');
         });
+    });
+
+    it("hides single-site links in What's New banner when siteID is ALL", async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        renderWithRouter(<Dashboard siteID="ALL" settings={null} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('whats-new-banner')).toBeInTheDocument();
+            expect(screen.getByText('SmartPlan Algorithm')).toBeInTheDocument();
+            expect(screen.getByText('Direct Solar & Battery Export')).toBeInTheDocument();
+            expect(screen.getByText('EV Standby Charging')).toBeInTheDocument();
+            expect(screen.getByText('Updated Dashboard & Forecast')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('link', { name: /Configure in Settings/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Enable in Settings/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /View Forecast/i })).not.toBeInTheDocument();
+        expect(screen.getByTestId('whats-new-banner').querySelectorAll('a')).toHaveLength(0);
     });
 
     it("can dismiss the What's New banner", async () => {

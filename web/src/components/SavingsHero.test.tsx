@@ -31,6 +31,43 @@ describe('SavingsHero', () => {
         const negativeSavings = { ...defaultSavings, totalSavingsDollars: -28, rateRudderSavingsDollars: 0 };
         render(<SavingsHero savings={negativeSavings} />);
         expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('- $ 28.00');
+        expect(screen.getByTestId('hero-primary-savings')).toHaveClass('negative');
+    });
+
+    it('treats negative savings that round to zero as non-negative', () => {
+        const nearZeroPeriods: SavingsStats[] = [
+            {
+                ...defaultSavings,
+                totalSavingsDollars: -0.001,
+                solarAndBatterySavingsDollars: -0.001,
+                rateRudderSavingsDollars: 0,
+                credit: -0.001,
+            },
+            {
+                ...defaultSavings,
+                totalSavingsDollars: -0.004,
+                solarAndBatterySavingsDollars: -0.004,
+                rateRudderSavingsDollars: 0,
+            },
+        ];
+        render(<SavingsHero savings={nearZeroPeriods[0]} savingsPeriods={nearZeroPeriods} />);
+
+        const primary = screen.getByTestId('hero-primary-savings');
+        expect(primary).toHaveTextContent('$ 0.00');
+        expect(primary).toHaveClass('positive');
+        expect(primary).not.toHaveClass('negative');
+
+        const weekBtn = screen.getByRole('button', { name: /Last 7 Days/i });
+        const weekValue = weekBtn.querySelector('.value');
+        expect(weekValue).toHaveTextContent('+ $ 0.00');
+        expect(weekValue).toHaveClass('positive');
+        expect(weekValue).not.toHaveClass('negative');
+
+        const creditLabel = screen.getByText('Total Credit');
+        const creditValue = creditLabel.nextElementSibling;
+        expect(creditValue).toHaveTextContent('$ 0.00');
+        expect(creditValue).not.toHaveClass('negative');
+        expect(creditValue).not.toHaveClass('positive');
     });
 
     it('renders individual metrics', () => {

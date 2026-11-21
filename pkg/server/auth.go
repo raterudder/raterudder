@@ -43,7 +43,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/update":                       {isUpdatePath: true},
 	"/api/updateSites":                  {isUpdatePath: true, ignoreSiteID: true},
 	"/api/list/sites":                   {ignoreSiteID: true},
-	"/api/feedback":                     {ignoreUserNotFound: true, optionalSiteID: true},
+	"/api/feedback":                     {ignoreUserNotFound: true, optionalSiteID: true, allowAllSites: true},
 	"/api/list/feedback":                {ignoreSiteID: true},
 	"/api/list/interest":                {ignoreSiteID: true},
 	"/api/tesla/register":               {ignoreSiteID: true},

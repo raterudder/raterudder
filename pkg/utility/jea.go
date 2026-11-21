@@ -1,5 +1,17 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): jea (JEA (Jacksonville))
+// - Official Sources:
+//   - https://www.jea.com/rates (Monthly Fuel Rates for Nov–Dec 2026 and GST Time-of-Day Fuel Rates for Nov 2026)
+//   - https://www.jea.com/Pdf/Download/12884909743 (JEA Electric Tariff Volume 2 effective October 1, 2026: Sheet No. 4.0 Rate R & Fourth Revised Sheet No. 5.1 Rate GST)
+//   - https://www.jea.com/Pdf/Download/12884923000 (JEA Distributed Generation Policy, DG-1 monthly fuel rate export credit)
+// - Effective Window: 2026-01-01 through 2027-12-31 (Oct 1, 2026 base rates & Sheet 5.1 peak windows; Nov–Dec 2026 monthly fuel rates with Dec 2026 fallback and Nov 2026 GST TOU fuel carried forward until superseded)
+// - Revision Cadence: Monthly (Fuel & Purchased Power Charge) & Annual (Oct 1 Fiscal Year Base Tariff)
+// - Next Audit Due: 2026-12-05 (Check December 2026 GST TOU fuel rates and January 2027 monthly fuel rate on https://www.jea.com/rates)
+// - Last Verified: 2026-11-21
+// - Modeling Notes: Models Rate R Tier 1 residential volumetric energy + monthly fuel charge and Rate GST on-peak/off-peak base + TOU fuel charges (flat monthly fuel prior to Nov 2026; $0.05310/$0.04828/kWh TOU fuel from Nov 2026 carried forward until superseded); fixed monthly Basic Monthly Charges excluded; Net Energy Metering ("net") is 1:1 kWh netting and Distributed Generation ("dg") credits exported energy at the levelized monthly fuel rate on both Rate R and Rate GST.
+
 import (
 	"time"
 
@@ -52,9 +64,24 @@ func getJEAFuelCharge(year int, month time.Month) float64 {
 			return 0.04282
 		case time.October:
 			return 0.04326
+		case time.November:
+			return 0.04975
+		case time.December:
+			return 0.04861
 		}
 	}
-	return 0.04326
+	return 0.04861
+}
+
+// getJEAGSTFuelDollarsPerKWH returns the On-Peak and Off-Peak fuel charges ($/kWh) for Rate GST.
+// Starting November 2026, JEA applies TOU-differentiated fuel rates on Rate GST ($0.05310/kWh on-peak,
+// $0.04828/kWh off-peak per https://www.jea.com/rates), carried forward until superseded.
+func getJEAGSTFuelDollarsPerKWH(year int, month time.Month) (onPeakDollarsPerKWH, offPeakDollarsPerKWH float64) {
+	if year > 2026 || (year == 2026 && month >= time.November) {
+		return 0.05310, 0.04828
+	}
+	flatFuelDollarsPerKWH := getJEAFuelCharge(year, month)
+	return flatFuelDollarsPerKWH, flatFuelDollarsPerKWH
 }
 
 type jeaBaseRates struct {
@@ -144,20 +171,38 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 
 			case "jea_gst":
 				// Rate GST (General Service Time-of-Day)
-				onPeakRate := baseRates.gstOnPeakBase + fuelCharge
-				offPeakRate := baseRates.gstOffPeakBase + fuelCharge
+				gstOnPeakFuelDollarsPerKWH, gstOffPeakFuelDollarsPerKWH := getJEAGSTFuelDollarsPerKWH(year, month)
+				onPeakDollarsPerKWH := baseRates.gstOnPeakBase + gstOnPeakFuelDollarsPerKWH
+				offPeakDollarsPerKWH := baseRates.gstOffPeakBase + gstOffPeakFuelDollarsPerKWH
 
 				isWinter := month == time.November || month == time.December || month == time.January || month == time.February || month == time.March
+				isOct2026OrLater := year > 2026 || (year == 2026 && month >= time.October)
 
 				var onPeakHours []types.UtilityHourPeriod
-				if isWinter {
-					onPeakHours = []types.UtilityHourPeriod{
-						{HourStart: 6, HourEnd: 10},
-						{HourStart: 18, HourEnd: 22}, // 6 p.m. to 10 p.m.
+				if isOct2026OrLater {
+					// Effective October 1, 2026 (Fourth Revised Sheet No. 5.1):
+					// Winter (Nov–Mar): 6 a.m. to 10 a.m. and 6 p.m. to 9 p.m.
+					// Summer (Apr–Oct): 1 p.m. to 8 p.m.
+					if isWinter {
+						onPeakHours = []types.UtilityHourPeriod{
+							{HourStart: 6, HourEnd: 10},
+							{HourStart: 18, HourEnd: 21},
+						}
+					} else {
+						onPeakHours = []types.UtilityHourPeriod{
+							{HourStart: 13, HourEnd: 20},
+						}
 					}
 				} else {
-					onPeakHours = []types.UtilityHourPeriod{
-						{HourStart: 12, HourEnd: 21}, // 12 p.m. to 9 p.m.
+					if isWinter {
+						onPeakHours = []types.UtilityHourPeriod{
+							{HourStart: 6, HourEnd: 10},
+							{HourStart: 18, HourEnd: 22}, // 6 p.m. to 10 p.m.
+						}
+					} else {
+						onPeakHours = []types.UtilityHourPeriod{
+							{HourStart: 12, HourEnd: 21}, // 12 p.m. to 9 p.m.
+						}
 					}
 				}
 
@@ -167,7 +212,7 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 						Months:             []time.Month{month},
 						SpecificDates:      holidays,
 						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: offPeakRate,
+						OtherDollarsPerKWH: offPeakDollarsPerKWH,
 						OtherDescription:   "JEA GST Off-Peak (Holiday)",
 					},
 					{
@@ -180,12 +225,12 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 								Name:          "On-Peak",
 								Hours:         onPeakHours,
 								Weekday:       true,
-								DollarsPerKWH: onPeakRate,
+								DollarsPerKWH: onPeakDollarsPerKWH,
 								Description:   "JEA GST On-Peak",
 							},
 						},
 						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: offPeakRate,
+						OtherDollarsPerKWH: offPeakDollarsPerKWH,
 						OtherDescription:   "JEA GST Off-Peak",
 					},
 				}

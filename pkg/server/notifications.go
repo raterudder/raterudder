@@ -45,6 +45,9 @@ var ffNotifications = feats.Bool("notifications", false)
 
 // Tunable notification thresholds for anomaly detection.
 // These constants are grouped here for easy iteration and simulation against actual site history.
+//
+// NOTE: Keep notification help copy, summary previews, and any static frontend constants in
+// web/src/components/NotificationModal.tsx synchronized whenever these thresholds or rules change.
 const (
 	// defaultSummaryFlavor is the default notification flavor for morning and evening summaries.
 	defaultSummaryFlavor = "home_planner"
@@ -111,9 +114,10 @@ const (
 	solarUnderproductionMinDeficitKW = 2.5
 
 	// Ratio of actual generation to forecasted generation below which an alert is triggered.
-	solarUnderproductionRatioLow    = 0.50 // 50% of forecast (noticeable underproduction / dirty panels)
+	// Low sensitivity alerts only on severe shortfalls; high sensitivity alerts on moderate shortfalls.
+	solarUnderproductionRatioLow    = 0.15 // 15% of forecast (severe underproduction / inverter offline)
 	solarUnderproductionRatioMedium = 0.30 // 30% of forecast (moderate underproduction / partial string failure)
-	solarUnderproductionRatioHigh   = 0.15 // 15% of forecast (severe underproduction / inverter offline)
+	solarUnderproductionRatioHigh   = 0.50 // 50% of forecast (noticeable underproduction / dirty panels)
 
 	// Maximum cloud cover percentage above which underproduction alerts are suppressed (clouds explain deficit).
 	solarUnderproductionMaxCloudCoverPercent = 60.0
@@ -876,27 +880,43 @@ type siteRecentNotifications struct {
 	logs []types.NotificationLog
 }
 
-func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string, loc *time.Location) bool {
+func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string, loc *time.Location, onlyDelivered bool) bool {
 	if loc == nil {
 		loc = time.UTC
 	}
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
-			if l.TSCreated.In(loc).Format("2006-01-02") == dateStr {
-				return true
+		if l.UserID != userID || l.Type != notifType {
+			continue
+		}
+		if onlyDelivered {
+			if !l.Success || l.Muted {
+				continue
 			}
+		} else if !l.Success && !l.Muted {
+			continue
+		}
+		if l.TSCreated.In(loc).Format("2006-01-02") == dateStr {
+			return true
 		}
 	}
 	return false
 }
 
-func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time.Duration, now time.Time) bool {
+func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time.Duration, now time.Time, onlyDelivered bool) bool {
 	cutoff := now.Add(-d)
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
-			if l.TSCreated.After(cutoff) {
-				return true
+		if l.UserID != userID || l.Type != notifType {
+			continue
+		}
+		if onlyDelivered {
+			if !l.Success || l.Muted {
+				continue
 			}
+		} else if !l.Success && !l.Muted {
+			continue
+		}
+		if l.TSCreated.After(cutoff) {
+			return true
 		}
 	}
 	return false
@@ -1824,7 +1844,7 @@ func (s *Server) handleMorningSummaryNotifications(
 			continue
 		}
 		// Ensure only one morning summary is delivered per user per calendar day
-		if getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc, true) {
 			continue
 		}
 
@@ -1897,7 +1917,7 @@ func (s *Server) handleEveningSummaryNotifications(
 			continue
 		}
 		// Ensure only one evening summary is delivered per user per calendar day
-		if getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc, true) {
 			continue
 		}
 
@@ -2806,7 +2826,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			continue
 		}
 
-		if getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location(), true) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: already sent today",
 				slog.String("userID", userID),
 				slog.String("date", todayDateStr),
@@ -2821,7 +2841,9 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, sensitivity, title, body, metadata)
+			if !getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location(), false) {
+				s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, sensitivity, title, body, metadata)
+			}
 			continue
 		}
 
@@ -2912,7 +2934,7 @@ func (s *Server) handleVPPDispatchNotifications(
 		if !notifConfig.RealTimeAlertEnabled(notifConfig.VPPDispatchAlert) {
 			continue
 		}
-		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
+		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now(), true) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping vpp dispatch notification: within deduplication window",
 				slog.String("userID", userID),
 				slog.Duration("window", vppDispatchDeduplicationWindow),
@@ -2929,7 +2951,9 @@ func (s *Server) handleVPPDispatchNotifications(
 			"batteryKW":  fmt.Sprintf("%.2f", status.BatteryKW),
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeVPPDispatch, "", title, body, metadata)
+			if !getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now(), false) {
+				s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeVPPDispatch, "", title, body, metadata)
+			}
 			continue
 		}
 
@@ -3690,19 +3714,25 @@ func (s *Server) handleUpdateNotificationSettings(w http.ResponseWriter, r *http
 		req.Settings.EveningSummaryFlavor = defaultSummaryFlavor
 	}
 	switch req.Settings.PriceSpikeAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.PriceSpikeAlert = ""
 	default:
 		writeJSONError(w, "invalid price spike alert sensitivity", http.StatusBadRequest)
 		return
 	}
 	switch req.Settings.SolarUnderproductionAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.SolarUnderproductionAlert = ""
 	default:
 		writeJSONError(w, "invalid solar underproduction alert sensitivity", http.StatusBadRequest)
 		return
 	}
 	switch req.Settings.HighHomeLoadAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.HighHomeLoadAlert = ""
 	default:
 		writeJSONError(w, "invalid high home load alert sensitivity", http.StatusBadRequest)
 		return

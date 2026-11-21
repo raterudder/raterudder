@@ -119,6 +119,52 @@ func TestUserNotificationSettings_IsInQuietPeriod(t *testing.T) {
 	})
 }
 
+func TestUserNotificationSettings_RealTimeAlertSensitivity(t *testing.T) {
+	t.Run("CustomDisabledReturnsEmpty", func(t *testing.T) {
+		s := UserNotificationSettings{
+			AllAlertSensitivity:       "",
+			PriceSpikeAlert:           "disabled",
+			SolarUnderproductionAlert: "disabled",
+			HighHomeLoadAlert:         "disabled",
+		}
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(s.PriceSpikeAlert))
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(s.SolarUnderproductionAlert))
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(s.HighHomeLoadAlert))
+	})
+
+	t.Run("AllAlertSensitivityDisabledOverridesCustom", func(t *testing.T) {
+		s := UserNotificationSettings{
+			AllAlertSensitivity: "disabled",
+			PriceSpikeAlert:     "high",
+		}
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(s.PriceSpikeAlert))
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(""))
+	})
+
+	t.Run("AllAlertSensitivityOverridesCustom", func(t *testing.T) {
+		s := UserNotificationSettings{
+			AllAlertSensitivity: "high",
+			PriceSpikeAlert:     "disabled",
+		}
+		assert.Equal(t, "high", s.RealTimeAlertSensitivity(s.PriceSpikeAlert))
+		assert.Equal(t, "high", s.RealTimeAlertSensitivity("low"))
+		assert.Equal(t, "high", s.RealTimeAlertSensitivity(""))
+	})
+
+	t.Run("CustomSensitivitiesReturnedUnchanged", func(t *testing.T) {
+		s := UserNotificationSettings{
+			AllAlertSensitivity:       "",
+			PriceSpikeAlert:           "low",
+			SolarUnderproductionAlert: "medium",
+			HighHomeLoadAlert:         "high",
+		}
+		assert.Equal(t, "low", s.RealTimeAlertSensitivity(s.PriceSpikeAlert))
+		assert.Equal(t, "medium", s.RealTimeAlertSensitivity(s.SolarUnderproductionAlert))
+		assert.Equal(t, "high", s.RealTimeAlertSensitivity(s.HighHomeLoadAlert))
+		assert.Equal(t, "", s.RealTimeAlertSensitivity(""))
+	})
+}
+
 func TestActionJSONSerialization(t *testing.T) {
 	t.Parallel()
 

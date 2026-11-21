@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from './App';
 import * as api from './api';
-import { setupDefaultApiMocks, defaultAuthStatus } from './test/apiMocks';
+import { setupDefaultApiMocks, defaultAuthStatus, defaultSettings } from './test/apiMocks';
 
 vi.mock('./api');
 
@@ -211,5 +211,124 @@ describe('App routing and viewSite parameter preservation', () => {
             expect(window.location.pathname).toBe('/dashboard');
         });
         confirmSpy.mockRestore();
+    });
+
+    it('redirects /forecast, /history, and /settings to /dashboard when Overview (ALL) is selected', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/forecast');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [
+                { id: 'site1', name: 'Site 1' },
+                { id: 'site2', name: 'Site 2' },
+            ],
+        });
+
+        render(<App />);
+
+        const trigger = await screen.findByLabelText('Select Site');
+        await user.click(trigger);
+
+        const overviewOption = await screen.findByRole('option', { name: 'Overview' });
+        await user.click(overviewOption);
+
+        await waitFor(() => {
+            expect(window.location.pathname).toBe('/dashboard');
+        });
+
+        for (const guardedPath of ['/forecast', '/history', '/settings']) {
+            act(() => {
+                window.history.pushState(null, '', guardedPath);
+                window.dispatchEvent(new PopStateEvent('popstate'));
+            });
+
+            await waitFor(() => {
+                expect(window.location.pathname).toBe('/dashboard');
+            });
+        }
+    });
+
+    it('resets selectedSiteID to the single user site instead of trapping in ALL when exiting ?viewSite= via Overview', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/settings?viewSite=other-site');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [{ id: 'site1', name: 'Site 1' }],
+        });
+
+        render(<App />);
+
+        const trigger = await screen.findByLabelText('Select Site');
+        await user.click(trigger);
+
+        const overviewOption = await screen.findByRole('option', { name: 'Overview' });
+        await user.click(overviewOption);
+
+        await waitFor(() => {
+            expect(window.location.pathname).toBe('/dashboard');
+            expect(window.location.search).not.toContain('viewSite');
+            expect(screen.getByTestId('header-site-name')).toHaveTextContent('Site 1');
+        });
+
+        // Single-site navigation links remain available (not trapped in Overview)
+        expect(screen.getAllByRole('link', { name: 'Forecast' }).length).toBeGreaterThan(0);
+        expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+        expect(api.fetchSettings).toHaveBeenCalledWith('site1');
+    });
+
+    it('retains feature flags when switching to Overview and clears them on logout', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/dashboard');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [
+                { id: 'site1', name: 'Site 1' },
+                { id: 'site2', name: 'Site 2' },
+            ],
+        });
+
+        (api.fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            features: { notifications: true },
+        });
+
+        render(<App />);
+
+        expect(await screen.findByTestId('header-bell-btn')).toBeInTheDocument();
+
+        const trigger = await screen.findByLabelText('Select Site');
+        await user.click(trigger);
+
+        const overviewOption = await screen.findByRole('option', { name: 'Overview' });
+        await user.click(overviewOption);
+
+        // Notification bell stays visible in Overview because lastFeatures retains notifications: true
+        await waitFor(() => {
+            expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
+        });
+
+        // Logging out clears lastFeatures (and loggedIn state)
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: false,
+            sites: [],
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Log Out' }));
+
+        await waitFor(() => {
+            expect(window.location.pathname).toBe('/');
+            expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
+        });
     });
 });

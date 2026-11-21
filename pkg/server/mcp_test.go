@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -812,6 +814,7 @@ func TestHandleMCP(t *testing.T) {
 			},
 			MinBatterySOC: 10,
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Maybe()
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return((*types.Action)(nil), nil).Maybe()
 
 		mockStore.On("GetPriceHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.Price{
 			{
@@ -931,6 +934,7 @@ func TestHandleMCP(t *testing.T) {
 			GridExportSolar: true,
 			MinBatterySOC:   15.0,
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Maybe()
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return((*types.Action)(nil), nil).Maybe()
 
 		// 1. Invalid or future date rejected with JSON-RPC -32602 Invalid params
 		for _, badArgs := range []string{`{"date": "not-a-date"}`, `{"date": "2026-06-16"}`} {
@@ -1307,5 +1311,104 @@ func TestHandleMCP(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 		})
+	})
+}
+
+func TestResolveSiteLocation(t *testing.T) {
+	nyLoc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	laLoc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+
+	t.Run("PrefersSystemStatusTimeLocationOverSettingsTimeZone", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		srv := &Server{storage: mockStore}
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{TimeZone: "America/Los_Angeles"},
+			},
+		}
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return(&types.Action{
+			Timestamp:       time.Date(2026, 6, 15, 19, 0, 0, 0, time.UTC),
+			SystemTimestamp: time.Date(2026, 6, 15, 12, 0, 0, 0, laLoc),
+			SystemStatus: types.SystemStatus{
+				TimeLocation: "America/New_York",
+			},
+		}, nil).Once()
+
+		got := srv.resolveSiteLocation(context.Background(), "site-1", settings)
+		assert.Equal(t, "America/New_York", got.String())
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("FallsBackToSettingsTimeZoneWhenStatusTimeLocationEmpty", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		srv := &Server{storage: mockStore}
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{TimeZone: "America/Los_Angeles"},
+			},
+		}
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return(&types.Action{
+			Timestamp:       time.Date(2026, 6, 15, 19, 0, 0, 0, time.UTC),
+			SystemTimestamp: time.Date(2026, 6, 15, 15, 0, 0, 0, nyLoc),
+		}, nil).Once()
+
+		got := srv.resolveSiteLocation(context.Background(), "site-1", settings)
+		assert.Equal(t, "America/Los_Angeles", got.String())
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("FallsBackToSystemTimestampLocationNotUTCTimestamp", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		srv := &Server{storage: mockStore}
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return(&types.Action{
+			Timestamp:       time.Date(2026, 6, 15, 19, 0, 0, 0, time.UTC),
+			SystemTimestamp: time.Date(2026, 6, 15, 15, 0, 0, 0, nyLoc),
+		}, nil).Once()
+
+		got := srv.resolveSiteLocation(context.Background(), "site-1", settingsWithVersion{})
+		assert.Equal(t, "America/New_York", got.String())
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("FallsBackToUTCWhenNoLocationAvailable", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		srv := &Server{storage: mockStore}
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return((*types.Action)(nil), nil).Once()
+
+		got := srv.resolveSiteLocation(context.Background(), "site-1", settingsWithVersion{})
+		assert.Equal(t, time.UTC, got)
+		mockStore.AssertExpectations(t)
+	})
+}
+
+func TestGetMCPTools(t *testing.T) {
+	t.Run("RetriesAfterErrorAndCachesOnSuccess", func(t *testing.T) {
+		calls := 0
+		expectedTools := []*mcp.Tool{
+			{Name: "get_energy_summary", Title: "Get Energy Summary"},
+		}
+		srv := &Server{
+			listMCPToolsFunc: func(ctx context.Context) ([]*mcp.Tool, error) {
+				calls++
+				if calls == 1 {
+					return nil, errors.New("transient failure")
+				}
+				return expectedTools, nil
+			},
+		}
+
+		first := srv.getMCPTools(context.Background())
+		assert.Nil(t, first)
+		assert.Equal(t, 1, calls)
+
+		second := srv.getMCPTools(context.Background())
+		assert.Equal(t, expectedTools, second)
+		assert.Equal(t, 2, calls)
+
+		third := srv.getMCPTools(context.Background())
+		assert.Equal(t, expectedTools, third)
+		assert.Equal(t, 2, calls, "successful result should be cached")
 	})
 }

@@ -3919,10 +3919,11 @@ describe('App & Settings', () => {
     });
 
     describe('Minimum Difference Degradation Warnings', () => {
-        it('shows Default placeholder when unset (0) and shows degradation warnings only when lowered to a positive value below thresholds', async () => {
+        it('shows Default placeholder when unset (0) and shows profile-aware degradation warnings without mentioning specific floors', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
+                optimizationProfile: 'balanced',
                 gridExportBatteries: true,
                 minArbitrageDifferenceDollarsPerKWH: 0,
                 minBatteryExportDifferenceDollarsPerKWH: 0,
@@ -3944,18 +3945,22 @@ describe('App & Settings', () => {
             expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
             expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
 
+            // Balanced profile floors are $0.02 arbitrage and $0.03 battery export, so values at or above those do not warn
             await user.type(arbInput, '0.02');
             expect(arbInput).toHaveValue(0.02);
-            expect(screen.getByTestId('min-arbitrage-warning')).toHaveTextContent(/battery degradation/i);
+            expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
 
             await user.type(exportInput, '0.03');
             expect(exportInput).toHaveValue(0.03);
-            expect(screen.getByTestId('min-battery-export-warning')).toHaveTextContent(/battery degradation/i);
-
-            fireEvent.change(arbInput, { target: { value: '0.03' } });
-            fireEvent.change(exportInput, { target: { value: '0.05' } });
-            expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
             expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
+
+            // Values below Balanced floors show generic degradation warnings without citing dollar thresholds
+            fireEvent.change(arbInput, { target: { value: '0.01' } });
+            fireEvent.change(exportInput, { target: { value: '0.02' } });
+            expect(screen.getByTestId('min-arbitrage-warning')).toHaveTextContent(/battery degradation/i);
+            expect(screen.getByTestId('min-arbitrage-warning')).not.toHaveTextContent(/\$/);
+            expect(screen.getByTestId('min-battery-export-warning')).toHaveTextContent(/battery degradation/i);
+            expect(screen.getByTestId('min-battery-export-warning')).not.toHaveTextContent(/\$/);
 
             // Clearing the inputs resets to Default (0) without showing warnings
             fireEvent.change(arbInput, { target: { value: '' } });
