@@ -30,7 +30,6 @@ interface WhatsNewItem {
 
 export const whatsNewVersion = 11;
 export const whatsNewText = "Our biggest update yet is live with smarter full-day planning, direct grid exports, and a redesigned experience:";
-export const whatsNewLinkText = "";
 const whatsNewItems: WhatsNewItem[] = [
     {
         icon: "⚡",
@@ -483,7 +482,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                                 <div className="whats-new-title-row">
                                     <span className="whats-new-badge">Major Update</span>
                                     <p className="whats-new-intro">
-                                        <strong>What's New:</strong> {whatsNewText}{whatsNewLinkText && <>{' '}<Link href="/settings">{whatsNewLinkText}</Link></>}
+                                        <strong>What's New:</strong> {whatsNewText}
                                     </p>
                                 </div>
                                 <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">
@@ -499,7 +498,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                                         </div>
                                         <p className="whats-new-item-desc">
                                             {item.description}
-                                            {item.linkText && item.linkHref && (
+                                            {siteID !== 'ALL' && item.linkText && item.linkHref && (
                                                 <>
                                                     {' '}
                                                     <Link href={item.linkHref}>{item.linkText} →</Link>

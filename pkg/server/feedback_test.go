@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,6 +252,59 @@ func TestHandleSubmitFeedback(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, rr.Code)
 		mockDB.AssertNotCalled(t, "InsertFeedback")
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("AllSitesThroughAuthMiddleware", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+
+		validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user1")
+
+		mockDB := new(storagemock.MockDatabase)
+		server := &Server{
+			storage: mockDB,
+			oidcAudiences: map[string]string{
+				"google": "test-audience",
+			},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		mockDB.On("GetUser", mock.Anything, "google:user1").Return(types.User{
+			ID:    "google:user1",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
+		}, nil).Once()
+		mockDB.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
+
+		mockDB.On("InsertFeedback", mock.Anything, mock.MatchedBy(func(f types.Feedback) bool {
+			return f.SiteID == "" &&
+				strings.HasSuffix(f.ID, "_google:user1") &&
+				f.Sentiment == "happy" &&
+				f.Comment == "Overview works!" &&
+				f.UserID == "google:user1"
+		})).Return(nil).Once()
+
+		payload := map[string]any{
+			"siteID":    SiteIDAll,
+			"sentiment": "happy",
+			"comment":   "Overview works!",
+		}
+		body, _ := json.Marshal(payload)
+
+		req := httptest.NewRequest("POST", "/api/feedback", bytes.NewBuffer(body))
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+
+		rr := httptest.NewRecorder()
+		handler := server.authMiddleware(http.HandlerFunc(server.handleSubmitFeedback))
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusCreated, rr.Code)
+		mockDB.AssertNotCalled(t, "GetSite")
 		mockDB.AssertExpectations(t)
 	})
 }

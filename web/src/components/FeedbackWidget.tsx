@@ -40,7 +40,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
         };
 
         try {
-            await submitFeedback(siteID, sentiment || 'neutral', comment, extra);
+            await submitFeedback(siteID === 'ALL' ? '' : siteID, sentiment || 'neutral', comment, extra);
             setSuccess(true);
             setTimeout(() => {
                 setIsOpen(false);

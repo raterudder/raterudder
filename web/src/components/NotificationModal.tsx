@@ -226,6 +226,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     const [removingEndpoint, setRemovingEndpoint] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    const isAllSites = siteID === 'ALL';
     const hasAnyDeviceConnected = isSubscribedLocally || subscriptions.length > 0;
 
     const isIOS = isIOSDevice();
@@ -464,7 +465,12 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSavePreferences = async () => {
-        if (!siteID || isQuietPeriodInvalid) return;
+        if (!siteID || isAllSites || isQuietPeriodInvalid) {
+            if (isAllSites) {
+                setError('Please select a specific site to save alert preferences.');
+            }
+            return;
+        }
         setSaving(true);
         setError(null);
 
@@ -547,7 +553,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             <Dialog.Title className="dialog-title" id="notification-modal-title">
                                 Notifications
                             </Dialog.Title>
-                            {siteName && (
+                            {siteName && !isAllSites && (
                                 <span className="modal-site-subtitle">
                                     Configuring alerts for {siteName}
                                 </span>
@@ -726,7 +732,17 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 </div>
 
                                 {/* Preferences Area (Shown once at least 1 device is connected) */}
-                                {!hasAnyDeviceConnected ? (
+                                {isAllSites ? (
+                                    <div className="notif-connect-prompt" data-testid="select-site-prompt">
+                                        <span className="notif-prompt-icon" aria-hidden="true">🏠</span>
+                                        <div className="notif-prompt-text">
+                                            <strong>Select a site to configure alert preferences</strong>
+                                            <p>
+                                                Subscribed devices above apply across your account. Select a specific site from the header menu to customize daily summaries, real-time alerts, and quiet hours.
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : !hasAnyDeviceConnected ? (
                                     <div className="notif-connect-prompt">
                                         <span className="notif-prompt-icon">🔔</span>
                                         <div className="notif-prompt-text">
@@ -1682,14 +1698,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             >
                                 Cancel
                             </button>
-                            <button
-                                type="button"
-                                className="btn btn-primary"
-                                onClick={handleSavePreferences}
-                                disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
-                            >
-                                {saving ? 'Saving...' : 'Save Preferences'}
-                            </button>
+                            {!isAllSites && (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleSavePreferences}
+                                    disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
+                                >
+                                    {saving ? 'Saving...' : 'Save Preferences'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </Dialog.Popup>
