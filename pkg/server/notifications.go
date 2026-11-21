@@ -2355,6 +2355,7 @@ func (s *Server) handlePriceSpikeNotifications(
 			}
 
 			var eventStart, eventEnd, extremeTime time.Time
+			var activePrice types.Price
 			var activeCost, extremeCost, refPrice float64
 			var isCurrent, isFuture bool
 			var refPriceCurrent, refPriceNext float64
@@ -2365,6 +2366,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				isCurrent = qualifiesAsPriceAnomaly(currentCost, refPriceCurrent, rawCosts, reqPercentile, minDelta, isDip)
 			}
 			if isCurrent {
+				activePrice = data.currentPrice
 				eventStart = data.currentPrice.TSStart
 				eventEnd = data.currentPrice.TSEnd
 				activeCost = currentCost
@@ -2377,6 +2379,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				refPriceNext = computeTimeOfDayWindowRefPrice(histPrices, nextPrice.TSStart, siteLoc, medianCost, isDip)
 				isFuture = qualifiesAsPriceAnomaly(nextPriceCost, refPriceNext, rawCosts, reqPercentile, minDelta, isDip)
 				if isFuture {
+					activePrice = nextPrice
 					eventStart = nextPrice.TSStart
 					eventEnd = nextPrice.TSEnd
 					activeCost = nextPriceCost
@@ -2570,7 +2573,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				}
 
 				secondSentence = fmt.Sprintf("Electricity rates are surging significantly above recent prices ($%.2f/kWh). RateRudder will prioritize battery power to protect your home.", refPrice)
-				reserveSOC := data.settings.GetMinBatterySOC(ctx, eventStart, siteLoc, types.Price{DollarsPerKWH: activeCost})
+				reserveSOC := data.settings.GetMinBatterySOC(ctx, eventStart, siteLoc, activePrice)
 				if reserveSOC <= 0 {
 					reserveSOC = data.settings.MinBatterySOC
 				}

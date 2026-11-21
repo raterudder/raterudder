@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -4676,6 +4678,180 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowTueEvening, getNotifState, nil)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
+	})
+
+	t.Run("CurrentSpikeResolvesUtilityPeriodNameReserveSOC", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowMorning)
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		curHourStart := nowMorning.Truncate(time.Hour)
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: curHourStart.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+			{TSStart: curHourStart.AddDate(0, 0, -2), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+			{TSStart: curHourStart.AddDate(0, 0, -3), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var recordedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypePriceSpike {
+				recordedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		currentPrice := types.Price{
+			Provider:             "tou",
+			PeriodName:           "Peak",
+			TSStart:              curHourStart,
+			TSEnd:                curHourStart.Add(time.Hour),
+			DollarsPerKWH:        0.55,
+			GridUseDollarsPerKWH: 0.05,
+		}
+
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart: curHourStart,
+					TSEnd:   curHourStart.Add(time.Hour),
+					EndSOC:  45.0,
+				},
+			},
+		}
+
+		data := &dataForNotifications{
+			currentPrice: currentPrice,
+			status: types.SystemStatus{
+				BatteryCapacityKWH: 13.6,
+				BatterySOC:         45.0,
+			},
+			settings: types.Settings{
+				MinBatterySOC: 20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+					{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+				},
+			},
+			plan: mockPlan,
+		}
+
+		var errLogBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errLogBuf, &slog.HandlerOptions{
+			Level: slog.LevelError,
+		})))
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(ctx, siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(ctx, siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+		assert.Empty(t, errLogBuf.String())
+		if assert.NotEmpty(t, recordedLog.Body) {
+			assert.Contains(t, recordedLog.Body, "Battery is currently at 45% reserve; your home will draw from the grid during the spike.")
+		}
+	})
+
+	t.Run("FutureSpikeResolvesUtilityPeriodNameReserveSOC", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowMorning)
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		curHourStart := nowMorning.Truncate(time.Hour)
+		spikeStart := curHourStart.Add(time.Hour) // 8:00 AM
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: spikeStart.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+			{TSStart: spikeStart.AddDate(0, 0, -2), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+			{TSStart: spikeStart.AddDate(0, 0, -3), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var recordedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypePriceSpike {
+				recordedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		futurePrices := []types.Price{
+			{
+				Provider:             "tou",
+				PeriodName:           "Peak",
+				TSStart:              spikeStart,
+				TSEnd:                spikeStart.Add(2 * time.Hour),
+				DollarsPerKWH:        0.60,
+				GridUseDollarsPerKWH: 0.05,
+			},
+		}
+
+		// PlanPeriod.ReserveSOC is unset (0), so priceSpikeGuidance relies on reserveSOC from GetMinBatterySOC.
+		// EndSOC reaches the matched "Peak" reserve (35%), whereas default MinBatterySOC is 15%.
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  spikeStart,
+					TSEnd:    spikeStart.Add(time.Hour), // 9:00 AM
+					SolarKWH: 0.0,
+					LoadKWH:  2.5,
+					EndSOC:   35.0,
+				},
+				{
+					TSStart:  spikeStart.Add(time.Hour),
+					TSEnd:    spikeStart.Add(2 * time.Hour),
+					SolarKWH: 0.0,
+					LoadKWH:  2.5,
+					EndSOC:   35.0,
+				},
+			},
+		}
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				Provider:             "tou",
+				PeriodName:           "Off-Peak",
+				TSStart:              curHourStart,
+				TSEnd:                spikeStart,
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.05,
+			},
+			futurePrices: futurePrices,
+			status: types.SystemStatus{
+				BatteryCapacityKWH: 13.6,
+				BatterySOC:         55.0,
+			},
+			settings: types.Settings{
+				MinBatterySOC: 15.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{UtilityPeriodName: "Off-Peak", MinBatterySOC: 15.0},
+					{UtilityPeriodName: "Peak", MinBatterySOC: 35.0},
+				},
+			},
+			plan: mockPlan,
+		}
+
+		var errLogBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errLogBuf, &slog.HandlerOptions{
+			Level: slog.LevelError,
+		})))
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(ctx, siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(ctx, siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+		assert.Empty(t, errLogBuf.String())
+		if assert.NotEmpty(t, recordedLog.Body) {
+			assert.Contains(t, recordedLog.Body, "Battery is at 55% and will supply home until ~9:00 AM.")
+		}
 	})
 }
 
