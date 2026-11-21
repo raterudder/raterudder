@@ -396,7 +396,7 @@ func calculateHourlyGTI(dni, dhi float64, positions [4]sunPosition, arrayTilt, a
 }
 
 // calculateSolarClippingCap estimates the inverter's clipping limit in kWh based on historical production.
-func calculateSolarClippingCap(ctx context.Context, history []types.EnergyStats) float64 {
+func calculateSolarClippingCap(ctx context.Context, history []types.EnergyStats, timeLoc *time.Location) float64 {
 	maxSolarKWH := 0.0
 	for _, h := range history {
 		if h.SolarKWH > maxSolarKWH {
@@ -414,7 +414,11 @@ func calculateSolarClippingCap(ctx context.Context, history []types.EnergyStats)
 			if s.TSHourStart.IsZero() {
 				continue
 			}
-			dayStr := s.TSHourStart.Format("2006-01-02")
+			ts := s.TSHourStart
+			if timeLoc != nil {
+				ts = ts.In(timeLoc)
+			}
+			dayStr := ts.Format("2006-01-02")
 			if s.SolarKWH > 0.5 {
 				byDay[dayStr] = append(byDay[dayStr], s.SolarKWH)
 			}
@@ -745,13 +749,14 @@ type indexedWeatherHour struct {
 }
 
 type indexedHistoryHour struct {
-	ts              int64
-	weatherIdx      int
-	solarKWH        float64
-	recencyWeight   float64
-	isClipped       bool
-	matchesHomeLoad bool
-	baseValid       bool
+	ts                  int64
+	weatherIdx          int
+	solarKWH            float64
+	recencyWeight       float64
+	isClipped           bool
+	matchesHomeLoad     bool
+	evalMatchesHomeLoad bool
+	baseValid           bool
 }
 
 type evalCandidatePoint struct {
@@ -898,7 +903,7 @@ func CalculateWeatherSolar(
 		}
 	}
 
-	clippingCap := calculateSolarClippingCap(ctx, history)
+	clippingCap := calculateSolarClippingCap(ctx, history, timeLoc)
 
 	// Pre-index unique weather hours once (keeping the latest HourlyWeather entry per Unix hour)
 	// while simultaneously identifying the best fallback irradiance source (GTI if available, else GHI).
@@ -986,14 +991,16 @@ func CalculateWeatherSolar(
 			needsSortOrDedup = true
 		}
 		prevHistTS = ts
+		matchesHome := isMatchingHomeLoad(st)
 		matchedHistory = append(matchedHistory, indexedHistoryHour{
-			ts:              ts,
-			weatherIdx:      wIdx,
-			solarKWH:        st.SolarKWH,
-			recencyWeight:   calculateRecencyWeight(ts, now),
-			isClipped:       clippingCap > 0 && st.SolarKWH >= clippingCap-clippingEps,
-			matchesHomeLoad: isMatchingHomeLoad(st),
-			baseValid:       st.SolarKWH > 0.02 && !isSolarCurtailed(st) && indexedWeather[wIdx].hw.SnowDepthCM <= 0.2,
+			ts:                  ts,
+			weatherIdx:          wIdx,
+			solarKWH:            st.SolarKWH,
+			recencyWeight:       calculateRecencyWeight(ts, now),
+			isClipped:           clippingCap > 0 && st.SolarKWH >= clippingCap-clippingEps,
+			matchesHomeLoad:     matchesHome,
+			evalMatchesHomeLoad: (st.MaxBatterySOC == 0 || st.MaxBatterySOC >= 15.0) && matchesHome,
+			baseValid:           st.SolarKWH > 0.02 && !isSolarCurtailed(st) && indexedWeather[wIdx].hw.SnowDepthCM <= 0.2,
 		})
 	}
 	if needsSortOrDedup {
@@ -1053,29 +1060,16 @@ func CalculateWeatherSolar(
 	// Even though we don't know the roof's true tilt/azimuth yet, at any fixed localHour of the day
 	// the sun's position is consistent across days, so comparing horizEff against the median horizEff
 	// at that same localHour reliably identifies hours where production collapsed.
-	for _, he := range history {
-		if usePriorOnly && !he.TSHourStart.Before(todayMidnight) {
+	for _, he := range searchHist {
+		if !he.baseValid || he.solarKWH <= 0.5 {
 			continue
 		}
-		if he.SolarKWH <= 0.5 {
-			continue
-		}
-		ts := he.TSHourStart.Unix()
-		if ts == nowTruncUnix {
-			continue
-		}
-		wIdx, ok := weatherIdxByTS[ts]
-		if !ok || indexedWeather[wIdx].hw.SnowDepthCM > 0.2 {
-			continue
-		}
+		wIdx := he.weatherIdx
 		// Filter using candidate-independent horizontal irradiance (tilt=0) so every
 		// candidate azimuth/tilt is evaluated across the exact same set of daylight hours,
 		// and orientations that point away from the sun during active production hours are penalized.
 		horizGTI := indexedWeather[wIdx].horizGTI
 		if horizGTI < 25 {
-			continue
-		}
-		if isSolarCurtailed(he) {
 			continue
 		}
 		snowFactor := indexedWeather[wIdx].snowFactor
@@ -1085,11 +1079,11 @@ func CalculateWeatherSolar(
 			continue
 		}
 		// horizEff is the effective system conversion ratio relative to horizontal irradiance.
-		horizEff := he.SolarKWH / horizDenom
+		horizEff := he.solarKWH / horizDenom
 		localHour := indexedWeather[wIdx].localHour
 		// Check whether solar appeared to be tracking home load with near-zero grid/battery flow
 		// (requiring MaxBatterySOC >= 15% when SOC telemetry is present so empty-battery morning hours aren't flagged).
-		matchesHome := (he.MaxBatterySOC == 0 || he.MaxBatterySOC >= 15.0) && isMatchingHomeLoad(he)
+		matchesHome := he.evalMatchesHomeLoad
 		// If this hour was NOT matching home load and had meaningful sunlight, include it in the
 		// unconstrained baseline for this hour of the day.
 		if !matchesHome && horizGTI >= unconstrainedBaselineMinGTI {
@@ -1097,7 +1091,7 @@ func CalculateWeatherSolar(
 		}
 		evalHours = append(evalHours, evalHourPoint{
 			weatherIdx:      wIdx,
-			solarKWH:        he.SolarKWH,
+			solarKWH:        he.solarKWH,
 			snowFactor:      snowFactor,
 			localHour:       localHour,
 			horizEff:        horizEff,
@@ -1119,12 +1113,12 @@ func CalculateWeatherSolar(
 
 	// Pass 2: Filter evalHours in place by dropping points that were matching home load while producing at
 	// < dcCurtailmentEvalMaxHorizEffRatio (45%) of that hour's normal unconstrained efficiency
-	// (excluding heavy overcast hours with cloudCover >= 80% and GTI < 300).
+	// (excluding heavy overcast hours with cloudCover >= 80% and horizGTI < 300).
 	nEval := 0
 	for _, pt := range evalHours {
 		refEff := refHorizEffByHour[pt.localHour]
-		hw := indexedWeather[pt.weatherIdx].hw
-		isHeavyOvercast := hw.CloudCoverPercent >= dcCurtailmentOvercastCloudPercent && hw.GTI < dcCurtailmentHighGTI
+		iw := indexedWeather[pt.weatherIdx]
+		isHeavyOvercast := iw.hw.CloudCoverPercent >= dcCurtailmentOvercastCloudPercent && iw.horizGTI < dcCurtailmentHighGTI
 		if refEff > 0 && pt.matchesHomeLoad && !isHeavyOvercast && pt.horizEff < dcCurtailmentEvalMaxHorizEffRatio*refEff {
 			continue
 		}
