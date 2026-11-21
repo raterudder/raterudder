@@ -26,10 +26,18 @@ type baseAmerenSmart struct {
 	cpnodeID   string
 	client     *http.Client
 	db         storage.Database
+	nowFunc    func() time.Time
 
 	mu           sync.Mutex
 	cachedPrices map[string][]types.Price
 	sfGroup      singleflight.Group
+}
+
+func (c *baseAmerenSmart) now() time.Time {
+	if c.nowFunc != nil {
+		return c.nowFunc()
+	}
+	return time.Now()
 }
 
 func configuredAmerenSmart(db storage.Database) *baseAmerenSmart {
@@ -53,8 +61,8 @@ func configuredAmerenSmart(db storage.Database) *baseAmerenSmart {
 func (c *baseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting current ameren price")
 
-	// MISO operates in ET
-	now := time.Now().In(etLocation)
+	// MISO operates in fixed EST (UTC-5)
+	now := c.now().In(estLocation)
 
 	// Ameren PSP uses day-ahead prices for real-time without true-ups
 	prices, err := c.getPricesForDate(ctx, now)
@@ -75,8 +83,8 @@ func (c *baseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, err
 // contains the day ahead hourly prices for the given date range.
 func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	var cached []types.Price
-	// MISO operates in ET
-	curr := start.In(etLocation).Truncate(time.Hour)
+	// MISO operates in fixed EST (UTC-5)
+	curr := start.In(estLocation).Truncate(time.Hour)
 	func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -104,7 +112,7 @@ func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 	confirmed := make([]types.Price, len(cached), len(cached)+24)
 	copy(confirmed, cached)
 
-	today := truncateDay(time.Now().In(etLocation))
+	today := truncateDay(c.now().In(estLocation))
 	// Fetch for each day in the remaining range
 	for d := truncateDay(curr); !d.After(end) && !d.After(today); d = d.AddDate(0, 0, 1) {
 		prices, err := c.getPricesForDate(ctx, d)
@@ -128,8 +136,8 @@ func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 // GetFuturePrices gets the future prices for Ameren PSP rate plan which
 // contains the day ahead hourly prices for the given date range.
 func (c *baseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
-	// MISO operates in ET
-	now := time.Now().In(etLocation)
+	// MISO operates in fixed EST (UTC-5)
+	now := c.now().In(estLocation)
 	today := truncateDay(now)
 	tomorrow := today.AddDate(0, 0, 1)
 
@@ -158,9 +166,9 @@ func (c *baseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, e
 }
 
 func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) ([]types.Price, error) {
-	// MISO operates in ET
-	dateET := date.In(etLocation)
-	dateStr := dateET.Format("20060102")
+	// MISO operates in fixed EST (UTC-5)
+	dateEST := date.In(estLocation)
+	dateStr := dateEST.Format("20060102")
 
 	c.mu.Lock()
 	if prices, ok := c.cachedPrices[dateStr]; ok && len(prices) > 0 {
@@ -184,16 +192,19 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 				"ameren prices not found in cache, checking database",
 				slog.String("date", dateStr),
 			)
-			start := truncateDay(dateET).In(ctLocation)
+			start := truncateDay(dateEST).In(ctLocation)
 			end := start.Add(24 * time.Hour)
 			expectedHours := 24
-			dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
+			dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren_psp", start, end)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get ameren prices from database", slog.Any("error", err))
 			} else if len(dbPrices) >= expectedHours {
-				var prices []types.Price
+				prices := make([]types.Price, 0, len(dbPrices))
 				for _, p := range dbPrices {
-					prices = append(prices, p.Price)
+					price := p.Price
+					price.TSStart = price.TSStart.In(ctLocation)
+					price.TSEnd = price.TSEnd.In(ctLocation)
+					prices = append(prices, price)
 				}
 				c.mu.Lock()
 				c.cachedPrices[dateStr] = prices
@@ -201,14 +212,14 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 				return prices, nil
 			}
 			if err == nil && len(dbPrices) > 0 {
-				log.Ctx(ctx).ErrorContext(ctx, "incomplete ameren prices found in database, falling back to api",
+				log.Ctx(ctx).WarnContext(ctx, "incomplete ameren prices found in database, falling back to api",
 					slog.String("date", dateStr),
 					slog.Int("got", len(dbPrices)),
 					slog.Int("expected", expectedHours))
 			}
 		}
 
-		prices, err := c.fetchMISODayAhead(ctx, dateET, c.cpnodeID)
+		prices, err := c.fetchMISODayAhead(ctx, dateEST, c.cpnodeID)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +227,7 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 		c.mu.Lock()
 		c.cachedPrices[dateStr] = prices
 		var toUpsert []types.PriceState
-		nowUpsert := time.Now()
+		nowUpsert := c.now()
 		for _, p := range prices {
 			toUpsert = append(toUpsert, types.PriceState{
 				Price:     p,
@@ -227,7 +238,7 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 		c.mu.Unlock()
 
 		if c.db != nil {
-			if err := c.db.UpsertUtilityPrices(ctx, "ameren", toUpsert, 0); err != nil {
+			if err := c.db.UpsertUtilityPrices(ctx, "ameren_psp", toUpsert, 0); err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to upsert ameren prices to database", slog.Any("error", err))
 			}
 		}
@@ -244,9 +255,9 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 }
 
 func (c *baseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time, cpnode string) ([]types.Price, error) {
-	// MISO operates in ET
-	dateET := date.In(etLocation)
-	dateStr := dateET.Format("20060102")
+	// MISO operates in fixed EST (UTC-5)
+	dateEST := date.In(estLocation)
+	dateStr := dateEST.Format("20060102")
 	url := fmt.Sprintf("%s/%s_da_expost_lmp.csv", c.misoAPIURL, dateStr)
 	log.Ctx(ctx).DebugContext(ctx, "fetching miso day ahead prices for ameren", slog.String("date", dateStr), slog.String("url", url))
 
@@ -331,10 +342,10 @@ func (c *baseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time,
 					continue
 				}
 
-				// MISO publishes in Eastern Prevailing Time (EPT).
-				// HE 1 is Hour Ending 1:00 AM EPT (00:00 - 01:00 EPT), which is 23:00 - 00:00 CT of previous day.
-				tET := time.Date(dateET.Year(), dateET.Month(), dateET.Day(), i-1, 0, 0, 0, etLocation)
-				t := tET.In(ctLocation)
+				// MISO publishes in fixed Eastern Standard Time (EST, UTC-5) year-round.
+				// HE 1 is Hour Ending 1:00 AM EST (00:00 - 01:00 EST), which is 23:00 - 00:00 CST in winter or 00:00 - 01:00 CDT in summer.
+				tEST := time.Date(dateEST.Year(), dateEST.Month(), dateEST.Day(), i-1, 0, 0, 0, estLocation)
+				t := tEST.In(ctLocation)
 				lmp := val / 1000.0 // $/MWh to $/kWh
 
 				// Rider PSP says EC = [LMP + ASEC + MSC] * LossFactor

@@ -7,7 +7,6 @@ import (
 
 var (
 	// PJM uses Eastern Time
-	// MISO uses Eastern Time
 	// Duke uses Eastern Time
 	// Georgia Power uses Eastern Time
 	etLocation = func() *time.Location {
@@ -17,6 +16,9 @@ var (
 		}
 		return loc
 	}()
+
+	// MISO uses Eastern Standard Time (no DST)
+	estLocation = time.FixedZone("EST", -5*60*60)
 
 	// ComEd uses Central Time
 	// Xcel uses Central Time
