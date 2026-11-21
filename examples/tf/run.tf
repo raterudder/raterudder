@@ -138,12 +138,13 @@ resource "google_cloud_run_v2_service" "raterudder" {
           memory = "128Mi"
         }
         cpu_idle          = true
-        startup_cpu_boost = false
+        startup_cpu_boost = true
       }
 
       startup_probe {
-        timeout_seconds = 1
-        period_seconds  = 1
+        timeout_seconds   = 2
+        period_seconds    = 2
+        failure_threshold = 5
         http_get {
           path = "/healthz"
         }

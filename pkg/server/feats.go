@@ -9,7 +9,10 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 )
 
-const featsCacheTTL = 5 * time.Minute
+const (
+	featsCacheTTL     = 5 * time.Minute
+	featsFetchTimeout = 5 * time.Second
+)
 
 func (s *Server) featsRelease() string {
 	if s.featuresEnvironment != "" {
@@ -52,7 +55,11 @@ func (s *Server) getFeatsEvaluator(ctx context.Context) *feats.Evaluator {
 
 	release := s.featsRelease()
 
-	cfg, updatedAt, err := s.storage.GetFeatureConfig(ctx, release)
+	fetchCtx, cancel := context.WithTimeout(ctx, featsFetchTimeout)
+	defer cancel()
+
+	cfg, updatedAt, err := s.storage.GetFeatureConfig(fetchCtx, release)
+	now = s.now()
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to fetch feature flag config", slog.String("release", release), slog.Any("error", err))
 		s.featsMu.Lock()

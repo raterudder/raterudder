@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -65,26 +66,33 @@ type Server struct {
 	controller *controller.Controller
 	weather    weather.Service
 
-	listenAddr string
-	devProxy   string
-	httpServer *http.Server
+	listenAddr      string
+	boundAddrMu     sync.RWMutex
+	boundListenAddr string
+	devProxy        string
+	httpServer      *http.Server
 
-	updateSpecificEmail   string
-	updateOIDCVerifier    tokenVerifier
-	adminEmails           []string
-	oidcAudiences         map[string]string
-	oidcVerifiers         map[string]tokenVerifier
-	bypassAuth            bool
-	encryptionKey         string
-	sessionEncryptionKey  string
-	appsEncryptionKey     string
-	sessionDuration       time.Duration
-	release               string
-	featuresEnvironment   string
-	serverName            string
-	webCacheDuration      time.Duration
-	webImageCacheDuration time.Duration
-	showHidden            bool
+	updateSpecificEmail    string
+	updateSpecificAudience string
+	updateOIDCVerifier     tokenVerifier
+	adminEmails            []string
+	oidcAudiences          map[string]string
+	oidcVerifiers          map[string]tokenVerifier
+	newOIDCProvider        func(context.Context, string) (*oidc.Provider, error)
+	oidcMu                 sync.RWMutex
+	oidcProviders          map[string]*oidc.Provider
+	oidcProviderGroup      singleflight.Group
+	bypassAuth             bool
+	encryptionKey          string
+	sessionEncryptionKey   string
+	appsEncryptionKey      string
+	sessionDuration        time.Duration
+	release                string
+	featuresEnvironment    string
+	serverName             string
+	webCacheDuration       time.Duration
+	webImageCacheDuration  time.Duration
+	showHidden             bool
 
 	clientLimiters     sync.Map
 	cimdCache          sync.Map
@@ -245,59 +253,37 @@ func (s *Server) configureOIDC(
 	updateSpecificAudience string,
 	newProvider func(context.Context, string) (*oidc.Provider, error),
 ) error {
-	var googleProvider *oidc.Provider
+	if newProvider == nil {
+		newProvider = oidc.NewProvider
+	}
+
+	var validated map[string]string
 	if len(oidcAudiences) > 0 {
-		s.oidcAudiences = make(map[string]string, len(oidcAudiences))
-		s.oidcVerifiers = make(map[string]tokenVerifier, len(oidcAudiences))
+		validated = make(map[string]string, len(oidcAudiences))
 		for n, a := range oidcAudiences {
 			switch n {
-			case "google":
-				var err error
-				googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-				if err != nil {
-					log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-					return err
-				}
-				s.oidcVerifiers[n] = googleProvider.Verifier(&oidc.Config{ClientID: a}).Verify
-				s.oidcAudiences[n] = a
-			case "apple":
-				provider, err := newProvider(ctx, "https://appleid.apple.com")
-				if err != nil {
-					log.Ctx(ctx).Error("failed to initialize Apple OIDC provider", slog.Any("error", err))
-					return err
-				}
-				s.oidcVerifiers[n] = provider.Verifier(&oidc.Config{ClientID: a}).Verify
-				s.oidcAudiences[n] = a
+			case "google", "apple":
+				validated[n] = a
 			default:
 				log.Ctx(ctx).Error("unsupported oidc audience client", slog.String("client", n))
 				return fmt.Errorf("unsupported oidc audience client: %s", n)
 			}
 		}
 	} else if oidcAudience != "" {
-		var err error
-		googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-		if err != nil {
-			log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-			return err
-		}
-		s.oidcVerifiers = map[string]tokenVerifier{
-			"google": googleProvider.Verifier(&oidc.Config{ClientID: oidcAudience}).Verify,
-		}
-		s.oidcAudiences = map[string]string{
+		validated = map[string]string{
 			"google": oidcAudience,
 		}
 	}
-	if updateSpecificAudience != "" {
-		if googleProvider == nil {
-			var err error
-			googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-			if err != nil {
-				log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-				return err
-			}
-		}
-		s.updateOIDCVerifier = googleProvider.Verifier(&oidc.Config{ClientID: updateSpecificAudience}).Verify
-	}
+
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+
+	s.newOIDCProvider = newProvider
+	s.oidcAudiences = validated
+	s.updateSpecificAudience = updateSpecificAudience
+	s.oidcProviders = nil
+	s.oidcVerifiers = make(map[string]tokenVerifier)
+	s.updateOIDCVerifier = nil
 	return nil
 }
 
@@ -469,12 +455,17 @@ func (s *Server) getUpdateSpecificAuth(r *http.Request) bool {
 	return false
 }
 
+const featsWarmupTimeout = 5 * time.Second
+
+func (s *Server) boundAddr() string {
+	s.boundAddrMu.RLock()
+	defer s.boundAddrMu.RUnlock()
+	return s.boundListenAddr
+}
+
 // Run starts the HTTP server and blocks until the context is canceled or an error occurs.
 // It also handles graceful shutdown when the context is done.
 func (s *Server) Run(ctx context.Context) error {
-	// trigger a refresh of the feature config
-	s.getFeatsEvaluator(ctx)
-
 	s.httpServer = &http.Server{
 		Addr:              s.listenAddr,
 		Handler:           s.setupHandler(),
@@ -484,27 +475,52 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       15 * time.Second,
 	}
 
-	// use a channel to capturing server errors
+	ln, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return fmt.Errorf("server error: %w", err)
+	}
+	addr := ln.Addr().String()
+	s.boundAddrMu.Lock()
+	s.boundListenAddr = addr
+	s.boundAddrMu.Unlock()
+
+	// use a channel to capture server errors
 	errChan := make(chan error, 1)
 	go func() {
 		defer close(errChan)
-		log.Ctx(ctx).InfoContext(ctx, "starting server", slog.String("addr", s.listenAddr))
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Ctx(ctx).InfoContext(ctx, "starting server", slog.String("addr", addr))
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- err
 		}
 	}()
 
+	// warm feature flags asynchronously after binding the listener
+	warmupDone := make(chan struct{})
+	warmupCtx, cancelWarmup := context.WithTimeout(ctx, featsWarmupTimeout)
+	go func() {
+		defer close(warmupDone)
+		defer cancelWarmup()
+		s.getFeatsEvaluator(warmupCtx)
+	}()
+
 	select {
 	case <-ctx.Done():
+		cancelWarmup()
 		// Context canceled, shut down gracefully
 		log.Ctx(ctx).InfoContext(ctx, "shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("server shutdown failed: %w", err)
+		shutdownErr := s.httpServer.Shutdown(shutdownCtx)
+		select {
+		case <-warmupDone:
+		case <-shutdownCtx.Done():
+		}
+		if shutdownErr != nil {
+			return fmt.Errorf("server shutdown failed: %w", shutdownErr)
 		}
 		return nil
 	case err := <-errChan:
+		cancelWarmup()
 		return fmt.Errorf("server error: %w", err)
 	}
 }
@@ -521,10 +537,17 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	if err := s.storage.Ping(r.Context()); err != nil {
-		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
-		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
-		return
+	if r.URL.Query().Get("ping") == "true" {
+		if s.storage == nil {
+			log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: storage not configured")
+			writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.storage.Ping(r.Context()); err != nil {
+			log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
+			writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok")); err != nil {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -231,8 +232,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					token := strings.TrimPrefix(authHeader, "Bearer ")
 					var emailRet, subjectRet string
 					var err error
-					if s.updateOIDCVerifier != nil {
-						emailRet, subjectRet, _, err = verifyOIDCToken(ctx, "google_update_specific", s.updateOIDCVerifier, token)
+					updateVerifier, hasUpdateVerifier, verifierErr := s.getUpdateOIDCVerifier(ctx)
+					if verifierErr != nil {
+						err = verifierErr
+					} else if hasUpdateVerifier {
+						emailRet, subjectRet, _, err = verifyOIDCToken(ctx, "google_update_specific", updateVerifier, token)
 					} else {
 						emailRet, subjectRet, _, err = s.authenticateToken(ctx, token, "")
 					}
@@ -718,14 +722,144 @@ func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const oidcDiscoveryTimeout = 5 * time.Second
+
 var userOIDCClients = []string{"google", "apple"}
 
 func isUserOIDCClient(client string) bool {
 	return client == "google" || client == "apple"
 }
 
+func oidcIssuerForClient(client string) (string, bool) {
+	switch client {
+	case "google":
+		return "https://accounts.google.com", true
+	case "apple":
+		return "https://appleid.apple.com", true
+	default:
+		return "", false
+	}
+}
+
 func hasUserOIDCSubjectPrefix(subject string) bool {
 	return strings.HasPrefix(subject, "google:") || strings.HasPrefix(subject, "apple:")
+}
+
+func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Provider, error) {
+	s.oidcMu.RLock()
+	if p, ok := s.oidcProviders[issuer]; ok && p != nil {
+		s.oidcMu.RUnlock()
+		return p, nil
+	}
+	newProvider := s.newOIDCProvider
+	s.oidcMu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if newProvider == nil {
+		newProvider = oidc.NewProvider
+	}
+
+	ch := s.oidcProviderGroup.DoChan(issuer, func() (any, error) {
+		s.oidcMu.RLock()
+		if p, ok := s.oidcProviders[issuer]; ok && p != nil {
+			s.oidcMu.RUnlock()
+			return p, nil
+		}
+		s.oidcMu.RUnlock()
+
+		initCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), oidcDiscoveryTimeout)
+		defer cancel()
+
+		provider, err := newProvider(initCtx, issuer)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to initialize OIDC provider", slog.String("issuer", issuer), slog.Any("error", err))
+			return nil, err
+		}
+
+		s.oidcMu.Lock()
+		if s.oidcProviders == nil {
+			s.oidcProviders = make(map[string]*oidc.Provider)
+		}
+		s.oidcProviders[issuer] = provider
+		s.oidcMu.Unlock()
+
+		return provider, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*oidc.Provider), nil
+	}
+}
+
+func (s *Server) getOIDCVerifier(ctx context.Context, providerName string) (tokenVerifier, bool, error) {
+	s.oidcMu.RLock()
+	if verifier, ok := s.oidcVerifiers[providerName]; ok && verifier != nil {
+		s.oidcMu.RUnlock()
+		return verifier, true, nil
+	}
+	aud, hasAud := s.oidcAudiences[providerName]
+	s.oidcMu.RUnlock()
+
+	if !hasAud {
+		return nil, false, nil
+	}
+
+	issuer, ok := oidcIssuerForClient(providerName)
+	if !ok {
+		return nil, false, fmt.Errorf("unsupported oidc client: %s", providerName)
+	}
+
+	provider, err := s.getOIDCProvider(ctx, issuer)
+	if err != nil {
+		return nil, true, err
+	}
+
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+	if verifier, ok := s.oidcVerifiers[providerName]; ok && verifier != nil {
+		return verifier, true, nil
+	}
+	if s.oidcVerifiers == nil {
+		s.oidcVerifiers = make(map[string]tokenVerifier, len(s.oidcAudiences))
+	}
+	verifier := provider.Verifier(&oidc.Config{ClientID: aud}).Verify
+	s.oidcVerifiers[providerName] = verifier
+	return verifier, true, nil
+}
+
+func (s *Server) getUpdateOIDCVerifier(ctx context.Context) (tokenVerifier, bool, error) {
+	s.oidcMu.RLock()
+	if s.updateOIDCVerifier != nil {
+		verifier := s.updateOIDCVerifier
+		s.oidcMu.RUnlock()
+		return verifier, true, nil
+	}
+	aud := s.updateSpecificAudience
+	s.oidcMu.RUnlock()
+
+	if aud == "" {
+		return nil, false, nil
+	}
+
+	provider, err := s.getOIDCProvider(ctx, "https://accounts.google.com")
+	if err != nil {
+		return nil, true, err
+	}
+
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+	if s.updateOIDCVerifier == nil {
+		s.updateOIDCVerifier = provider.Verifier(&oidc.Config{ClientID: aud}).Verify
+	}
+	return s.updateOIDCVerifier, true, nil
 }
 
 func verifyOIDCToken(ctx context.Context, providerName string, verifier tokenVerifier, token string) (string, string, time.Time, error) {
@@ -770,7 +904,11 @@ func (s *Server) authenticateToken(ctx context.Context, token string, specificCl
 		if specificClient != "" && providerName != specificClient {
 			continue
 		}
-		verifier, ok := s.oidcVerifiers[providerName]
+		verifier, ok, err := s.getOIDCVerifier(ctx, providerName)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s verifier failed: %w", providerName, err))
+			continue
+		}
 		if !ok || verifier == nil {
 			continue
 		}
