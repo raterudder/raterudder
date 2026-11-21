@@ -202,6 +202,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		needLogin = f.username != creds.Franklin.Username || f.md5Password != currentMD5 || f.userType != creds.Franklin.UserType
 	}
 
+	loggedInFresh := false
 	if needLogin {
 		log.Ctx(ctx).DebugContext(ctx, "logging in to franklin")
 		// Credentials changed or no cached token — must login fresh.
@@ -209,6 +210,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		if err != nil {
 			return creds, false, err
 		}
+		loggedInFresh = true
 		f.username = creds.Franklin.Username
 		f.md5Password = currentMD5
 		f.userType = resolvedUserType
@@ -247,28 +249,47 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	}
 	f.gatewayID = creds.Franklin.GatewayID
 
-	// Validate the credentials by fetching device info. This confirms the token
-	// and gateway ID are working. The result is cached so the subsequent
-	// GetStatus call will reuse it for free.
+	refreshExpiredToken := func(origErr error) error {
+		log.Ctx(ctx).DebugContext(ctx, "franklin token expired", slog.Any("error", origErr))
+		token, resolvedUserType, err := f.login(ctx, f.username, f.md5Password, f.userType)
+		if err != nil {
+			return err
+		}
+		f.tokenStr = token
+		f.userType = resolvedUserType
+		// Persist the new token so we can skip login next time.
+		creds.Franklin.Token = token
+		if creds.Franklin.UserType != resolvedUserType {
+			creds.Franklin.UserType = resolvedUserType
+		}
+		changed = true
+		loggedInFresh = true
+		return nil
+	}
+
+	// Validate the credentials by fetching device info and composite runtime data.
+	// This confirms the token, gateway ID, and status read permissions are working.
+	// Both results are cached so the subsequent GetStatus call reuses them for free.
 	if _, err := f.getDeviceInfoWithCache(ctx, true); err != nil {
 		// check if we got an invalid token error and try to refresh the token
-		if strings.Contains(err.Error(), "invalid token") {
-			log.Ctx(ctx).DebugContext(ctx, "franklin token expired", slog.Any("error", err))
-			// Credentials changed or no cached token — must login fresh.
-			var token, resolvedUserType string
-			token, resolvedUserType, err = f.login(ctx, f.username, f.md5Password, f.userType)
-			if err != nil {
-				return creds, false, err
+		if !loggedInFresh && isFranklinInvalidToken(err) {
+			if loginErr := refreshExpiredToken(err); loginErr != nil {
+				return creds, false, loginErr
 			}
-			f.tokenStr = token
-			f.userType = resolvedUserType
-			// Persist the new token so we can skip login next time.
-			creds.Franklin.Token = token
-			if creds.Franklin.UserType != resolvedUserType {
-				creds.Franklin.UserType = resolvedUserType
-			}
-			changed = true
 			_, err = f.getDeviceInfoWithCache(ctx, true)
+		}
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "franklin credential validation failed", slog.Any("error", err))
+			return creds, false, fmt.Errorf("credential validation failed: %w", err)
+		}
+	}
+
+	if _, err := f.getRuntimeDataWithCache(ctx, true); err != nil {
+		if !loggedInFresh && isFranklinInvalidToken(err) {
+			if loginErr := refreshExpiredToken(err); loginErr != nil {
+				return creds, false, loginErr
+			}
+			_, err = f.getRuntimeDataWithCache(ctx, true)
 		}
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "franklin credential validation failed", slog.Any("error", err))
@@ -293,6 +314,47 @@ type FranklinAPIError struct {
 
 func (e *FranklinAPIError) Error() string {
 	return fmt.Sprintf("franklin api error: %s", e.Message)
+}
+
+func isFranklinInvalidToken(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "invalid token")
+}
+
+func isFranklinAccountLockedMessage(msgLower string) bool {
+	return strings.Contains(msgLower, "password is locked") ||
+		strings.Contains(msgLower, "account is locked") ||
+		strings.Contains(msgLower, "password has been locked") ||
+		strings.Contains(msgLower, "account has been locked")
+}
+
+func (e *FranklinAPIError) Unwrap() []error {
+	msgLower := strings.ToLower(e.Message)
+	if strings.Contains(msgLower, "invalid token") || e.Code == 1001 || e.Code == http.StatusTooManyRequests || (e.Code >= 500 && e.Code < 600) {
+		return nil
+	}
+	if isFranklinAccountLockedMessage(msgLower) {
+		return []error{ErrAccountLocked, ErrUnauthorized}
+	}
+	if e.Code == http.StatusUnauthorized || e.Code == http.StatusForbidden ||
+		strings.Contains(msgLower, "without permission") ||
+		strings.Contains(msgLower, "no permission") ||
+		strings.Contains(msgLower, "permission denied") ||
+		strings.Contains(msgLower, "unauthorized") ||
+		strings.Contains(msgLower, "forbidden") ||
+		strings.Contains(msgLower, "incorrect password") ||
+		strings.Contains(msgLower, "wrong password") ||
+		strings.Contains(msgLower, "bad password") ||
+		strings.Contains(msgLower, "password error") ||
+		strings.Contains(msgLower, "account does not exist") ||
+		strings.Contains(msgLower, "user does not exist") ||
+		strings.Contains(msgLower, "invalid account") ||
+		strings.Contains(msgLower, "invalid password") {
+		return []error{ErrUnauthorized}
+	}
+	return nil
 }
 
 func (f *Franklin) login(ctx context.Context, username, md5Password, userType string) (string, string, error) {
@@ -328,19 +390,22 @@ func (f *Franklin) login(ctx context.Context, username, md5Password, userType st
 	if err != nil {
 		var apiErr *FranklinAPIError
 		if userType == "" && errors.As(err, &apiErr) && apiErr.Code == 1001 {
-			log.Ctx(ctx).InfoContext(ctx, "franklin multi-role account detected; retrying login as homeowner", slog.String("username", username))
+			log.Ctx(ctx).InfoContext(ctx, "franklin multi-role account detected; retrying login as homeowner")
 			fallbackToken, retryErr := attemptLogin("1")
 			if retryErr == nil {
-				log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username), slog.String("userType", "1"))
+				log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("userType", "1"))
 				return fallbackToken, "1", nil
 			}
 			err = retryErr
 		}
-		log.Ctx(ctx).ErrorContext(ctx, "franklin login failed", slog.Any("error", err))
+		var finalAPIErr *FranklinAPIError
+		if errors.As(err, &finalAPIErr) && !isFranklinRateLimit(err) && !(finalAPIErr.Code >= 500 && finalAPIErr.Code < 600) && !errors.Is(err, ErrUnauthorized) {
+			return "", "", fmt.Errorf("login failed: %w: %w", ErrUnauthorized, err)
+		}
 		return "", "", fmt.Errorf("login failed: %w", err)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username), slog.String("userType", userType))
+	log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("userType", userType))
 	return token, userType, nil
 }
 
@@ -1285,7 +1350,9 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 		return err
 	}
 	if err := f.doRequest(req, nil); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to save tou dispatch", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to save tou dispatch", slog.Any("error", err))
+		}
 		return err
 	}
 	return nil
@@ -1923,7 +1990,9 @@ func (f *Franklin) postFranklinSOCUpdate(ctx context.Context, targetMode frankli
 		return err
 	}
 	if err := f.doRequest(req, nil); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
+		}
 		return err
 	}
 	return nil
@@ -1952,7 +2021,9 @@ func (f *Franklin) postFranklinModeUpdate(ctx context.Context, targetMode frankl
 		return err
 	}
 	if err := f.doRequest(req, nil); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
+		}
 		return err
 	}
 	return nil

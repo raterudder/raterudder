@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -17,6 +19,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -3065,24 +3068,39 @@ func TestSetESSModes(t *testing.T) {
 		mockES.AssertExpectations(t)
 	})
 
-	t.Run("Unauthorized error increments ConsecutiveSetFailures", func(t *testing.T) {
+	t.Run("Unauthorized error increments ConsecutiveSetFailures 0 to 1 then jumps to 40", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
-		// Expect SetModes to return unauthorized
-		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized)
-
-		// Expect settings to be saved with ConsecutiveSetFailures incremented
-		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
-		}), 1, mock.Anything).Return(time.Time{}, nil)
+		// 1. First permanent unauthorized error increments 0 -> 1
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Twice()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 1
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
 		}
 
-		settings := settingsWithVersion{
+		s0 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 0,
+				},
+			},
+			version: 1,
+		}
+
+		_, err := srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 2. Second permanent unauthorized error when ConsecutiveSetFailures >= 1 jumps to 40
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		s1 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveSetFailures: 1,
@@ -3092,10 +3110,61 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s1)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 3. Explicit lockout error jumps directly from 0 to 40
+		lockedErr := fmt.Errorf("locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, lockedErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrAccountLocked)
+
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Permanent auth failure in handleUpdateSites emits WARN and zero ERROR logs", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+			"site1": {
+				ESS:             "franklin",
+				UtilityProvider: "test",
+				UpdateGroup:     1,
+			},
+		}, map[string]int{
+			"site1": types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil)
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("wrong password: %w", ess.ErrUnauthorized))
+		essMap := ess.NewMap()
+		essMap.SetSystem("site1", mockES)
+
+		srv := &Server{
+			storage:    mockS,
+			ess:        essMap,
+			utilities:  utility.NewMap(mockS),
+			bypassAuth: true,
+		}
+
+		var errBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		req := httptest.NewRequest("POST", "/api/updateSites", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSites(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.Empty(t, errBuf.String(), "handleUpdateSites must not emit ERROR logs on permanent ESS auth rejection")
 	})
 
 	t.Run("Other error does not increment ConsecutiveSetFailures", func(t *testing.T) {

@@ -541,15 +541,28 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     {settings && settings.essAuthStatus && settings.essAuthStatus.consecutiveFailures >= 3 && (
                         <div className="banner warning-banner">
                             <p>
-                                <span><strong>Warning:</strong> Energy Storage System authentication failed {settings.essAuthStatus.consecutiveFailures} time(s).{' '}
-                                <Link href="/settings?ess=1">Update your credentials in Settings</Link> to ensure automation continues.</span>
+                                {settings.essAuthStatus.consecutiveFailures >= 40 ? (
+                                    <span><strong>Warning:</strong> Energy Storage System authentication is paused.{' '}
+                                    <Link href="/settings?ess=1">Update your credentials in Settings</Link> to resume automation.</span>
+                                ) : (
+                                    <span><strong>Warning:</strong> Energy Storage System authentication failed {settings.essAuthStatus.consecutiveFailures} time(s).{' '}
+                                    <Link href="/settings?ess=1">Update your credentials in Settings</Link> to ensure automation continues.</span>
+                                )}
                             </p>
                         </div>
                     )}
                     {settings && settings.essAuthStatus && (settings.essAuthStatus.consecutiveFailures ?? 0) < 3 && (settings.essAuthStatus.consecutiveSetFailures ?? 0) >= 3 && (
                         <div className="banner warning-banner">
                             <p>
-                                {settings.ess === 'tesla' ? (
+                                {(settings.essAuthStatus.consecutiveSetFailures ?? 0) >= 40 ? (
+                                    settings.ess === 'tesla' ? (
+                                        <span><strong>Warning:</strong> RateRudder can read your Tesla battery status, but battery mode updates are paused due to missing command permissions.{' '}
+                                        <Link href="/settings?ess=1">Re-link your Tesla account in Settings</Link> and make sure all permissions (including Energy Commands) are checked.</span>
+                                    ) : (
+                                        <span><strong>Warning:</strong> Energy Storage System battery mode updates are paused.{' '}
+                                        Please check your battery manufacturer app to make sure your account can change battery settings, or <Link href="/settings?ess=1">re-authenticate in Settings</Link>.</span>
+                                    )
+                                ) : settings.ess === 'tesla' ? (
                                     <span><strong>Warning:</strong> RateRudder can read your Tesla battery status, but failed to update battery modes {settings.essAuthStatus.consecutiveSetFailures} time(s) due to missing command permissions.{' '}
                                     <Link href="/settings?ess=1">Re-link your Tesla account in Settings</Link> and make sure all permissions (including Energy Commands) are checked.</span>
                                 ) : (

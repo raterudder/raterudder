@@ -3973,8 +3973,8 @@ describe('App & Settings', () => {
     });
 
     describe('ESS Auth Failure and Cooldown Warnings', () => {
-        it('shows auth failure warning and Auth Failing badge when consecutiveFailures >= 3 or >= 40', async () => {
-            (api.fetchSettings as any).mockResolvedValue({
+        it('shows count-free paused auth warning and Auth Failing badge when consecutiveFailures >= 40, and count-based warning for 3..39', async () => {
+            (api.fetchSettings as any).mockResolvedValueOnce({
                 ...defaultSettings,
                 ess: 'franklin',
                 hasCredentials: { franklin: true },
@@ -3986,15 +3986,34 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
 
-            const authWarning = await screen.findByTestId('ess-auth-warning');
-            expect(authWarning).toHaveTextContent(/paused after 40 failed attempts/i);
-            expect(authWarning).toHaveTextContent(/locking out your account/i);
+            const pausedWarning = await screen.findByTestId('ess-auth-warning');
+            expect(pausedWarning).toHaveTextContent(/Battery authentication is paused\./i);
+            expect(pausedWarning).not.toHaveTextContent(/40/);
+            expect(pausedWarning).toHaveTextContent(/locking out your account/i);
             expect(screen.getByText('Auth Failing')).toBeInTheDocument();
             expect(screen.queryByTestId('ess-cooldown-warning')).not.toBeInTheDocument();
         });
 
-        it('shows Tesla permissions warning and Auth Failing badge when consecutiveSetFailures >= 3', async () => {
-            (api.fetchSettings as any).mockResolvedValue({
+        it('shows exact failure count when consecutiveFailures is between 3 and 39', async () => {
+            (api.fetchSettings as any).mockResolvedValueOnce({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                essAuthStatus: {
+                    consecutiveFailures: 5,
+                    lastAttempt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const authWarning = await screen.findByTestId('ess-auth-warning');
+            expect(authWarning).toHaveTextContent(/Battery authentication has failed 5 times in a row\./i);
+            expect(screen.getByText('Auth Failing')).toBeInTheDocument();
+        });
+
+        it('shows Tesla permissions warning and Auth Failing badge when consecutiveSetFailures is 3..39 and count-free paused copy at >= 40', async () => {
+            (api.fetchSettings as any).mockResolvedValueOnce({
                 ...defaultSettings,
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
@@ -4011,6 +4030,46 @@ describe('App & Settings', () => {
             expect(authWarning).toHaveTextContent(/Applying battery mode changes has failed 10 times in a row/i);
             expect(authWarning).toHaveTextContent(/make sure all permissions \(including Energy Commands\) are checked/i);
             expect(screen.getByText('Auth Failing')).toBeInTheDocument();
+        });
+
+        it('shows count-free paused mode update warning when consecutiveSetFailures >= 40 for Tesla', async () => {
+            (api.fetchSettings as any).mockResolvedValueOnce({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                essAuthStatus: {
+                    consecutiveFailures: 0,
+                    consecutiveSetFailures: 40,
+                    lastAttempt: new Date().toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const teslaWarning = await screen.findByTestId('ess-auth-warning');
+            expect(teslaWarning).toHaveTextContent(/Applying battery mode changes is paused\./i);
+            expect(teslaWarning).not.toHaveTextContent(/40/);
+            expect(teslaWarning).toHaveTextContent(/make sure all permissions \(including Energy Commands\) are checked/i);
+        });
+
+        it('shows count-free paused mode update warning when consecutiveSetFailures >= 40 for non-Tesla', async () => {
+            (api.fetchSettings as any).mockResolvedValueOnce({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                essAuthStatus: {
+                    consecutiveFailures: 0,
+                    consecutiveSetFailures: 40,
+                    lastAttempt: new Date().toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const franklinWarning = await screen.findByTestId('ess-auth-warning');
+            expect(franklinWarning).toHaveTextContent(/Applying battery mode changes is paused\./i);
+            expect(franklinWarning).not.toHaveTextContent(/40/);
+            expect(franklinWarning).toHaveTextContent(/check your battery manufacturer app/i);
         });
 
         it('shows active interactive cooldown warning when consecutiveUserFailures >= 2 within 15 minutes, and hides it when older than 15 minutes', async () => {
