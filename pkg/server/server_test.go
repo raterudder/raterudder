@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -373,12 +374,8 @@ func TestWebHandler(t *testing.T) {
 	})
 
 	t.Run("Healthz Endpoint", func(t *testing.T) {
-		t.Run("DefaultSkipsPing", func(t *testing.T) {
-			mockS := &mockStorage{}
-
-			srv := &Server{
-				storage: mockS,
-			}
+		t.Run("StorageNotConfigured", func(t *testing.T) {
+			srv := &Server{}
 
 			req := httptest.NewRequest("GET", "/healthz", nil)
 			w := httptest.NewRecorder()
@@ -386,10 +383,8 @@ func TestWebHandler(t *testing.T) {
 			srv.handleHealthz(w, req)
 
 			resp := w.Result()
-			assert.Equal(t, http.StatusOK, resp.StatusCode)
-			assert.Equal(t, "ok", w.Body.String())
-			mockS.AssertNotCalled(t, "Ping", mock.Anything)
-			mockS.AssertExpectations(t)
+			assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+			assert.Contains(t, w.Body.String(), "database health check failed")
 		})
 
 		t.Run("PingSuccess", func(t *testing.T) {
@@ -400,7 +395,7 @@ func TestWebHandler(t *testing.T) {
 				storage: mockS,
 			}
 
-			req := httptest.NewRequest("GET", "/healthz?ping=true", nil)
+			req := httptest.NewRequest("GET", "/healthz", nil)
 			w := httptest.NewRecorder()
 
 			srv.handleHealthz(w, req)
@@ -419,7 +414,7 @@ func TestWebHandler(t *testing.T) {
 				storage: mockS,
 			}
 
-			req := httptest.NewRequest("GET", "/healthz?ping=true", nil)
+			req := httptest.NewRequest("GET", "/healthz", nil)
 			w := httptest.NewRecorder()
 
 			srv.handleHealthz(w, req)
@@ -509,7 +504,7 @@ func TestConfigured(t *testing.T) {
 }
 
 func TestRun(t *testing.T) {
-	t.Run("ServesHealthzWhileFeatureConfigBlocksAndFallsBackOnError", func(t *testing.T) {
+	t.Run("LoadsFeatureConfigFirstAndServesHealthzWithPing", func(t *testing.T) {
 		oidcSrv, priv := setupOIDCTest(t)
 		defer oidcSrv.Close()
 		provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
@@ -519,17 +514,32 @@ func TestRun(t *testing.T) {
 		mockS := &mockStorage{}
 		featsStarted := make(chan struct{})
 		featsRelease := make(chan struct{})
-		var once sync.Once
-		mockS.On("GetFeatureConfig", mock.Anything, "production").Run(func(args mock.Arguments) {
-			once.Do(func() { close(featsStarted) })
-			reqCtx := args.Get(0).(context.Context)
-			select {
-			case <-featsRelease:
-			case <-reqCtx.Done():
-			}
-		}).Return(feats.Config{}, time.Time{}, errors.New("firestore unavailable")).Once()
+		var observedTimeout time.Duration
+		var addrDuringFeatsLoad string
 
 		now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+		cfg := feats.Config{
+			Features: map[string][]feats.Criteria{
+				"serverTestAlpha": {
+					{SiteIDs: []string{"site-1"}, Value: true},
+				},
+			},
+		}
+
+		var srv *Server
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Run(func(args mock.Arguments) {
+			reqCtx := args.Get(0).(context.Context)
+			if deadline, ok := reqCtx.Deadline(); ok {
+				observedTimeout = time.Until(deadline)
+			}
+			addrDuringFeatsLoad = srv.boundAddr()
+			close(featsStarted)
+			<-featsRelease
+		}).Return(cfg, now, nil).Once()
+
+		mockS.On("Ping", mock.Anything).Return(nil).Once()
+		mockS.On("Ping", mock.Anything).Return(errors.New("db down")).Once()
+
 		mockS.On("GetUser", mock.Anything, "google:user-123").Return(types.User{
 			ID:    "google:user-123",
 			Email: "user@example.com",
@@ -545,7 +555,7 @@ func TestRun(t *testing.T) {
 			Release:       "production",
 		}, types.CurrentSettingsVersion, now, nil).Once()
 
-		srv := &Server{
+		srv = &Server{
 			utilities:            utility.NewMap(mockS),
 			ess:                  ess.NewMap(),
 			storage:              mockS,
@@ -573,59 +583,363 @@ func TestRun(t *testing.T) {
 			runErr <- srv.Run(ctx)
 		}()
 
+		select {
+		case <-featsStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for initial GetFeatureConfig")
+		}
+
+		// Listener must not be bound yet while initial GetFeatureConfig is still running
+		assert.Empty(t, addrDuringFeatsLoad)
+		assert.Empty(t, srv.boundAddr())
+		assert.Greater(t, observedTimeout, 3*time.Second)
+		assert.LessOrEqual(t, observedTimeout, featsFetchTimeout+500*time.Millisecond)
+
+		close(featsRelease)
+
+		require.Eventually(t, func() bool {
+			return srv.boundAddr() != ""
+		}, 2*time.Second, 5*time.Millisecond)
+
+		client := &http.Client{Timeout: 2 * time.Second}
+
+		// /healthz runs storage.Ping unconditionally: 200 on nil error, 503 on error
+		resp, err := client.Get("http://" + srv.boundAddr() + "/healthz")
+		require.NoError(t, err)
+		respBody, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "ok", string(respBody))
+
+		respFail, err := client.Get("http://" + srv.boundAddr() + "/healthz")
+		require.NoError(t, err)
+		respFailBody, err := io.ReadAll(respFail.Body)
+		_ = respFail.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusServiceUnavailable, respFail.StatusCode)
+		assert.Contains(t, string(respFailBody), "database health check failed")
+
+		// Feature flags are already loaded when the first request arrives
+		req, err := http.NewRequest(http.MethodGet, "http://"+srv.boundAddr()+"/api/settings?siteID=site-1", nil)
+		require.NoError(t, err)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: token})
+		settingsResp, err := client.Do(req)
+		require.NoError(t, err)
+		var body SettingsRes
+		decodeErr := json.NewDecoder(settingsResp.Body).Decode(&body)
+		_, _ = io.Copy(io.Discard, settingsResp.Body)
+		_ = settingsResp.Body.Close()
+		require.NoError(t, decodeErr)
+		require.Equal(t, http.StatusOK, settingsResp.StatusCode)
+		if assert.NotNil(t, body.Features) {
+			assert.True(t, body.Features["serverTestAlpha"])
+			assert.True(t, body.Features["serverTestBeta"])
+		}
+
+		cancel()
+		require.NoError(t, <-runErr)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RetriesFailedInitialFeatureConfigInBackgroundAfterListen", func(t *testing.T) {
+		oidcSrv, priv := setupOIDCTest(t)
+		defer oidcSrv.Close()
+		provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+		require.NoError(t, err)
+		token := generateTestToken(t, oidcSrv.URL, priv, "user@example.com", "user-123")
+
+		mockS := &mockStorage{}
+		retryStarted := make(chan struct{})
+		retryRelease := make(chan struct{})
+		now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+		cfg := feats.Config{
+			Features: map[string][]feats.Criteria{
+				"serverTestAlpha": {
+					{SiteIDs: []string{"site-1"}, Value: true},
+				},
+			},
+		}
+
+		// 1st attempt (synchronous before Listen): fails immediately
+		mockS.On("GetFeatureConfig", mock.Anything, "production").
+			Return(feats.Config{}, time.Time{}, errors.New("firestore unavailable")).Once()
+
+		// 2nd attempt (1st background retry after Listen): blocks until we check fallback defaults, then also fails
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Run(func(args mock.Arguments) {
+			close(retryStarted)
+			<-retryRelease
+		}).Return(feats.Config{}, time.Time{}, errors.New("transient error")).Once()
+
+		// 3rd attempt (2nd background retry after Listen): succeeds and stops retrying
+		mockS.On("GetFeatureConfig", mock.Anything, "production").
+			Return(cfg, now, nil).Once()
+
+		mockS.On("Ping", mock.Anything).Return(nil).Once()
+		mockS.On("GetUser", mock.Anything, "google:user-123").Return(types.User{
+			ID:    "google:user-123",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site-1"}},
+		}, nil).Twice()
+		mockS.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "google:user-123"}},
+		}, nil).Twice()
+		mockS.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
+			DryRun:        true,
+			MinBatterySOC: 20,
+			Release:       "production",
+		}, types.CurrentSettingsVersion, now, nil).Twice()
+
+		srv := &Server{
+			utilities:            utility.NewMap(mockS),
+			ess:                  ess.NewMap(),
+			storage:              mockS,
+			controller:           controller.NewController(),
+			listenAddr:           "127.0.0.1:0",
+			release:              "production",
+			sessionEncryptionKey: "12345678901234567890123456789012",
+			encryptionKey:        "12345678901234567890123456789012",
+			oidcAudiences:        map[string]string{"google": "test-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+			featsRetryBackoff:  15 * time.Millisecond,
+			generalRateLimit:   rate.Inf,
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Inf,
+			sensitiveBurst:     5,
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runErr := make(chan error, 1)
+		go func() {
+			runErr <- srv.Run(ctx)
+		}()
+
+		require.Eventually(t, func() bool {
+			return srv.boundAddr() != ""
+		}, 2*time.Second, 5*time.Millisecond)
+		assert.False(t, srv.hasFeatsEvaluator())
+
+		client := &http.Client{Timeout: 2 * time.Second}
+		healthResp, err := client.Get("http://" + srv.boundAddr() + "/healthz")
+		require.NoError(t, err)
+		_, _ = io.Copy(io.Discard, healthResp.Body)
+		_ = healthResp.Body.Close()
+		assert.Equal(t, http.StatusOK, healthResp.StatusCode)
+
+		// Wait for 1st background retry to start (proving retry after Listen), then release after checking fallback defaults
+		select {
+		case <-retryStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for background GetFeatureConfig retry")
+		}
+
+		close(retryRelease)
+
+		// While GetFeatureConfig has not yet succeeded (within retry backoff after 2nd failure), requests use registered defaults
+		req1, err := http.NewRequest(http.MethodGet, "http://"+srv.boundAddr()+"/api/settings?siteID=site-1", nil)
+		require.NoError(t, err)
+		req1.AddCookie(&http.Cookie{Name: authTokenCookie, Value: token})
+		resp1, err := client.Do(req1)
+		require.NoError(t, err)
+		var body1 SettingsRes
+		decodeErr1 := json.NewDecoder(resp1.Body).Decode(&body1)
+		_, _ = io.Copy(io.Discard, resp1.Body)
+		_ = resp1.Body.Close()
+		require.NoError(t, decodeErr1)
+		require.Equal(t, http.StatusOK, resp1.StatusCode)
+		if assert.NotNil(t, body1.Features) {
+			assert.False(t, body1.Features["serverTestAlpha"])
+			assert.True(t, body1.Features["serverTestBeta"])
+		}
+
+		// 3rd attempt in background succeeds and loads evaluator
+		require.Eventually(t, func() bool {
+			return srv.hasFeatsEvaluator()
+		}, 2*time.Second, 5*time.Millisecond)
+
+		req2, err := http.NewRequest(http.MethodGet, "http://"+srv.boundAddr()+"/api/settings?siteID=site-1", nil)
+		require.NoError(t, err)
+		req2.AddCookie(&http.Cookie{Name: authTokenCookie, Value: token})
+		resp2, err := client.Do(req2)
+		require.NoError(t, err)
+		var body2 SettingsRes
+		decodeErr2 := json.NewDecoder(resp2.Body).Decode(&body2)
+		_, _ = io.Copy(io.Discard, resp2.Body)
+		_ = resp2.Body.Close()
+		require.NoError(t, decodeErr2)
+		require.Equal(t, http.StatusOK, resp2.StatusCode)
+		if assert.NotNil(t, body2.Features) {
+			assert.True(t, body2.Features["serverTestAlpha"])
+			assert.True(t, body2.Features["serverTestBeta"])
+		}
+
+		cancel()
+		require.NoError(t, <-runErr)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PrewarmsOIDCInBackgroundWithoutBlockingStartupAndRetriesFailures", func(t *testing.T) {
+		googleSrv, googlePriv := setupOIDCTest(t)
+		defer googleSrv.Close()
+
+		appleSrv, applePriv := setupOIDCTest(t)
+		defer appleSrv.Close()
+
+		var appleFail atomic.Bool
+		appleFail.Store(true)
+		var googleDiscoveryCalls, appleDiscoveryCalls atomic.Int32
+		appleFirstAttemptStarted := make(chan struct{})
+		appleFirstAttemptRelease := make(chan struct{})
+		var appleOnce sync.Once
+
+		flakyAppleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callNum := appleDiscoveryCalls.Add(1)
+			if callNum == 1 {
+				appleOnce.Do(func() { close(appleFirstAttemptStarted) })
+				select {
+				case <-appleFirstAttemptRelease:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			if appleFail.Load() {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			appleSrv.Config.Handler.ServeHTTP(w, r)
+		}))
+		defer flakyAppleSrv.Close()
+
+		webToken := generateTestTokenWithAudience(t, googleSrv.URL, googlePriv, "user@example.com", "user-sub", "web-audience")
+		updateToken := generateTestTokenWithAudience(t, googleSrv.URL, googlePriv, "updater@example.com", "updater-sub", "update-audience")
+		appleToken := generateTestTokenWithAudience(t, appleSrv.URL, applePriv, "apple@example.com", "apple-sub", "apple-audience")
+
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			switch issuer {
+			case "https://accounts.google.com":
+				googleDiscoveryCalls.Add(1)
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			case "https://appleid.apple.com":
+				insecureCtx := oidc.InsecureIssuerURLContext(ctx, appleSrv.URL)
+				return oidc.NewProvider(insecureCtx, flakyAppleSrv.URL)
+			default:
+				return nil, assert.AnError
+			}
+		}
+
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, now, nil).Once()
+		mockS.On("Ping", mock.Anything).Return(nil).Once()
+
+		srv := &Server{
+			utilities:            utility.NewMap(mockS),
+			ess:                  ess.NewMap(),
+			storage:              mockS,
+			controller:           controller.NewController(),
+			listenAddr:           "127.0.0.1:0",
+			release:              "production",
+			updateSpecificEmail:  "updater@example.com",
+			sessionEncryptionKey: "12345678901234567890123456789012",
+			encryptionKey:        "12345678901234567890123456789012",
+			oidcWarmupBackoff:    10 * time.Millisecond,
+			oidcWarmupMaxBackoff: 40 * time.Millisecond,
+			generalRateLimit:     rate.Inf,
+			generalBurst:         30,
+			sensitiveRateLimit:   rate.Inf,
+			sensitiveBurst:       5,
+		}
+		require.NoError(t, srv.configureOIDC(
+			context.Background(),
+			map[string]string{
+				"google": "web-audience",
+				"apple":  "apple-audience",
+			},
+			"",
+			"update-audience",
+			newProvider,
+		))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		runErr := make(chan error, 1)
+		go func() {
+			runErr <- srv.Run(ctx)
+		}()
+
+		// Server binds listener and serves /healthz while Apple OIDC pre-warming is still blocked
 		require.Eventually(t, func() bool {
 			return srv.boundAddr() != ""
 		}, 2*time.Second, 5*time.Millisecond)
 
 		select {
-		case <-featsStarted:
+		case <-appleFirstAttemptStarted:
 		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for async GetFeatureConfig warm-up to start")
+			t.Fatal("timed out waiting for background Apple OIDC pre-warm to start")
 		}
 
-		// While GetFeatureConfig is still blocked, /healthz must immediately respond 200 OK without calling storage.Ping
 		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get("http://" + srv.boundAddr() + "/healthz")
+		healthResp, err := client.Get("http://" + srv.boundAddr() + "/healthz")
 		require.NoError(t, err)
-		_ = resp.Body.Close()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		mockS.AssertNotCalled(t, "Ping", mock.Anything)
+		_, _ = io.Copy(io.Discard, healthResp.Body)
+		_ = healthResp.Body.Close()
+		assert.Equal(t, http.StatusOK, healthResp.StatusCode)
 
-		// Start a concurrent authenticated settings request during cold warm-up, then unblock GetFeatureConfig with an error
-		settingsDone := make(chan *http.Response, 1)
-		settingsErr := make(chan error, 1)
-		go func() {
-			req, reqErr := http.NewRequest(http.MethodGet, "http://"+srv.boundAddr()+"/api/settings?siteID=site-1", nil)
-			if reqErr != nil {
-				settingsErr <- reqErr
-				return
-			}
-			req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: token})
-			r, doErr := client.Do(req)
-			if doErr != nil {
-				settingsErr <- doErr
-				return
-			}
-			settingsDone <- r
-		}()
+		// Google web and update verifiers warm independently via singleflight despite Apple hanging
+		require.Eventually(t, func() bool {
+			srv.oidcMu.RLock()
+			defer srv.oidcMu.RUnlock()
+			return srv.oidcVerifiers["google"] != nil && srv.updateOIDCVerifier != nil
+		}, 2*time.Second, 5*time.Millisecond)
+		assert.Equal(t, int32(1), googleDiscoveryCalls.Load())
 
-		close(featsRelease)
+		// Unblock Apple attempt 1 -> fails with 502, and background pre-warm keeps retrying without caching failure
+		close(appleFirstAttemptRelease)
+		require.Eventually(t, func() bool {
+			return appleDiscoveryCalls.Load() >= 2
+		}, 2*time.Second, 5*time.Millisecond)
 
-		select {
-		case err := <-settingsErr:
-			require.NoError(t, err)
-		case settingsResp := <-settingsDone:
-			defer settingsResp.Body.Close()
-			require.Equal(t, http.StatusOK, settingsResp.StatusCode)
-			var body SettingsRes
-			require.NoError(t, json.NewDecoder(settingsResp.Body).Decode(&body))
-			if assert.NotNil(t, body.Features) {
-				assert.False(t, body.Features["serverTestAlpha"])
-				assert.True(t, body.Features["serverTestBeta"])
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for concurrent request during cold feature warm-up")
-		}
+		srv.oidcMu.RLock()
+		assert.Nil(t, srv.oidcProviders["https://appleid.apple.com"])
+		assert.Nil(t, srv.oidcVerifiers["apple"])
+		srv.oidcMu.RUnlock()
+
+		// Apple recovers -> background pre-warm automatically initializes Apple verifier without user traffic
+		appleFail.Store(false)
+		require.Eventually(t, func() bool {
+			return !srv.hasUnwarmedOIDCVerifiers()
+		}, 2*time.Second, 5*time.Millisecond)
+
+		appleCallsAfterWarm := appleDiscoveryCalls.Load()
+		googleCallsAfterWarm := googleDiscoveryCalls.Load()
+		assert.Equal(t, int32(1), googleCallsAfterWarm)
+
+		// All configured verifiers are now pre-warmed and validate tokens without new discovery calls
+		email, sub, _, err := srv.authenticateToken(context.Background(), webToken, "google")
+		require.NoError(t, err)
+		assert.Equal(t, "user@example.com", email)
+		assert.Equal(t, "google:user-sub", sub)
+
+		email, sub, _, err = srv.authenticateToken(context.Background(), appleToken, "apple")
+		require.NoError(t, err)
+		assert.Equal(t, "apple@example.com", email)
+		assert.Equal(t, "apple:apple-sub", sub)
+
+		updateVerifier, hasUpdate, err := srv.getUpdateOIDCVerifier(context.Background())
+		require.NoError(t, err)
+		require.True(t, hasUpdate)
+		_, err = updateVerifier(context.Background(), updateToken)
+		require.NoError(t, err)
+
+		assert.Equal(t, googleCallsAfterWarm, googleDiscoveryCalls.Load())
+		assert.Equal(t, appleCallsAfterWarm, appleDiscoveryCalls.Load())
 
 		cancel()
 		require.NoError(t, <-runErr)
@@ -970,6 +1284,70 @@ func TestConfigureOIDC(t *testing.T) {
 		assert.Equal(t, int32(1), discoveryCalls.Load(), "concurrent callers must share a single OIDC discovery flight")
 		assert.Greater(t, observedTimeout, 3*time.Second)
 		assert.LessOrEqual(t, observedTimeout, oidcDiscoveryTimeout+500*time.Millisecond)
+	})
+
+	t.Run("PrewarmOIDCRetriesFailedProviderWithBackoffWithoutRediscoveringHealthyProvider", func(t *testing.T) {
+		var googleCalls, appleCalls atomic.Int32
+
+		flakyAppleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if appleCalls.Add(1) <= 2 {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			appleSrv.Config.Handler.ServeHTTP(w, r)
+		}))
+		defer flakyAppleSrv.Close()
+
+		newProvider := func(ctx context.Context, issuer string) (*oidc.Provider, error) {
+			switch issuer {
+			case "https://accounts.google.com":
+				googleCalls.Add(1)
+				return oidc.NewProvider(ctx, googleSrv.URL)
+			case "https://appleid.apple.com":
+				insecureCtx := oidc.InsecureIssuerURLContext(ctx, appleSrv.URL)
+				return oidc.NewProvider(insecureCtx, flakyAppleSrv.URL)
+			default:
+				return nil, assert.AnError
+			}
+		}
+
+		srv := &Server{
+			oidcWarmupBackoff:    5 * time.Millisecond,
+			oidcWarmupMaxBackoff: 20 * time.Millisecond,
+		}
+		require.NoError(t, srv.configureOIDC(
+			context.Background(),
+			map[string]string{
+				"google": "web-audience",
+				"apple":  "apple-audience",
+			},
+			"",
+			"update-audience",
+			newProvider,
+		))
+		assert.True(t, srv.hasUnwarmedOIDCVerifiers())
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		srv.prewarmOIDC(ctx)
+
+		assert.False(t, srv.hasUnwarmedOIDCVerifiers())
+		assert.Equal(t, int32(1), googleCalls.Load(), "healthy Google provider must not be re-discovered while retrying Apple")
+		assert.GreaterOrEqual(t, appleCalls.Load(), int32(3))
+
+		appleCallsAfterWarm := appleCalls.Load()
+		_, _, _, err := srv.authenticateToken(context.Background(), webToken, "google")
+		require.NoError(t, err)
+		_, _, _, err = srv.authenticateToken(context.Background(), appleToken, "apple")
+		require.NoError(t, err)
+		updateVerifier, hasUpdate, err := srv.getUpdateOIDCVerifier(context.Background())
+		require.NoError(t, err)
+		require.True(t, hasUpdate)
+		_, err = updateVerifier(context.Background(), updateToken)
+		require.NoError(t, err)
+
+		assert.Equal(t, int32(1), googleCalls.Load())
+		assert.Equal(t, appleCallsAfterWarm, appleCalls.Load())
 	})
 
 	t.Run("UnsupportedClientReturnsError", func(t *testing.T) {

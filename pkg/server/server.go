@@ -82,6 +82,9 @@ type Server struct {
 	oidcMu                 sync.RWMutex
 	oidcProviders          map[string]*oidc.Provider
 	oidcProviderGroup      singleflight.Group
+	oidcLifecycleCtx       context.Context
+	oidcWarmupBackoff      time.Duration
+	oidcWarmupMaxBackoff   time.Duration
 	bypassAuth             bool
 	encryptionKey          string
 	sessionEncryptionKey   string
@@ -110,11 +113,12 @@ type Server struct {
 	vapidSubject    string
 	gridOutageDelay time.Duration
 
-	featsMu        sync.RWMutex
-	featsFetchMu   sync.Mutex
-	featsEvaluator *feats.Evaluator
-	featsUpdatedAt time.Time
-	featsFetchedAt time.Time
+	featsMu           sync.RWMutex
+	featsFetchMu      sync.Mutex
+	featsEvaluator    *feats.Evaluator
+	featsUpdatedAt    time.Time
+	featsFetchedAt    time.Time
+	featsRetryBackoff time.Duration
 
 	mcpServerOnce sync.Once
 	mcpServer     *mcp.Server
@@ -455,8 +459,6 @@ func (s *Server) getUpdateSpecificAuth(r *http.Request) bool {
 	return false
 }
 
-const featsWarmupTimeout = 5 * time.Second
-
 func (s *Server) boundAddr() string {
 	s.boundAddrMu.RLock()
 	defer s.boundAddrMu.RUnlock()
@@ -475,6 +477,12 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       15 * time.Second,
 	}
 
+	// Load feature flags first before serving requests (bounded by featsFetchTimeout).
+	s.getFeatsEvaluator(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	ln, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("server error: %w", err)
@@ -483,6 +491,10 @@ func (s *Server) Run(ctx context.Context) error {
 	s.boundAddrMu.Lock()
 	s.boundListenAddr = addr
 	s.boundAddrMu.Unlock()
+
+	bgCtx, cancelBg := context.WithCancel(ctx)
+	defer cancelBg()
+	s.setOIDCLifecycleCtx(bgCtx)
 
 	// use a channel to capture server errors
 	errChan := make(chan error, 1)
@@ -494,33 +506,53 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	// warm feature flags asynchronously after binding the listener
-	warmupDone := make(chan struct{})
-	warmupCtx, cancelWarmup := context.WithTimeout(ctx, featsWarmupTimeout)
-	go func() {
-		defer close(warmupDone)
-		defer cancelWarmup()
-		s.getFeatsEvaluator(warmupCtx)
-	}()
+	var bgWG sync.WaitGroup
+	if s.storage != nil && !s.hasFeatsEvaluator() {
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			s.retryFeatsUntilLoaded(bgCtx)
+		}()
+	}
+	if s.hasUnwarmedOIDCVerifiers() {
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			s.prewarmOIDC(bgCtx)
+		}()
+	}
+
+	waitForBackground := func(waitCtx context.Context) {
+		bgDone := make(chan struct{})
+		go func() {
+			bgWG.Wait()
+			s.clearOIDCLifecycleCtx(bgCtx)
+			close(bgDone)
+		}()
+		select {
+		case <-bgDone:
+		case <-waitCtx.Done():
+		}
+	}
 
 	select {
 	case <-ctx.Done():
-		cancelWarmup()
+		cancelBg()
 		// Context canceled, shut down gracefully
 		log.Ctx(ctx).InfoContext(ctx, "shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		shutdownErr := s.httpServer.Shutdown(shutdownCtx)
-		select {
-		case <-warmupDone:
-		case <-shutdownCtx.Done():
-		}
+		waitForBackground(shutdownCtx)
 		if shutdownErr != nil {
 			return fmt.Errorf("server shutdown failed: %w", shutdownErr)
 		}
 		return nil
 	case err := <-errChan:
-		cancelWarmup()
+		cancelBg()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		waitForBackground(shutdownCtx)
 		return fmt.Errorf("server error: %w", err)
 	}
 }
@@ -537,17 +569,15 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("ping") == "true" {
-		if s.storage == nil {
-			log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: storage not configured")
-			writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
-			return
-		}
-		if err := s.storage.Ping(r.Context()); err != nil {
-			log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
-			writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
-			return
-		}
+	if s.storage == nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: storage not configured")
+		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.storage.Ping(r.Context()); err != nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
+		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok")); err != nil {

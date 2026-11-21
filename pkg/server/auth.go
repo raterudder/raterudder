@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -722,7 +724,11 @@ func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const oidcDiscoveryTimeout = 5 * time.Second
+const (
+	oidcDiscoveryTimeout        = 5 * time.Second
+	defaultOIDCWarmupBackoff    = time.Second
+	defaultOIDCWarmupMaxBackoff = time.Minute
+)
 
 var userOIDCClients = []string{"google", "apple"}
 
@@ -745,6 +751,20 @@ func hasUserOIDCSubjectPrefix(subject string) bool {
 	return strings.HasPrefix(subject, "google:") || strings.HasPrefix(subject, "apple:")
 }
 
+func (s *Server) setOIDCLifecycleCtx(ctx context.Context) {
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+	s.oidcLifecycleCtx = ctx
+}
+
+func (s *Server) clearOIDCLifecycleCtx(ctx context.Context) {
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+	if s.oidcLifecycleCtx == ctx {
+		s.oidcLifecycleCtx = nil
+	}
+}
+
 func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Provider, error) {
 	s.oidcMu.RLock()
 	if p, ok := s.oidcProviders[issuer]; ok && p != nil {
@@ -752,6 +772,7 @@ func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Prov
 		return p, nil
 	}
 	newProvider := s.newOIDCProvider
+	lifecycleCtx := s.oidcLifecycleCtx
 	s.oidcMu.RUnlock()
 
 	if err := ctx.Err(); err != nil {
@@ -770,6 +791,10 @@ func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Prov
 		s.oidcMu.RUnlock()
 
 		initCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), oidcDiscoveryTimeout)
+		if lifecycleCtx != nil {
+			stop := context.AfterFunc(lifecycleCtx, cancel)
+			defer stop()
+		}
 		defer cancel()
 
 		provider, err := newProvider(initCtx, issuer)
@@ -796,6 +821,123 @@ func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Prov
 			return nil, res.Err
 		}
 		return res.Val.(*oidc.Provider), nil
+	}
+}
+
+func (s *Server) getOIDCWarmupBackoff() (time.Duration, time.Duration) {
+	initial := s.oidcWarmupBackoff
+	if initial <= 0 {
+		initial = defaultOIDCWarmupBackoff
+	}
+	maxBackoff := s.oidcWarmupMaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = defaultOIDCWarmupMaxBackoff
+	}
+	if maxBackoff < initial {
+		maxBackoff = initial
+	}
+	return initial, maxBackoff
+}
+
+func (s *Server) hasUnwarmedOIDCVerifiers() bool {
+	s.oidcMu.RLock()
+	defer s.oidcMu.RUnlock()
+	for client := range s.oidcAudiences {
+		if !isUserOIDCClient(client) {
+			continue
+		}
+		if s.oidcVerifiers[client] == nil {
+			return true
+		}
+	}
+	if s.updateSpecificAudience != "" && s.updateOIDCVerifier == nil {
+		return true
+	}
+	return false
+}
+
+func (s *Server) warmOIDCVerifiersOnce(ctx context.Context) bool {
+	s.oidcMu.RLock()
+	var clients []string
+	for _, client := range userOIDCClients {
+		if _, ok := s.oidcAudiences[client]; ok && s.oidcVerifiers[client] == nil {
+			clients = append(clients, client)
+		}
+	}
+	needUpdateVerifier := s.updateSpecificAudience != "" && s.updateOIDCVerifier == nil
+	s.oidcMu.RUnlock()
+
+	if len(clients) == 0 && !needUpdateVerifier {
+		return true
+	}
+
+	var wg sync.WaitGroup
+	var failed atomic.Bool
+
+	for _, client := range clients {
+		wg.Add(1)
+		go func(providerName string) {
+			defer wg.Done()
+			if _, _, err := s.getOIDCVerifier(ctx, providerName); err != nil {
+				failed.Store(true)
+			}
+		}(client)
+	}
+
+	if needUpdateVerifier {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := s.getUpdateOIDCVerifier(ctx); err != nil {
+				failed.Store(true)
+			}
+		}()
+	}
+
+	wg.Wait()
+	return !failed.Load() && !s.hasUnwarmedOIDCVerifiers()
+}
+
+func (s *Server) prewarmOIDC(ctx context.Context) {
+	if !s.hasUnwarmedOIDCVerifiers() {
+		return
+	}
+
+	backoff, maxBackoff := s.getOIDCWarmupBackoff()
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if s.warmOIDCVerifiersOnce(ctx) {
+			return
+		}
+		if ctx.Err() != nil || !s.hasUnwarmedOIDCVerifiers() {
+			return
+		}
+
+		if timer == nil {
+			timer = time.NewTimer(backoff)
+		} else {
+			timer.Reset(backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 
