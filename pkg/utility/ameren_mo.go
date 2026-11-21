@@ -1,5 +1,21 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): ameren (Ameren Missouri)
+// - Official Sources:
+//   - https://www.ameren.com/bill/rates/residential (Ameren Residential Electric Rates Portal)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/rates/uecsheet54rate1mres.ashx (MO.P.S.C. Schedule No. 6, Service Classification No. 1(M) Sheets 54 - 54.17, Case No. ER-2024-0319, eff. June 1, 2025)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/electric-power-purchases/uecsheet171eppnetmetering.ashx (7th Revised Sheet No. 171 Net Metering Avoided Fuel Cost, eff. June 1, 2026)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/riders/uecsheet71riderfac.ashx (Rider FAC, 4th Rev. Sheet No. 72.14, eff. Oct 1, 2026 - Jan 31, 2027: $0.00445/kWh)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/riders/uecesheetno91ridereeiceeinvestmentcharge.ashx (Rider EEIC, Sheet No. 91.15: $0.001905/kWh)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/riders/uecesheet93blanksheets.ashx (Rider RESRAM, Sheet No. 93.4, eff. Feb 1, 2026 - Jan 31, 2027: $0.00207/kWh)
+//   - https://www.ameren.com/-/media/rates/missouri/residential/electric-rates/riders/uec-e-sheet-no-90-rider-sur-securitized-ut.ashx (Rider SUR, 8th Rev. Sheet No. 90.4, eff. Oct 1, 2026 - Mar 31, 2027: $0.00157/kWh)
+// - Effective Window: 2026-01-01 through 2027-12-31 (Rate 1(M) base charges eff. 2025-06-01 until superseded; Sheet 171 avoided fuel cost eff. 2026-06-01; Oct 1, 2026 FAC/EEIC/RESRAM/SUR rider sum $0.009995/kWh carried through 2027-12-31 until superseded)
+// - Revision Cadence: Tri-Annual / Periodic (Feb 1, Jun 1, Oct 1 Rider FAC; Feb 1 Rider EEIC & Rider RESRAM; Apr 1 & Oct 1 Rider SUR; Jun 1 Sheet 171 Net Metering)
+// - Next Audit Due: 2026-12-05 (Aligned with provider ameren monthly check; next MO Rider FAC/EEIC/RESRAM filings take effect Feb 1, 2027)
+// - Last Verified: 2026-11-21
+// - Modeling Notes: Models Rate 1(M) Tier 1 (<=750 kWh/mo winter on Anytime and Evening/Morning Savers) base volumetric rates plus mandatory volumetric riders (Rider FAC + Rider EEIC + Rider RESRAM + Rider SUR: $0.009681 Jan 2026, $0.010455 Feb-Mar 2026, $0.010555 Apr-May 2026, $0.014095 Jun-Sep 2026, $0.009995 Oct 2026 - Dec 2027); excludes fixed monthly Customer Charges and Ultimate Saver per-kW demand charges; supports 1:1 monthly ("net") or TOU-bucket ("tou_net") net metering and Sheet 171 excess generation avoided fuel cost ("avoided_cost": $0.0384 Summer / $0.0339 Winter).
+
 import (
 	"strings"
 	"time"
@@ -25,10 +41,10 @@ const (
 	amerenMOEveningMorningWinterPeakAdjDollarsPerKWH = 0.0028 // +0.28¢/kWh 9 AM - 9 PM all days
 
 	// Residential Overnight Saver Service (Sheet No. 54.10)
-	amerenMOOvernightSummerOnPeakDollarsPerKWH  = 0.2036 // June - September, 6 AM - 10 PM all days
-	amerenMOOvernightSummerOffPeakDollarsPerKWH = 0.0810 // June - September, 10 PM - 6 AM all days
-	amerenMOOvernightWinterOnPeakDollarsPerKWH  = 0.1145 // October - May (Option A), 6 AM - 10 PM all days
-	amerenMOOvernightWinterOffPeakDollarsPerKWH = 0.0699 // October - May (Option A), 10 PM - 6 AM all days
+	amerenMOOvernightSummerOnPeakDollarsPerKWH  = 0.1839 // June - September, 6 AM - 10 PM all days
+	amerenMOOvernightSummerOffPeakDollarsPerKWH = 0.0732 // June - September, 10 PM - 6 AM all days
+	amerenMOOvernightWinterOnPeakDollarsPerKWH  = 0.1034 // October - May (Option A), 6 AM - 10 PM all days
+	amerenMOOvernightWinterOffPeakDollarsPerKWH = 0.0631 // October - May (Option A), 10 PM - 6 AM all days
 
 	// Residential Smart Saver Service (3-tier TOU)
 	amerenMOSmartSaverSummerOnPeakDollarsPerKWH       = 0.4051 // June - September, 3 PM - 7 PM Mon-Fri excl. holidays
@@ -47,7 +63,116 @@ const (
 	// Net Metering Excess Generation Avoided Fuel Cost (Sheet No. 171)
 	amerenMOSummerAvoidedCostDollarsPerKWH = 0.0384 // June - September
 	amerenMOWinterAvoidedCostDollarsPerKWH = 0.0339 // October - May
+
+	// Mandatory Missouri Residential Volumetric Riders (MO.P.S.C. Schedule No. 6):
+	// Current active component sheets (effective Oct 1, 2026):
+	// - Rider FAC (4th Rev. Sheet No. 72.14, Secondary): $0.00445/kWh
+	// - Rider EEIC (Sheet No. 91.15, 1(M)-Residential):  $0.001905/kWh
+	// - Rider RESRAM (Sheet No. 93.4):                   $0.00207/kWh
+	// - Rider SUR (8th Rev. Sheet No. 90.4, Secondary):  $0.00157/kWh
+	// Total Oct 2026 - Dec 2027 = $0.009995/kWh.
+	amerenMOFACOct2026DollarsPerKWH    = 0.00445
+	amerenMOEEIC2026DollarsPerKWH      = 0.001905
+	amerenMORESRAMFeb2026DollarsPerKWH = 0.00207
+	amerenMOSUROct2026DollarsPerKWH    = 0.00157
+
+	amerenMORidersJan2026DollarsPerKWH    = 0.009681
+	amerenMORidersFebMar2026DollarsPerKWH = 0.010455
+	amerenMORidersAprMay2026DollarsPerKWH = 0.010555
+	amerenMORidersJunSep2026DollarsPerKWH = 0.014095
+	amerenMORidersOct2026DollarsPerKWH    = amerenMOFACOct2026DollarsPerKWH + amerenMOEEIC2026DollarsPerKWH + amerenMORESRAMFeb2026DollarsPerKWH + amerenMOSUROct2026DollarsPerKWH
 )
+
+type amerenMORiderWindow struct {
+	monthStart          time.Month
+	monthEnd            time.Month
+	isSummer            bool
+	ridersDollarsPerKWH float64
+}
+
+// getAmerenMORidersDollarsPerKWH returns the combined per-kWh sum of mandatory
+// Ameren Missouri residential riders (Rider FAC + Rider EEIC + Rider RESRAM + Rider SUR)
+// for a given calendar year and month.
+func getAmerenMORidersDollarsPerKWH(year int, month time.Month) float64 {
+	if year < 2026 {
+		return amerenMORidersJan2026DollarsPerKWH
+	}
+	if year == 2026 {
+		switch {
+		case month == time.January:
+			return amerenMORidersJan2026DollarsPerKWH
+		case month >= time.February && month <= time.March:
+			return amerenMORidersFebMar2026DollarsPerKWH
+		case month >= time.April && month <= time.May:
+			return amerenMORidersAprMay2026DollarsPerKWH
+		case month >= time.June && month <= time.September:
+			return amerenMORidersJunSep2026DollarsPerKWH
+		default:
+			return amerenMORidersOct2026DollarsPerKWH
+		}
+	}
+	return amerenMORidersOct2026DollarsPerKWH
+}
+
+// amerenMORiderWindows splits a calendar year into non-wrapping (MonthStart <= MonthEnd)
+// seasonal and rider windows so buildPeriods emits exactly one base period per hour.
+func amerenMORiderWindows(year int) []amerenMORiderWindow {
+	if year == 2026 {
+		return []amerenMORiderWindow{
+			{
+				monthStart:          time.January,
+				monthEnd:            time.January,
+				isSummer:            false,
+				ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(2026, time.January),
+			},
+			{
+				monthStart:          time.February,
+				monthEnd:            time.March,
+				isSummer:            false,
+				ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(2026, time.February),
+			},
+			{
+				monthStart:          time.April,
+				monthEnd:            time.May,
+				isSummer:            false,
+				ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(2026, time.April),
+			},
+			{
+				monthStart:          time.June,
+				monthEnd:            time.September,
+				isSummer:            true,
+				ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(2026, time.June),
+			},
+			{
+				monthStart:          time.October,
+				monthEnd:            time.December,
+				isSummer:            false,
+				ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(2026, time.October),
+			},
+		}
+	}
+
+	return []amerenMORiderWindow{
+		{
+			monthStart:          time.January,
+			monthEnd:            time.May,
+			isSummer:            false,
+			ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(year, time.January),
+		},
+		{
+			monthStart:          time.June,
+			monthEnd:            time.September,
+			isSummer:            true,
+			ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(year, time.June),
+		},
+		{
+			monthStart:          time.October,
+			monthEnd:            time.December,
+			isSummer:            false,
+			ridersDollarsPerKWH: getAmerenMORidersDollarsPerKWH(year, time.October),
+		},
+	}
+}
 
 func shiftAmerenMOWeekendHoliday(t time.Time) time.Time {
 	switch t.Weekday() {
@@ -109,330 +234,332 @@ func amerenMOPeriods(plan string, options types.UtilityRateOptions, years []int)
 
 	for _, year := range years {
 		holidays := getAmerenMOHolidays(year)
+		windows := amerenMORiderWindows(year)
+		var simplified []touSimplifiedPeriod
 
-		switch plan {
-		case "ameren_mo_anytime":
-			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
-				{
-					Year:               year,
-					MonthStart:         time.June,
-					MonthEnd:           time.September,
-					OtherDollarsPerKWH: amerenMOAnytimeSummerDollarsPerKWH,
-					OtherDescription:   "Ameren MO Anytime Summer Energy Charge",
-				},
-				{
-					Year:               year,
-					MonthStart:         time.October,
-					MonthEnd:           time.May,
-					OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH,
-					OtherDescription:   "Ameren MO Anytime Winter Energy Charge",
-				},
-			})...)
+		for _, w := range windows {
+			riders := w.ridersDollarsPerKWH
 
-		case "ameren_mo_evening_morning":
-			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
-				// Summer (June - September): On-Peak 9:00 AM - 9:00 PM all days
-				{
-					Year:       year,
-					MonthStart: time.June,
-					MonthEnd:   time.September,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
-							DollarsPerKWH: amerenMOEveningMorningSummerBaseDollarsPerKWH + amerenMOEveningMorningSummerPeakAdjDollarsPerKWH,
-							Description:   "Ameren MO Evening/Morning Savers Summer On-Peak",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOEveningMorningSummerBaseDollarsPerKWH,
-					OtherDescription:   "Ameren MO Evening/Morning Savers Summer Off-Peak",
-				},
-				// Winter (October - May): On-Peak 9:00 AM - 9:00 PM all days
-				{
-					Year:       year,
-					MonthStart: time.October,
-					MonthEnd:   time.May,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
-							DollarsPerKWH: amerenMOEveningMorningWinterBaseDollarsPerKWH + amerenMOEveningMorningWinterPeakAdjDollarsPerKWH,
-							Description:   "Ameren MO Evening/Morning Savers Winter On-Peak",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOEveningMorningWinterBaseDollarsPerKWH,
-					OtherDescription:   "Ameren MO Evening/Morning Savers Winter Off-Peak",
-				},
-			})...)
-
-		case "ameren_mo_overnight":
-			simplified := []touSimplifiedPeriod{
-				// Summer (June - September): On-Peak 6:00 AM - 10:00 PM all days, Off-Peak 10:00 PM - 6:00 AM all days
-				{
-					Year:       year,
-					MonthStart: time.June,
-					MonthEnd:   time.September,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-							DollarsPerKWH: amerenMOOvernightSummerOnPeakDollarsPerKWH,
-							Description:   "Ameren MO Overnight Savers Summer On-Peak",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOOvernightSummerOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Overnight Savers Summer Off-Peak",
-				},
-			}
-
-			if isOptionB {
-				simplified = append(simplified, touSimplifiedPeriod{
-					Year:               year,
-					MonthStart:         time.October,
-					MonthEnd:           time.May,
-					OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH,
-					OtherDescription:   "Ameren MO Overnight Savers Option B Winter Anytime Rate",
-				})
-			} else {
-				simplified = append(simplified, touSimplifiedPeriod{
-					Year:       year,
-					MonthStart: time.October,
-					MonthEnd:   time.May,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-							DollarsPerKWH: amerenMOOvernightWinterOnPeakDollarsPerKWH,
-							Description:   "Ameren MO Overnight Savers Winter On-Peak",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOOvernightWinterOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Overnight Savers Winter Off-Peak",
-				})
-			}
-
-			periods = append(periods, buildPeriods(ctLocation, simplified)...)
-
-		case "ameren_mo_smart_saver":
-			simplified := []touSimplifiedPeriod{
-				// Summer Holidays (June - September): Intermediate 6 AM - 10 PM, Off-Peak 10 PM - 6 AM
-				{
-					Year:          year,
-					MonthStart:    time.June,
-					MonthEnd:      time.September,
-					SpecificDates: holidays,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "Intermediate",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-							DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH,
-							Description:   "Ameren MO Smart Savers Summer Holiday Intermediate",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOSmartSaverSummerOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Smart Savers Summer Holiday Off-Peak",
-				},
-				// Summer Non-Holidays (June - September):
-				// On-Peak 3 PM - 7 PM Mon-Fri; Intermediate 6 AM - 10 PM excl. On-Peak; Off-Peak 10 PM - 6 AM
-				{
-					Year:             year,
-					MonthStart:       time.June,
-					MonthEnd:         time.September,
-					SpecificDates:    holidays,
-					SpecificDatesNot: true,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
-							Weekday:       true,
-							DollarsPerKWH: amerenMOSmartSaverSummerOnPeakDollarsPerKWH,
-							Description:   "Ameren MO Smart Savers Summer On-Peak",
-						},
-						{
-							Name: "Intermediate",
-							Hours: []types.UtilityHourPeriod{
-								{HourStart: 6, HourEnd: 15},
-								{HourStart: 19, HourEnd: 22},
-							},
-							Weekday:       true,
-							DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH,
-							Description:   "Ameren MO Smart Savers Summer Weekday Intermediate",
-						},
-						{
-							Name:          "Intermediate",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-							Weekend:       true,
-							DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH,
-							Description:   "Ameren MO Smart Savers Summer Weekend Intermediate",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOSmartSaverSummerOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Smart Savers Summer Off-Peak",
-				},
-			}
-
-			if isOptionB {
-				simplified = append(simplified, touSimplifiedPeriod{
-					Year:               year,
-					MonthStart:         time.October,
-					MonthEnd:           time.May,
-					OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH,
-					OtherDescription:   "Ameren MO Smart Savers Option B Winter Anytime Rate",
-				})
-			} else {
-				simplified = append(simplified,
-					// Winter Holidays (October - May): Intermediate 6 AM - 10 PM, Off-Peak 10 PM - 6 AM
-					touSimplifiedPeriod{
-						Year:          year,
-						MonthStart:    time.October,
-						MonthEnd:      time.May,
-						SpecificDates: holidays,
-						HoursAndDays: []touSimplifiedHoursAndDays{
-							{
-								Name:          "Intermediate",
-								Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-								DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH,
-								Description:   "Ameren MO Smart Savers Winter Holiday Intermediate",
-							},
-						},
-						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: amerenMOSmartSaverWinterOffPeakDollarsPerKWH,
-						OtherDescription:   "Ameren MO Smart Savers Winter Holiday Off-Peak",
-					},
-					// Winter Non-Holidays (October - May):
-					// On-Peak 6-8 AM & 6-8 PM Mon-Fri; Intermediate 6 AM - 10 PM excl. On-Peak; Off-Peak 10 PM - 6 AM
-					touSimplifiedPeriod{
-						Year:             year,
-						MonthStart:       time.October,
-						MonthEnd:         time.May,
-						SpecificDates:    holidays,
-						SpecificDatesNot: true,
-						HoursAndDays: []touSimplifiedHoursAndDays{
-							{
-								Name: "On-Peak",
-								Hours: []types.UtilityHourPeriod{
-									{HourStart: 6, HourEnd: 8},
-									{HourStart: 18, HourEnd: 20},
-								},
-								Weekday:       true,
-								DollarsPerKWH: amerenMOSmartSaverWinterOnPeakDollarsPerKWH,
-								Description:   "Ameren MO Smart Savers Winter On-Peak",
-							},
-							{
-								Name: "Intermediate",
-								Hours: []types.UtilityHourPeriod{
-									{HourStart: 8, HourEnd: 18},
-									{HourStart: 20, HourEnd: 22},
-								},
-								Weekday:       true,
-								DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH,
-								Description:   "Ameren MO Smart Savers Winter Weekday Intermediate",
-							},
-							{
-								Name:          "Intermediate",
-								Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
-								Weekend:       true,
-								DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH,
-								Description:   "Ameren MO Smart Savers Winter Weekend Intermediate",
-							},
-						},
-						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: amerenMOSmartSaverWinterOffPeakDollarsPerKWH,
-						OtherDescription:   "Ameren MO Smart Savers Winter Off-Peak",
-					},
-				)
-			}
-
-			periods = append(periods, buildPeriods(ctLocation, simplified)...)
-
-		case "ameren_mo_ultimate_saver":
-			simplified := []touSimplifiedPeriod{
-				// Summer Holidays (June - September): Off-Peak all day
-				{
-					Year:               year,
-					MonthStart:         time.June,
-					MonthEnd:           time.September,
-					SpecificDates:      holidays,
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOUltimateSaverSummerOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Ultimate Savers Summer Holiday Off-Peak",
-				},
-				// Summer Non-Holidays (June - September): On-Peak 3 PM - 7 PM Mon-Fri, Off-Peak all other hours
-				{
-					Year:             year,
-					MonthStart:       time.June,
-					MonthEnd:         time.September,
-					SpecificDates:    holidays,
-					SpecificDatesNot: true,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
-							Weekday:       true,
-							DollarsPerKWH: amerenMOUltimateSaverSummerOnPeakDollarsPerKWH,
-							Description:   "Ameren MO Ultimate Savers Summer On-Peak",
-						},
-					},
-					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: amerenMOUltimateSaverSummerOffPeakDollarsPerKWH,
-					OtherDescription:   "Ameren MO Ultimate Savers Summer Off-Peak",
-				},
-			}
-
-			if isOptionB {
-				simplified = append(simplified, touSimplifiedPeriod{
-					Year:               year,
-					MonthStart:         time.October,
-					MonthEnd:           time.May,
-					OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH,
-					OtherDescription:   "Ameren MO Ultimate Savers Option B Winter Anytime Rate",
-				})
-			} else {
-				simplified = append(simplified,
-					// Winter Holidays (October - May): Off-Peak all day
-					touSimplifiedPeriod{
+			switch plan {
+			case "ameren_mo_anytime":
+				if w.isSummer {
+					simplified = append(simplified, touSimplifiedPeriod{
 						Year:               year,
-						MonthStart:         time.October,
-						MonthEnd:           time.May,
-						SpecificDates:      holidays,
-						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: amerenMOUltimateSaverWinterOffPeakDollarsPerKWH,
-						OtherDescription:   "Ameren MO Ultimate Savers Winter Holiday Off-Peak",
-					},
-					// Winter Non-Holidays (October - May): On-Peak 6-8 AM & 6-8 PM Mon-Fri, Off-Peak all other hours
-					touSimplifiedPeriod{
-						Year:             year,
-						MonthStart:       time.October,
-						MonthEnd:         time.May,
-						SpecificDates:    holidays,
-						SpecificDatesNot: true,
+						MonthStart:         w.monthStart,
+						MonthEnd:           w.monthEnd,
+						OtherDollarsPerKWH: amerenMOAnytimeSummerDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Anytime Summer Energy Charge",
+					})
+				} else {
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:               year,
+						MonthStart:         w.monthStart,
+						MonthEnd:           w.monthEnd,
+						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Anytime Winter Energy Charge",
+					})
+				}
+
+			case "ameren_mo_evening_morning":
+				if w.isSummer {
+					// Summer (June - September): On-Peak 9:00 AM - 9:00 PM all days
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:       year,
+						MonthStart: w.monthStart,
+						MonthEnd:   w.monthEnd,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
-								Name: "On-Peak",
-								Hours: []types.UtilityHourPeriod{
-									{HourStart: 6, HourEnd: 8},
-									{HourStart: 18, HourEnd: 20},
-								},
-								Weekday:       true,
-								DollarsPerKWH: amerenMOUltimateSaverWinterOnPeakDollarsPerKWH,
-								Description:   "Ameren MO Ultimate Savers Winter On-Peak",
+								Name:          "On-Peak",
+								Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
+								DollarsPerKWH: amerenMOEveningMorningSummerBaseDollarsPerKWH + amerenMOEveningMorningSummerPeakAdjDollarsPerKWH + riders,
+								Description:   "Ameren MO Evening/Morning Savers Summer On-Peak",
 							},
 						},
 						OtherName:          "Off-Peak",
-						OtherDollarsPerKWH: amerenMOUltimateSaverWinterOffPeakDollarsPerKWH,
-						OtherDescription:   "Ameren MO Ultimate Savers Winter Off-Peak",
-					},
-				)
-			}
+						OtherDollarsPerKWH: amerenMOEveningMorningSummerBaseDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Evening/Morning Savers Summer Off-Peak",
+					})
+				} else {
+					// Winter (October - May): On-Peak 9:00 AM - 9:00 PM all days
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:       year,
+						MonthStart: w.monthStart,
+						MonthEnd:   w.monthEnd,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Name:          "On-Peak",
+								Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
+								DollarsPerKWH: amerenMOEveningMorningWinterBaseDollarsPerKWH + amerenMOEveningMorningWinterPeakAdjDollarsPerKWH + riders,
+								Description:   "Ameren MO Evening/Morning Savers Winter On-Peak",
+							},
+						},
+						OtherName:          "Off-Peak",
+						OtherDollarsPerKWH: amerenMOEveningMorningWinterBaseDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Evening/Morning Savers Winter Off-Peak",
+					})
+				}
 
-			periods = append(periods, buildPeriods(ctLocation, simplified)...)
+			case "ameren_mo_overnight":
+				if w.isSummer {
+					// Summer (June - September): On-Peak 6:00 AM - 10:00 PM all days, Off-Peak 10:00 PM - 6:00 AM all days
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:       year,
+						MonthStart: w.monthStart,
+						MonthEnd:   w.monthEnd,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Name:          "On-Peak",
+								Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+								DollarsPerKWH: amerenMOOvernightSummerOnPeakDollarsPerKWH + riders,
+								Description:   "Ameren MO Overnight Savers Summer On-Peak",
+							},
+						},
+						OtherName:          "Off-Peak",
+						OtherDollarsPerKWH: amerenMOOvernightSummerOffPeakDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Overnight Savers Summer Off-Peak",
+					})
+				} else if isOptionB {
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:               year,
+						MonthStart:         w.monthStart,
+						MonthEnd:           w.monthEnd,
+						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Overnight Savers Option B Winter Anytime Rate",
+					})
+				} else {
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:       year,
+						MonthStart: w.monthStart,
+						MonthEnd:   w.monthEnd,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Name:          "On-Peak",
+								Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+								DollarsPerKWH: amerenMOOvernightWinterOnPeakDollarsPerKWH + riders,
+								Description:   "Ameren MO Overnight Savers Winter On-Peak",
+							},
+						},
+						OtherName:          "Off-Peak",
+						OtherDollarsPerKWH: amerenMOOvernightWinterOffPeakDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Overnight Savers Winter Off-Peak",
+					})
+				}
+
+			case "ameren_mo_smart_saver":
+				if w.isSummer {
+					simplified = append(simplified,
+						// Summer Holidays (June - September): Intermediate 6 AM - 10 PM, Off-Peak 10 PM - 6 AM
+						touSimplifiedPeriod{
+							Year:          year,
+							MonthStart:    w.monthStart,
+							MonthEnd:      w.monthEnd,
+							SpecificDates: holidays,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name:          "Intermediate",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+									DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Summer Holiday Intermediate",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOSmartSaverSummerOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Smart Savers Summer Holiday Off-Peak",
+						},
+						// Summer Non-Holidays (June - September):
+						// On-Peak 3 PM - 7 PM Mon-Fri; Intermediate 6 AM - 10 PM excl. On-Peak; Off-Peak 10 PM - 6 AM
+						touSimplifiedPeriod{
+							Year:             year,
+							MonthStart:       w.monthStart,
+							MonthEnd:         w.monthEnd,
+							SpecificDates:    holidays,
+							SpecificDatesNot: true,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name:          "On-Peak",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOSmartSaverSummerOnPeakDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Summer On-Peak",
+								},
+								{
+									Name: "Intermediate",
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 6, HourEnd: 15},
+										{HourStart: 19, HourEnd: 22},
+									},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Summer Weekday Intermediate",
+								},
+								{
+									Name:          "Intermediate",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+									Weekend:       true,
+									DollarsPerKWH: amerenMOSmartSaverSummerIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Summer Weekend Intermediate",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOSmartSaverSummerOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Smart Savers Summer Off-Peak",
+						},
+					)
+				} else if isOptionB {
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:               year,
+						MonthStart:         w.monthStart,
+						MonthEnd:           w.monthEnd,
+						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Smart Savers Option B Winter Anytime Rate",
+					})
+				} else {
+					simplified = append(simplified,
+						// Winter Holidays (October - May): Intermediate 6 AM - 10 PM, Off-Peak 10 PM - 6 AM
+						touSimplifiedPeriod{
+							Year:          year,
+							MonthStart:    w.monthStart,
+							MonthEnd:      w.monthEnd,
+							SpecificDates: holidays,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name:          "Intermediate",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+									DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Winter Holiday Intermediate",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOSmartSaverWinterOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Smart Savers Winter Holiday Off-Peak",
+						},
+						// Winter Non-Holidays (October - May):
+						// On-Peak 6-8 AM & 6-8 PM Mon-Fri; Intermediate 6 AM - 10 PM excl. On-Peak; Off-Peak 10 PM - 6 AM
+						touSimplifiedPeriod{
+							Year:             year,
+							MonthStart:       w.monthStart,
+							MonthEnd:         w.monthEnd,
+							SpecificDates:    holidays,
+							SpecificDatesNot: true,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name: "On-Peak",
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 6, HourEnd: 8},
+										{HourStart: 18, HourEnd: 20},
+									},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOSmartSaverWinterOnPeakDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Winter On-Peak",
+								},
+								{
+									Name: "Intermediate",
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 8, HourEnd: 18},
+										{HourStart: 20, HourEnd: 22},
+									},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Winter Weekday Intermediate",
+								},
+								{
+									Name:          "Intermediate",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}},
+									Weekend:       true,
+									DollarsPerKWH: amerenMOSmartSaverWinterIntermediateDollarsPerKWH + riders,
+									Description:   "Ameren MO Smart Savers Winter Weekend Intermediate",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOSmartSaverWinterOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Smart Savers Winter Off-Peak",
+						},
+					)
+				}
+
+			case "ameren_mo_ultimate_saver":
+				if w.isSummer {
+					simplified = append(simplified,
+						// Summer Holidays (June - September): Off-Peak all day
+						touSimplifiedPeriod{
+							Year:               year,
+							MonthStart:         w.monthStart,
+							MonthEnd:           w.monthEnd,
+							SpecificDates:      holidays,
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOUltimateSaverSummerOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Ultimate Savers Summer Holiday Off-Peak",
+						},
+						// Summer Non-Holidays (June - September): On-Peak 3 PM - 7 PM Mon-Fri, Off-Peak all other hours
+						touSimplifiedPeriod{
+							Year:             year,
+							MonthStart:       w.monthStart,
+							MonthEnd:         w.monthEnd,
+							SpecificDates:    holidays,
+							SpecificDatesNot: true,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name:          "On-Peak",
+									Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOUltimateSaverSummerOnPeakDollarsPerKWH + riders,
+									Description:   "Ameren MO Ultimate Savers Summer On-Peak",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOUltimateSaverSummerOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Ultimate Savers Summer Off-Peak",
+						},
+					)
+				} else if isOptionB {
+					simplified = append(simplified, touSimplifiedPeriod{
+						Year:               year,
+						MonthStart:         w.monthStart,
+						MonthEnd:           w.monthEnd,
+						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
+						OtherDescription:   "Ameren MO Ultimate Savers Option B Winter Anytime Rate",
+					})
+				} else {
+					simplified = append(simplified,
+						// Winter Holidays (October - May): Off-Peak all day
+						touSimplifiedPeriod{
+							Year:               year,
+							MonthStart:         w.monthStart,
+							MonthEnd:           w.monthEnd,
+							SpecificDates:      holidays,
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOUltimateSaverWinterOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Ultimate Savers Winter Holiday Off-Peak",
+						},
+						// Winter Non-Holidays (October - May): On-Peak 6-8 AM & 6-8 PM Mon-Fri, Off-Peak all other hours
+						touSimplifiedPeriod{
+							Year:             year,
+							MonthStart:       w.monthStart,
+							MonthEnd:         w.monthEnd,
+							SpecificDates:    holidays,
+							SpecificDatesNot: true,
+							HoursAndDays: []touSimplifiedHoursAndDays{
+								{
+									Name: "On-Peak",
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 6, HourEnd: 8},
+										{HourStart: 18, HourEnd: 20},
+									},
+									Weekday:       true,
+									DollarsPerKWH: amerenMOUltimateSaverWinterOnPeakDollarsPerKWH + riders,
+									Description:   "Ameren MO Ultimate Savers Winter On-Peak",
+								},
+							},
+							OtherName:          "Off-Peak",
+							OtherDollarsPerKWH: amerenMOUltimateSaverWinterOffPeakDollarsPerKWH + riders,
+							OtherDescription:   "Ameren MO Ultimate Savers Winter Off-Peak",
+						},
+					)
+				}
+			}
 		}
+
+		periods = append(periods, buildPeriods(ctLocation, simplified)...)
 
 		if isAvoidedCost {
 			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
