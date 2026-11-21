@@ -445,6 +445,145 @@ func TestOpenMeteoService(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("converts UTC startDate and endDate to negative-offset site timezone", func(t *testing.T) {
+			laTZ := "America/Los_Angeles"
+			laLoc, locErr := time.LoadLocation(laTZ)
+			require.NoError(t, locErr)
+
+			// 2026-06-02T03:00:00Z is 2026-06-01T20:00:00-07:00 in America/Los_Angeles.
+			// 2026-06-03T03:00:00Z is 2026-06-02T20:00:00-07:00 in America/Los_Angeles.
+			startUTC := time.Date(2026, 6, 2, 3, 0, 0, 0, time.UTC)
+			endUTC := time.Date(2026, 6, 3, 3, 0, 0, 0, time.UTC)
+
+			mockBody := weatherForecastResponse{
+				Daily: struct {
+					Time    []string `json:"time"`
+					Sunrise []string `json:"sunrise"`
+					Sunset  []string `json:"sunset"`
+				}{
+					Time:    []string{"2026-06-01", "2026-06-02"},
+					Sunrise: []string{"2026-06-01T05:42", "2026-06-02T05:42"},
+					Sunset:  []string{"2026-06-01T20:00", "2026-06-02T20:01"},
+				},
+				Hourly: struct {
+					Time                   []string  `json:"time"`
+					ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					TiltedRadiation        []float64 `json:"global_tilted_irradiance"`
+					Temperature            []float64 `json:"temperature_2m"`
+					Snowfall               []float64 `json:"snowfall"`
+					SnowDepth              []float64 `json:"snow_depth"`
+					CloudCover             []float64 `json:"cloud_cover"`
+				}{
+					Time:                   []string{"2026-06-01T12:00", "2026-06-02T12:00"},
+					ShortwaveRadiation:     []float64{500.0, 600.0},
+					DiffuseRadiation:       []float64{100.0, 120.0},
+					DirectNormalIrradiance: []float64{700.0, 800.0},
+					Temperature:            []float64{22.0, 24.0},
+					Snowfall:               []float64{0.0, 0.0},
+					SnowDepth:              []float64{0.0, 0.0},
+					CloudCover:             []float64{10.0, 20.0},
+				},
+			}
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := r.URL.Query()
+				assert.Equal(t, "2026-06-01", query.Get("start_date"))
+				assert.Equal(t, "2026-06-02", query.Get("end_date"))
+				assert.Equal(t, laTZ, query.Get("timezone"))
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(mockBody)
+			}))
+			defer ts.Close()
+
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
+			res, err := s.Forecast(context.Background(), types.SiteLocation{
+				Latitude:  34.0,
+				Longitude: -118.0,
+				TimeZone:  laTZ,
+			}, startUTC, endUTC)
+
+			require.NoError(t, err)
+			if assert.Len(t, res, 2) {
+				assert.True(t, res[0].TSDayStart.Equal(time.Date(2026, 6, 1, 0, 0, 0, 0, laLoc)))
+				assert.True(t, res[1].TSDayStart.Equal(time.Date(2026, 6, 2, 0, 0, 0, 0, laLoc)))
+				assert.Len(t, res[0].ForecastHours, 1)
+				assert.Len(t, res[1].ForecastHours, 1)
+			}
+		})
+
+		t.Run("converts UTC startDate and endDate to positive-offset site timezone", func(t *testing.T) {
+			brisTZ := "Australia/Brisbane"
+			brisLoc, locErr := time.LoadLocation(brisTZ)
+			require.NoError(t, locErr)
+
+			// 2026-06-01T14:00:00Z is 2026-06-02T00:00:00+10:00 in Australia/Brisbane.
+			// 2026-06-02T14:00:00Z is 2026-06-03T00:00:00+10:00 in Australia/Brisbane.
+			startUTC := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC)
+			endUTC := time.Date(2026, 6, 2, 14, 0, 0, 0, time.UTC)
+
+			mockBody := weatherForecastResponse{
+				Daily: struct {
+					Time    []string `json:"time"`
+					Sunrise []string `json:"sunrise"`
+					Sunset  []string `json:"sunset"`
+				}{
+					Time:    []string{"2026-06-02", "2026-06-03"},
+					Sunrise: []string{"2026-06-02T06:30", "2026-06-03T06:31"},
+					Sunset:  []string{"2026-06-02T17:01", "2026-06-03T17:01"},
+				},
+				Hourly: struct {
+					Time                   []string  `json:"time"`
+					ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					TiltedRadiation        []float64 `json:"global_tilted_irradiance"`
+					Temperature            []float64 `json:"temperature_2m"`
+					Snowfall               []float64 `json:"snowfall"`
+					SnowDepth              []float64 `json:"snow_depth"`
+					CloudCover             []float64 `json:"cloud_cover"`
+				}{
+					Time:                   []string{"2026-06-02T12:00", "2026-06-03T00:00"},
+					ShortwaveRadiation:     []float64{450.0, 0.0},
+					DiffuseRadiation:       []float64{90.0, 0.0},
+					DirectNormalIrradiance: []float64{600.0, 0.0},
+					Temperature:            []float64{21.0, 15.0},
+					Snowfall:               []float64{0.0, 0.0},
+					SnowDepth:              []float64{0.0, 0.0},
+					CloudCover:             []float64{15.0, 5.0},
+				},
+			}
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := r.URL.Query()
+				assert.Equal(t, "2026-06-02", query.Get("start_date"))
+				assert.Equal(t, "2026-06-03", query.Get("end_date"))
+				assert.Equal(t, brisTZ, query.Get("timezone"))
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(mockBody)
+			}))
+			defer ts.Close()
+
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
+			res, err := s.Forecast(context.Background(), types.SiteLocation{
+				CountryCode: "AU",
+				Latitude:    -27.47,
+				Longitude:   153.02,
+				TimeZone:    brisTZ,
+			}, startUTC, endUTC)
+
+			require.NoError(t, err)
+			if assert.Len(t, res, 1) {
+				assert.True(t, res[0].TSDayStart.Equal(time.Date(2026, 6, 2, 0, 0, 0, 0, brisLoc)))
+				assert.Len(t, res[0].ForecastHours, 1)
+			}
+		})
 	})
 
 	t.Run("APIKey", func(t *testing.T) {
@@ -574,5 +713,143 @@ func TestOpenMeteoService(t *testing.T) {
 			assert.Len(t, weathers[0].ModelForecasts["ecmwf_ifs025"], len(weathers[0].ForecastHours))
 			assert.Len(t, weathers[0].ModelForecasts["icon_seamless"], len(weathers[0].ForecastHours))
 		}
+	})
+}
+
+func TestParseModelHourlySeries(t *testing.T) {
+	ctx := context.Background()
+	model := "ecmwf_ifs025"
+	suffix := "_" + model
+
+	newValidHourlyMap := func() map[string]json.RawMessage {
+		return map[string]json.RawMessage{
+			"shortwave_radiation" + suffix:      json.RawMessage(`[100.0, 200.0]`),
+			"diffuse_radiation" + suffix:        json.RawMessage(`[20.0, 40.0]`),
+			"direct_normal_irradiance" + suffix: json.RawMessage(`[300.0, 400.0]`),
+			"global_tilted_irradiance" + suffix: json.RawMessage(`[150.0, 250.0]`),
+			"temperature_2m" + suffix:           json.RawMessage(`[18.5, 20.5]`),
+			"snowfall" + suffix:                 json.RawMessage(`[0.0, 0.5]`),
+			"snow_depth" + suffix:               json.RawMessage(`[0.1, 0.2]`),
+			"cloud_cover" + suffix:              json.RawMessage(`[10.0, 50.0]`),
+		}
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		ms, err := parseModelHourlySeries(ctx, newValidHourlyMap(), model, suffix, 2)
+		require.NoError(t, err)
+		assert.Equal(t, model, ms.model)
+		assert.Len(t, ms.shortwaveRadiation, 2)
+		assert.Len(t, ms.diffuseRadiation, 2)
+		assert.Len(t, ms.directNormalIrradiance, 2)
+		assert.Len(t, ms.tiltedRadiation, 2)
+		assert.Len(t, ms.temperature, 2)
+		assert.Len(t, ms.snowfall, 2)
+		assert.Len(t, ms.snowDepth, 2)
+		assert.Len(t, ms.cloudCover, 2)
+	})
+
+	t.Run("decode shortwave_radiation error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["shortwave_radiation"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode shortwave_radiation"+suffix)
+	})
+
+	t.Run("shortwave_radiation length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["shortwave_radiation"+suffix] = json.RawMessage(`[100.0]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 shortwave radiation")
+	})
+
+	t.Run("decode diffuse_radiation error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["diffuse_radiation"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode diffuse_radiation"+suffix)
+	})
+
+	t.Run("diffuse_radiation length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["diffuse_radiation"+suffix] = json.RawMessage(`[20.0]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 diffuse radiation")
+	})
+
+	t.Run("decode direct_normal_irradiance error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["direct_normal_irradiance"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode direct_normal_irradiance"+suffix)
+	})
+
+	t.Run("direct_normal_irradiance length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["direct_normal_irradiance"+suffix] = json.RawMessage(`[300.0]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 direct normal irradiance")
+	})
+
+	t.Run("decode global_tilted_irradiance error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["global_tilted_irradiance"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode global_tilted_irradiance"+suffix)
+	})
+
+	t.Run("decode temperature_2m error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["temperature_2m"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode temperature_2m"+suffix)
+	})
+
+	t.Run("temperature_2m length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["temperature_2m"+suffix] = json.RawMessage(`[18.5]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 temperature")
+	})
+
+	t.Run("decode snowfall error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["snowfall"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode snowfall"+suffix)
+	})
+
+	t.Run("snowfall length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["snowfall"+suffix] = json.RawMessage(`[0.0]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 snowfall")
+	})
+
+	t.Run("decode snow_depth error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["snow_depth"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode snow_depth"+suffix)
+	})
+
+	t.Run("snow_depth length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["snow_depth"+suffix] = json.RawMessage(`[0.1]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 snow depth")
+	})
+
+	t.Run("decode cloud_cover error", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["cloud_cover"+suffix] = json.RawMessage(`"bad"`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "failed to decode cloud_cover"+suffix)
+	})
+
+	t.Run("cloud_cover length mismatch", func(t *testing.T) {
+		m := newValidHourlyMap()
+		m["cloud_cover"+suffix] = json.RawMessage(`[10.0]`)
+		_, err := parseModelHourlySeries(ctx, m, model, suffix, 2)
+		assert.ErrorContains(t, err, "hourly data mismatch: 2 times, 1 cloud cover")
 	})
 }
