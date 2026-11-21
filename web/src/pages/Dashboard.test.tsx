@@ -1379,6 +1379,90 @@ describe('Dashboard', () => {
         });
     });
 
+    it('shows count-based auth warning for consecutiveFailures 3..39 and count-free paused warning at >= 40', async () => {
+        mockActionsAndSavings([]);
+        const transientSettings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 5,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        const { unmount } = renderWithRouter(<Dashboard siteID="site1" settings={transientSettings as any} />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/Energy Storage System authentication failed 5 time\(s\)\./i)
+            ).toBeInTheDocument();
+        });
+        unmount();
+
+        const pausedSettings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={pausedSettings as any} />);
+
+        await waitFor(() => {
+            const warningEl = screen.getByText(/Energy Storage System authentication is paused\./i);
+            expect(warningEl).toBeInTheDocument();
+            expect(warningEl.textContent).not.toContain('40');
+            const link = screen.getByRole('link', { name: /Update your credentials in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?ess=1');
+        });
+    });
+
+    it('shows count-free paused mode update banners when consecutiveSetFailures >= 40 for Tesla and non-Tesla', async () => {
+        mockActionsAndSavings([]);
+        const teslaPaused = {
+            utilityProvider: 'comed',
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        const { unmount } = renderWithRouter(<Dashboard siteID="site1" settings={teslaPaused as any} />);
+
+        await waitFor(() => {
+            const teslaMsg = screen.getByText(/RateRudder can read your Tesla battery status, but battery mode updates are paused due to missing command permissions\./i);
+            expect(teslaMsg).toBeInTheDocument();
+            expect(teslaMsg.textContent).not.toContain('40');
+        });
+        unmount();
+
+        const franklinPaused = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={franklinPaused as any} />);
+
+        await waitFor(() => {
+            const franklinMsg = screen.getByText(/Energy Storage System battery mode updates are paused\./i);
+            expect(franklinMsg).toBeInTheDocument();
+            expect(franklinMsg.textContent).not.toContain('40');
+        });
+    });
+
     describe('visibility auto-refresh', () => {
         beforeEach(() => {
             Object.defineProperty(document, 'visibilityState', {

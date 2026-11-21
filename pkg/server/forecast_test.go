@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -1483,5 +1487,147 @@ func TestHandleForecast(t *testing.T) {
 			assert.Equal(t, now, mergedHourPrices[0].TSHourStart, "should emit current hour :00")
 			assert.Equal(t, now.Add(time.Hour), mergedHourPrices[1].TSHourStart, "should emit next hour :00 when period crosses hour boundary")
 		}
+	})
+
+	t.Run("ESS Auth Or Backoff Failure Returns 200 With 24h History And Fault", func(t *testing.T) {
+		histHour := now.Add(-2 * time.Hour)
+		energyHist := []types.DailyEnergyStats{
+			{
+				TSDayStart: now.Truncate(24 * time.Hour),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: histHour, SolarKWH: 3.5, HomeKWH: 1.2},
+				},
+			},
+		}
+		priceHist := []types.Price{
+			{TSStart: histHour, TSEnd: histHour.Add(time.Hour), DollarsPerKWH: 0.14},
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(energyHist, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(priceHist, nil)
+
+		// 1. Live Authenticate permanent ErrUnauthorized returns 200 with history + fault
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "franklin",
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(now, nil).Once()
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("bad password: %w", ess.ErrUnauthorized)).Once()
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			utilities:  utility.NewMap(mockS),
+			ess:        essMap,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		var errBuf bytes.Buffer
+		errLogger := slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+
+		req1 := httptest.NewRequest("GET", "/api/forecast", nil)
+		req1 = req1.WithContext(log.With(context.WithValue(req1.Context(), siteIDContextKey, types.SiteIDNone), errLogger))
+		w1 := httptest.NewRecorder()
+		srv.handleForecast(w1, req1)
+
+		require.Equal(t, http.StatusOK, w1.Result().StatusCode)
+		var res1 ForecastRes
+		require.NoError(t, json.NewDecoder(w1.Body).Decode(&res1))
+		assert.Nil(t, res1.Plan)
+		require.NotNil(t, res1.LatestAction)
+		assert.True(t, res1.LatestAction.Fault)
+		assert.NotEmpty(t, res1.EnergyHistory)
+		assert.NotEmpty(t, res1.PriceHistory)
+
+		// 2. Paused backoff (ConsecutiveFailures == 40 -> errESSRateLimited) also returns 200 with history + fault
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "franklin",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 40,
+				LastAttempt:         now.Add(-time.Hour),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		req2 := httptest.NewRequest("GET", "/api/forecast", nil)
+		req2 = req2.WithContext(log.With(context.WithValue(req2.Context(), siteIDContextKey, types.SiteIDNone), errLogger))
+		w2 := httptest.NewRecorder()
+		srv.handleForecast(w2, req2)
+
+		require.Equal(t, http.StatusOK, w2.Result().StatusCode)
+		var res2 ForecastRes
+		require.NoError(t, json.NewDecoder(w2.Body).Decode(&res2))
+		require.NotNil(t, res2.LatestAction)
+		assert.True(t, res2.LatestAction.Fault)
+		assert.NotEmpty(t, res2.EnergyHistory)
+		assert.NotEmpty(t, res2.PriceHistory)
+		assert.Empty(t, errBuf.String(), "Forecast ESS auth fallback must emit zero ERROR logs")
+	})
+
+	t.Run("ESS GetStatus Unauthorized Returns 200 With 24h History And Fault", func(t *testing.T) {
+		histHour := now.Add(-1 * time.Hour)
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "franklin",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart: now.Truncate(24 * time.Hour),
+				Hourly:     []types.EnergyStats{{TSHourStart: histHour, SolarKWH: 2.0}},
+			},
+		}, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: histHour, TSEnd: histHour.Add(time.Hour), DollarsPerKWH: 0.11},
+		}, nil)
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{}, fmt.Errorf("operation without permission: %w", ess.ErrUnauthorized))
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			utilities:  utility.NewMap(mockS),
+			ess:        essMap,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		var errBuf bytes.Buffer
+		errLogger := slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		req = req.WithContext(log.With(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone), errLogger))
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var res ForecastRes
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&res))
+		assert.Nil(t, res.Plan)
+		require.NotNil(t, res.LatestAction)
+		assert.True(t, res.LatestAction.Fault)
+		assert.NotEmpty(t, res.EnergyHistory)
+		assert.NotEmpty(t, res.PriceHistory)
+		assert.Empty(t, errBuf.String(), "GetStatus unauthorized fallback must emit zero ERROR logs")
 	})
 }

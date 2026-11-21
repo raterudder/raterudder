@@ -312,9 +312,18 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 					errStr = errBody.Error
 				}
 				originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, errStr)
-				errStrLower := strings.ToLower(errStr)
-				if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
-					strings.Contains(errStrLower, "unauthorized") || strings.Contains(errStrLower, "missing scopes") || strings.Contains(errStrLower, "invalid_token") {
+				combinedLower := strings.ToLower(errBody.Error + " " + errBody.ErrorDescription)
+				if strings.Contains(combinedLower, "password is locked") || strings.Contains(combinedLower, "account is locked") {
+					retErr = fmt.Errorf("%w: %w: %w", ErrAccountLocked, ErrUnauthorized, originalErr)
+				} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+					strings.Contains(combinedLower, "unauthorized") ||
+					strings.Contains(combinedLower, "missing scopes") ||
+					strings.Contains(combinedLower, "invalid_token") ||
+					strings.Contains(combinedLower, "invalid_grant") ||
+					strings.Contains(combinedLower, "login_required") ||
+					strings.Contains(combinedLower, "invalid_client") ||
+					strings.Contains(combinedLower, "access_denied") ||
+					strings.Contains(combinedLower, "permission_denied") {
 					retErr = fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
 				} else {
 					retErr = originalErr
@@ -489,19 +498,20 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 	teslaCreds := *creds.Tesla
 	creds.Tesla = &teslaCreds
 	changed := false
+	refreshed := false
 
 	// If we have an AuthCode, we need to exchange it for a token
 	if creds.Tesla.AuthCode != "" {
 		// determine base URL so we can set the region
 		region, baseURL, err := b.base.getRegionBaseURLFromCode(creds.Tesla.AuthCode)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to determine region from auth code", slog.String("authCode", creds.Tesla.AuthCode))
-			return creds, false, fmt.Errorf("failed to determine region from auth code")
+			log.Ctx(ctx).WarnContext(ctx, "failed to determine region from auth code", slog.Any("error", err))
+			return creds, false, fmt.Errorf("%w: failed to determine region from auth code", ErrUnauthorized)
 		}
 		log.Ctx(ctx).InfoContext(ctx, "submitting auth code to tesla to get access token", slog.String("region", region))
 		res, err := b.exchangeCodeForToken(ctx, baseURL, creds.Tesla.AuthCode)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to exchange auth code", slog.String("authCode", creds.Tesla.AuthCode), slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to exchange auth code", slog.Any("error", err))
 			return creds, false, fmt.Errorf("failed to exchange auth code: %w", err)
 		}
 		creds.Tesla.AccessToken = res.AccessToken
@@ -512,6 +522,7 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		b.baseURL = baseURL
 		b.token = res.AccessToken
 		changed = true
+		refreshed = true
 	} else {
 		baseURL, err := b.base.getBaseURL(creds.Tesla.Region)
 		if err != nil {
@@ -537,35 +548,64 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			creds.Tesla.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
 			b.token = res.AccessToken
 			changed = true
+			refreshed = true
 		} else {
 			// use the existing token
 			b.token = creds.Tesla.AccessToken
 		}
 	}
 
-	// Fill in the default energy site ID if it wasn't set yet (including retries
-	// after a single-use auth code was exchanged during an upstream outage).
-	if creds.Tesla.EnergySiteID == 0 {
-		id, err := b.getDefaultSiteID(ctx, creds.Tesla.SerialNumber)
-		if err != nil {
-			return creds, changed, fmt.Errorf("failed to get default site id: %w", err)
+	validateSiteAccess := func() error {
+		// Fill in the default energy site ID if it wasn't set yet (including retries
+		// after a single-use auth code was exchanged during an upstream outage).
+		if creds.Tesla.EnergySiteID == 0 {
+			id, err := b.getDefaultSiteID(ctx, creds.Tesla.SerialNumber)
+			if err != nil {
+				return fmt.Errorf("failed to get default site id: %w", err)
+			}
+			log.Ctx(ctx).InfoContext(ctx, "automatically selected site", slog.Int64("energySiteID", id), slog.String("serialNumber", creds.Tesla.SerialNumber))
+			creds.Tesla.EnergySiteID = id
+			changed = true
 		}
-		log.Ctx(ctx).InfoContext(ctx, "automatically selected site", slog.Int64("energySiteID", id), slog.String("serialNumber", creds.Tesla.SerialNumber))
-		creds.Tesla.EnergySiteID = id
-		changed = true
+
+		b.energySiteID = creds.Tesla.EnergySiteID
+
+		// Verify token works by fetching site info and live status
+		if _, err := b.getSiteInfoWithCache(ctx, true); err != nil {
+			return fmt.Errorf("credential validation failed: %w", err)
+		}
+
+		if _, err := b.getLiveStatusWithCache(ctx, true); err != nil {
+			return fmt.Errorf("credential validation failed: %w", err)
+		}
+		return nil
 	}
 
-	b.energySiteID = creds.Tesla.EnergySiteID
-
-	// Verify token works by fetching site info and live status
-	if _, err := b.getSiteInfoWithCache(ctx, true); err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "tesla credential validation failed", slog.Any("error", err))
-		return creds, changed, fmt.Errorf("credential validation failed: %w", err)
-	}
-
-	if _, err := b.getLiveStatusWithCache(ctx, true); err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "tesla credential validation failed", slog.Any("error", err))
-		return creds, changed, fmt.Errorf("credential validation failed: %w", err)
+	err := validateSiteAccess()
+	if err != nil {
+		var httpErr *teslaHTTPError
+		if !refreshed && creds.Tesla.RefreshToken != "" && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized {
+			log.Ctx(ctx).DebugContext(ctx, "tesla access token unauthorized, refreshing token")
+			res, refreshErr := b.refreshToken(ctx, b.baseURL, creds.Tesla.RefreshToken)
+			if refreshErr != nil {
+				return creds, changed, fmt.Errorf("failed to refresh token: %w", refreshErr)
+			}
+			creds.Tesla.AccessToken = res.AccessToken
+			if res.RefreshToken != "" {
+				creds.Tesla.RefreshToken = res.RefreshToken
+			}
+			creds.Tesla.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
+			b.token = res.AccessToken
+			changed = true
+			refreshed = true
+			err = validateSiteAccess()
+		}
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "credential validation failed:") {
+				log.Ctx(ctx).WarnContext(ctx, "tesla credential validation failed", slog.Any("error", err))
+			}
+			return creds, changed, err
+		}
 	}
 
 	return creds, changed, nil
@@ -1093,7 +1133,9 @@ func (b *Tesla) updateTOUSettings(ctx context.Context, sched *types.TOUSchedule)
 		return err
 	}
 	if err := b.base.doRequest(req, nil); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla time_of_use_settings", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla time_of_use_settings", slog.Any("error", err))
+		}
 		return err
 	}
 	if touSettings, ok := payload["tou_settings"].(map[string]any); ok {
@@ -1477,7 +1519,9 @@ func (b *Tesla) handleStormMode(ctx context.Context, bat types.BatteryMode, site
 	}
 
 	if err := b.postGridImportExport(ctx, targetAllowGridCharge, siteInfo.Components.CustomerPreferredExportRule); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
+		}
 		return false, err
 	}
 	return true, nil
@@ -1839,7 +1883,9 @@ func (b *Tesla) applyTeslaModeUpdates(
 	if plan.updatedGrid {
 		log.Ctx(ctx).InfoContext(ctx, "updating tesla grid import export", slog.Bool("allowGridCharge", plan.allowGridCharge), slog.String("exportRule", plan.exportRule))
 		if err := b.postGridImportExport(ctx, plan.allowGridCharge, plan.exportRule); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
+			if !errors.Is(err, ErrUnauthorized) {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
+			}
 			return false, err
 		}
 		b.siteInfoCache.Components.CustomerPreferredExportRule = plan.exportRule
@@ -1862,7 +1908,9 @@ func (b *Tesla) applyTeslaModeUpdates(
 			return false, err
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
+			if !errors.Is(err, ErrUnauthorized) {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
+			}
 			return false, err
 		}
 		b.siteInfoCache.DefaultRealMode = plan.targetMode
@@ -1882,7 +1930,9 @@ func (b *Tesla) applyTeslaModeUpdates(
 			return false, err
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
+			if !errors.Is(err, ErrUnauthorized) {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
+			}
 			return false, err
 		}
 		b.siteInfoCache.BackupReservePercent = plan.newReserveSOC

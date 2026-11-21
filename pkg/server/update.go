@@ -53,8 +53,11 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, err.Error(), http.StatusTooManyRequests)
 			return
 		}
-		// Log the error, but check if we returned an error that should be returned to the client
-		log.Ctx(ctx).ErrorContext(ctx, "update failed", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) {
+			log.Ctx(ctx).WarnContext(ctx, "update failed: ESS unauthorized", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "update failed", slog.Any("error", err))
+		}
 		writeJSONError(w, "update failed", http.StatusInternalServerError)
 		return
 	}
@@ -225,6 +228,9 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 				} else if errors.Is(err, ess.ErrCredentialsMissing) {
 					log.Ctx(ctx).DebugContext(ctx, "site update skipped: credentials missing", slog.Any("error", err))
 					resVal = "skipped: credentials missing"
+				} else if errors.Is(err, ess.ErrUnauthorized) {
+					log.Ctx(ctx).WarnContext(ctx, "site update failed: ESS unauthorized", slog.Any("error", err))
+					resVal = fmt.Sprintf("failed: %v", err)
 				} else {
 					log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
 					resVal = fmt.Sprintf("failed: %v", err)
@@ -296,7 +302,11 @@ func (s *Server) performSiteUpdate(
 
 	// sync energy history
 	if err := s.updateEnergyHistory(ctx, siteID, essSystem); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to sync energy history", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history", slog.Any("error", err))
+		}
 		// continue even if history sync fails
 	}
 
@@ -442,7 +452,11 @@ func (s *Server) performSiteUpdate(
 
 		minSOC := int(math.Round(configuredReserveSOC))
 		if _, err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
+			if errors.Is(err, ess.ErrUnauthorized) {
+				log.Ctx(ctx).WarnContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
+			} else {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
+			}
 		}
 
 		action := types.Action{
@@ -626,7 +640,11 @@ func (s *Server) performSiteUpdate(
 		Schedule:    sched,
 	}, settings)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to set mode", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
+		}
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)
 		action.Failed = true
 		action.Error = err.Error()
@@ -1353,7 +1371,7 @@ func (s *Server) setESSModes(
 	changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
-			settings.ESSAuthStatus.ConsecutiveSetFailures++
+			settings.ESSAuthStatus.ConsecutiveSetFailures = nextESSFailureCount(settings.ESSAuthStatus.ConsecutiveSetFailures, err)
 			settings.ESSAuthStatus.LastAttempt = s.now().UTC()
 			if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))

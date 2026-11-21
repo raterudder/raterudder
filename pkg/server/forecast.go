@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
@@ -180,45 +182,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if latestAction != nil && latestAction.Fault {
-		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
-		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
-		}
-		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
-		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
-
-		priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
-		}
-		if latestAction.CurrentPrice != nil && latestAction.CurrentPrice.Contains(now) {
-			var foundCurrentPrice bool
-			for _, p := range priceHistory24 {
-				if p.Contains(now) {
-					foundCurrentPrice = true
-					break
-				}
-			}
-			if !foundCurrentPrice {
-				priceHistory24 = append(priceHistory24, *latestAction.CurrentPrice)
-			}
-		}
-		priceRes := buildPriceHistoryRes(priceHistory24)
-
-		res := ForecastRes{
-			LatestAction:  latestAction,
-			EnergyHistory: energyRes,
-			PriceHistory:  priceRes,
-			Updated:       latestAction.Timestamp,
-		}
-
-		w.Header().Set("Cache-Control", "private, max-age=300")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(res); err != nil {
-			panic(http.ErrAbortHandler)
-		}
+		s.writeFaultedForecast(ctx, w, siteID, settings, now, latestAction, "private, max-age=300")
 		return
 	}
 
@@ -281,9 +245,22 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	essSystem, settings, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
-		if errors.Is(err, errESSRateLimited) {
-			log.Ctx(ctx).DebugContext(ctx, "failed to get ess system: ESS rate limited", slog.Any("error", err))
-			writeJSONError(w, err.Error(), http.StatusTooManyRequests)
+		if errors.Is(err, errESSRateLimited) || errors.Is(err, ess.ErrUnauthorized) {
+			if errors.Is(err, errESSRateLimited) {
+				log.Ctx(ctx).DebugContext(ctx, "forecast using fault fallback: ESS rate limited", slog.Any("error", err))
+			} else {
+				log.Ctx(ctx).WarnContext(ctx, "forecast using fault fallback: ESS unauthorized", slog.Any("error", err))
+			}
+			faultAction := &types.Action{
+				Timestamp:   now,
+				Description: "Battery authentication failed",
+				Fault:       true,
+			}
+			if latestAction != nil {
+				faultAction.SystemStatus = latestAction.SystemStatus
+				faultAction.CurrentPrice = latestAction.CurrentPrice
+			}
+			s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "no-store")
 			return
 		}
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
@@ -312,6 +289,20 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		realtimeStatus, err := essSystem.GetStatus(ctx)
 		if err != nil {
+			if errors.Is(err, ess.ErrUnauthorized) {
+				log.Ctx(ctx).WarnContext(ctx, "forecast using fault fallback: ESS status unauthorized", slog.Any("error", err))
+				faultAction := &types.Action{
+					Timestamp:   now,
+					Description: "Battery permission error",
+					Fault:       true,
+				}
+				if latestAction != nil {
+					faultAction.SystemStatus = latestAction.SystemStatus
+					faultAction.CurrentPrice = latestAction.CurrentPrice
+				}
+				s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "no-store")
+				return
+			}
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get ess status", slog.Any("error", err))
 			writeJSONError(w, "failed to get ess status", http.StatusInternalServerError)
 			return
@@ -338,32 +329,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			SystemStatus: status,
 			Fault:        true,
 		}
-		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
-		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
-		}
-		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
-		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
-
-		priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
-		}
-		priceRes := buildPriceHistoryRes(priceHistory24)
-
-		res := ForecastRes{
-			LatestAction:  faultAction,
-			EnergyHistory: energyRes,
-			PriceHistory:  priceRes,
-			Updated:       updatedTime,
-		}
-		w.Header().Set("Cache-Control", "private, max-age=300")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(res); err != nil {
-			panic(http.ErrAbortHandler)
-		}
+		s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "private, max-age=300")
 		return
 	}
 
@@ -472,6 +438,56 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=300")
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func (s *Server) writeFaultedForecast(
+	ctx context.Context,
+	w http.ResponseWriter,
+	siteID string,
+	settings settingsWithVersion,
+	now time.Time,
+	faultAction *types.Action,
+	cacheControl string,
+) {
+	histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
+	energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
+	}
+	flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
+	energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
+
+	priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
+	}
+	if faultAction.CurrentPrice != nil && faultAction.CurrentPrice.Contains(now) {
+		var foundCurrentPrice bool
+		for _, p := range priceHistory24 {
+			if p.Contains(now) {
+				foundCurrentPrice = true
+				break
+			}
+		}
+		if !foundCurrentPrice {
+			priceHistory24 = append(priceHistory24, *faultAction.CurrentPrice)
+		}
+	}
+	priceRes := buildPriceHistoryRes(priceHistory24)
+
+	res := ForecastRes{
+		LatestAction:  faultAction,
+		EnergyHistory: energyRes,
+		PriceHistory:  priceRes,
+		Updated:       faultAction.Timestamp,
+	}
+
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(res); err != nil {
