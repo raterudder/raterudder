@@ -21,37 +21,48 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// Tariff Audit Metadata
+// - Provider(s): octopus (Octopus Energy (UK))
+// - Official Sources:
+//   - https://api.octopus.energy/v1/products/?brand=OCTOPUS_ENERGY&is_business=false
+//   - https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/ & https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/ (Octopus Flux Import & Export, revised eff. 2026-10-19)
+//   - https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/ & https://api.octopus.energy/v1/graphql/ (Intelligent Octopus Flux Import & INTELLI-FLUX-EXPORT-23-07-14 1:1 parity)
+//   - https://api.octopus.energy/v1/products/GO-VAR-22-10-14/ & https://api.octopus.energy/v1/products/GO-FIX-12M-26-10-30/ (Octopus Go Flexible & 12M Fixed)
+//   - https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-11-04/, https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-10-29/, https://api.octopus.energy/v1/products/IOG-SMB-FIX-12M-26-11-11/, & https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/ (Intelligent Octopus Go Flexible, Max, 12M Fixed, & Legacy Oct 2024)
+//   - https://api.octopus.energy/v1/products/COSY-22-12-08/ & https://api.octopus.energy/v1/products/COSY-FIX-12M-26-10-30/ (Cosy Octopus Flexible & 12M Fixed)
+//   - https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/, https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/, & https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/ (Outgoing Octopus 12p/15p, Prime Outgoing, & live Agile Outgoing)
+// - Effective Window: 2026-10-01 through until superseded (Octopus Flux revised 2026-10-19; Outgoing Octopus 12p effective 2026-03-01; IOG variants effective Oct/Nov 2026)
+// - Revision Cadence: Quarterly (Jan 1, Apr 1, Jul 1, Oct 1 Ofgem Price Cap) & Half-Hourly (Live Agile Outgoing REST API)
+// - Next Audit Due: 2027-01-05 (Check Q1 2027 Ofgem price cap revisions effective Jan 1, 2027 across GSP regions _A through _P)
+// - Last Verified: 2026-11-21
+// - Modeling Notes: Unit rates are stored in GBP/kWh (£/kWh in DollarsPerKWH fields) inclusive of 5% UK domestic VAT; daily standing charges (p/day) are excluded from volumetric periods; pre-2026-10-19 Octopus Flux rates are preserved for historical continuity; Intelligent Octopus Flux models 1:1 import and SeparateGenerationCredit export parity (16:00-19:00 Peak, 00:00-16:00 and 19:00-24:00 Standard); Outgoing export defaults to 12p/kWh (OUTGOING-VAR-24-10-26) while retaining 15p/kWh fixed, Prime Outgoing (16p/9p), live Agile Outgoing, and No Export options.
+//
 // Octopus Energy REST API Reference:
-// Octopus publishes public REST endpoints for product tariffs and unit rates:
 // Base URL: https://api.octopus.energy/v1/products/
-//
-// Public Product Codes:
-//   - Octopus Flux Import: FLUX-IMPORT-23-02-14
-//   - Octopus Flux Export: FLUX-EXPORT-23-02-14
-//   - Octopus Go: GO-VAR-22-10-14
-//   - Intelligent Octopus Go: INTELLI-VAR-22-10-14
-//   - Cosy Octopus (Flexible): COSY-22-12-08
-//   - Cosy Octopus 12M Fixed: COSY-FIX-12M-26-10-30
-//   - Outgoing Octopus Export: OUTGOING-VAR-24-10-26
-//   - Agile Outgoing Octopus: AGILE-OUTGOING-19-05-13
-//
 // Tariff Code Format: E-1R-{PRODUCT_CODE}-{REGION_LETTER} (e.g. E-1R-AGILE-OUTGOING-19-05-13-C for London)
-// Example Tariff Unit Rates URL:
-//   https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-C/standard-unit-rates/
-//   https://api.octopus.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-C/standard-unit-rates/
-//   https://api.octopus.energy/v1/products/INTELLI-VAR-22-10-14/electricity-tariffs/E-1R-INTELLI-VAR-22-10-14-C/standard-unit-rates/
-//   https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-C/standard-unit-rates/
-//   https://api.octopus.energy/v1/products/COSY-FIX-12M-26-10-30/electricity-tariffs/E-1R-COSY-FIX-12M-26-10-30-C/standard-unit-rates/
-//   https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-C/standard-unit-rates/
 
 const (
 	defaultOctopusAPIURL        = "https://api.octopus.energy/v1"
 	octopusAgileOutgoingProduct = "AGILE-OUTGOING-19-05-13"
+
+	// National Outgoing Octopus export credit rates (£/kWh).
+	octopusOutgoing12pDollarsPerKWH        = 0.1200 // OUTGOING-VAR-24-10-26 (effective 2026-03-01)
+	octopusOutgoing15pDollarsPerKWH        = 0.1500 // Legacy / fixed 15p Outgoing Octopus
+	octopusPrimeExportPeakDollarsPerKWH    = 0.1600 // OUTGOING-PRIME-FIX-12M-26-06-23 Peak (16:00-19:00)
+	octopusPrimeExportOffPeakDollarsPerKWH = 0.0900 // OUTGOING-PRIME-FIX-12M-26-06-23 Off-Peak
+
+	// National overnight off-peak import unit rates (£/kWh inc. 5% VAT).
+	octopusGoFixedOffPeakDollarsPerKWH     = 0.0940 // GO-FIX-12M-26-10-30 (00:30-05:30)
+	octopusIOGFlexibleOffPeakDollarsPerKWH = 0.0990 // IOG-SMB-VAR-26-11-04 (23:30-05:30)
+	octopusIOGMaxOffPeakDollarsPerKWH      = 0.0650 // IOG-SMB-VAR-26-10-29 (23:30-05:30)
+	octopusIOGFixedOffPeakDollarsPerKWH    = 0.0790 // IOG-SMB-FIX-12M-26-11-11 (23:30-05:30)
+	octopusIOGLegacyOffPeakDollarsPerKWH   = 0.0660 // INTELLI-VAR-24-10-29 (23:30-05:30)
 )
 
 type octopusRateConfig struct {
 	RegionCode string
 
+	// Pre-2026-10-19 Octopus Flux rates preserved for historical continuity.
 	ImportPeakRate     float64
 	ImportOffPeakRate  float64
 	ImportStandardRate float64
@@ -60,12 +71,32 @@ type octopusRateConfig struct {
 	ExportOffPeakRate  float64
 	ExportStandardRate float64
 
-	GoPeakRate    float64
-	GoOffPeakRate float64
+	// Q4 2026 Octopus Flux rates (FLUX-IMPORT-23-02-14 & FLUX-EXPORT-23-02-14, eff. 2026-10-19).
+	FluxImportStandardDollarsPerKWH float64
+	FluxImportPeakDollarsPerKWH     float64
+	FluxImportOffPeakDollarsPerKWH  float64
 
-	IOGPeakRate    float64
-	IOGOffPeakRate float64
+	FluxExportStandardDollarsPerKWH float64
+	FluxExportPeakDollarsPerKWH     float64
+	FluxExportOffPeakDollarsPerKWH  float64
 
+	// Q4 2026 Intelligent Octopus Flux 1:1 import/export parity rates
+	// (INTELLI-FLUX-IMPORT-23-07-14 & INTELLI-FLUX-EXPORT-23-07-14).
+	IntelliFluxStandardDollarsPerKWH float64
+	IntelliFluxPeakDollarsPerKWH     float64
+
+	// Octopus Go Flexible (GO-VAR-22-10-14) & 12M Fixed (GO-FIX-12M-26-10-30).
+	GoPeakRate               float64
+	GoOffPeakRate            float64
+	GoFixedPeakDollarsPerKWH float64
+
+	// Intelligent Octopus Go Q4 2026 regional day/peak rates (£/kWh inc. 5% VAT).
+	IOGFlexiblePeakDollarsPerKWH float64 // IOG-SMB-VAR-26-11-04
+	IOGMaxPeakDollarsPerKWH      float64 // IOG-SMB-VAR-26-10-29
+	IOGFixedPeakDollarsPerKWH    float64 // IOG-SMB-FIX-12M-26-11-11
+	IOGLegacyPeakDollarsPerKWH   float64 // INTELLI-VAR-24-10-29
+
+	// Cosy Octopus Flexible (COSY-22-12-08) & 12M Fixed (COSY-FIX-12M-26-10-30).
 	CosyPeakRate     float64
 	CosyOffPeakRate  float64
 	CosyStandardRate float64
@@ -75,274 +106,428 @@ type octopusRateConfig struct {
 	CosyFixedStandardRate float64
 }
 
-// octopusRates stores current unit rates in base currency (£/kWh, e.g. 0.2450 = 24.5p/kWh)
-// indexed by the 14 UK distribution network (DNO / PES) regions A through P.
+// octopusRates stores unit rates in base currency (£/kWh inc. 5% VAT, e.g. 0.2450 = 24.5p/kWh)
+// indexed by the 14 UK distribution network (DNO / PES / GSP) regions A through P.
 var octopusRates = map[string]octopusRateConfig{
 	"eastern": { // PES A / DNO 10
-		RegionCode:            "A",
-		ImportStandardRate:    0.2429,
-		ImportPeakRate:        0.3401,
-		ImportOffPeakRate:     0.1458,
-		ExportStandardRate:    0.1011,
-		ExportPeakRate:        0.2932,
-		ExportOffPeakRate:     0.0499,
-		GoPeakRate:            0.3471,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2896,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2882,
-		CosyPeakRate:          0.4322,
-		CosyOffPeakRate:       0.1413,
-		CosyFixedStandardRate: 0.3276,
-		CosyFixedPeakRate:     0.4913,
-		CosyFixedOffPeakRate:  0.1607,
+		RegionCode:                       "A",
+		ImportStandardRate:               0.2429,
+		ImportPeakRate:                   0.3401,
+		ImportOffPeakRate:                0.1458,
+		ExportStandardRate:               0.1011,
+		ExportPeakRate:                   0.2932,
+		ExportOffPeakRate:                0.0499,
+		FluxImportStandardDollarsPerKWH:  0.267930,
+		FluxImportPeakDollarsPerKWH:      0.374090,
+		FluxImportOffPeakDollarsPerKWH:   0.161769,
+		FluxExportStandardDollarsPerKWH:  0.111216,
+		FluxExportPeakDollarsPerKWH:      0.303317,
+		FluxExportOffPeakDollarsPerKWH:   0.047216,
+		IntelliFluxStandardDollarsPerKWH: 0.242653,
+		IntelliFluxPeakDollarsPerKWH:     0.303317,
+		GoPeakRate:                       0.3471,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.383917,
+		IOGFlexiblePeakDollarsPerKWH:     0.344638,
+		IOGMaxPeakDollarsPerKWH:          0.386245,
+		IOGFixedPeakDollarsPerKWH:        0.405800,
+		IOGLegacyPeakDollarsPerKWH:       0.362940,
+		CosyStandardRate:                 0.2882,
+		CosyPeakRate:                     0.4322,
+		CosyOffPeakRate:                  0.1413,
+		CosyFixedStandardRate:            0.3276,
+		CosyFixedPeakRate:                0.4913,
+		CosyFixedOffPeakRate:             0.1607,
 	},
 	"east_midlands": { // PES B / DNO 11
-		RegionCode:            "B",
-		ImportStandardRate:    0.2306,
-		ImportPeakRate:        0.3229,
-		ImportOffPeakRate:     0.1384,
-		ExportStandardRate:    0.0976,
-		ExportPeakRate:        0.2770,
-		ExportOffPeakRate:     0.0434,
-		GoPeakRate:            0.3303,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2777,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2745,
-		CosyPeakRate:          0.4118,
-		CosyOffPeakRate:       0.1346,
-		CosyFixedStandardRate: 0.3130,
-		CosyFixedPeakRate:     0.4694,
-		CosyFixedOffPeakRate:  0.1536,
+		RegionCode:                       "B",
+		ImportStandardRate:               0.2306,
+		ImportPeakRate:                   0.3229,
+		ImportOffPeakRate:                0.1384,
+		ExportStandardRate:               0.0976,
+		ExportPeakRate:                   0.2770,
+		ExportOffPeakRate:                0.0434,
+		FluxImportStandardDollarsPerKWH:  0.255265,
+		FluxImportPeakDollarsPerKWH:      0.356407,
+		FluxImportOffPeakDollarsPerKWH:   0.154122,
+		FluxExportStandardDollarsPerKWH:  0.105959,
+		FluxExportPeakDollarsPerKWH:      0.288979,
+		FluxExportOffPeakDollarsPerKWH:   0.044984,
+		IntelliFluxStandardDollarsPerKWH: 0.231183,
+		IntelliFluxPeakDollarsPerKWH:     0.288979,
+		GoPeakRate:                       0.3303,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.362868,
+		IOGFlexiblePeakDollarsPerKWH:     0.325278,
+		IOGMaxPeakDollarsPerKWH:          0.364417,
+		IOGFixedPeakDollarsPerKWH:        0.381785,
+		IOGLegacyPeakDollarsPerKWH:       0.346640,
+		CosyStandardRate:                 0.2745,
+		CosyPeakRate:                     0.4118,
+		CosyOffPeakRate:                  0.1346,
+		CosyFixedStandardRate:            0.3130,
+		CosyFixedPeakRate:                0.4694,
+		CosyFixedOffPeakRate:             0.1536,
 	},
 	"london": { // PES C / DNO 12
-		RegionCode:            "C",
-		ImportStandardRate:    0.2425,
-		ImportPeakRate:        0.3396,
-		ImportOffPeakRate:     0.1456,
-		ExportStandardRate:    0.0980,
-		ExportPeakRate:        0.2860,
-		ExportOffPeakRate:     0.0524,
-		GoPeakRate:            0.3453,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2802,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2880,
-		CosyPeakRate:          0.4319,
-		CosyOffPeakRate:       0.1412,
-		CosyFixedStandardRate: 0.3495,
-		CosyFixedPeakRate:     0.5242,
-		CosyFixedOffPeakRate:  0.1715,
+		RegionCode:                       "C",
+		ImportStandardRate:               0.2425,
+		ImportPeakRate:                   0.3396,
+		ImportOffPeakRate:                0.1456,
+		ExportStandardRate:               0.0980,
+		ExportPeakRate:                   0.2860,
+		ExportOffPeakRate:                0.0524,
+		FluxImportStandardDollarsPerKWH:  0.267752,
+		FluxImportPeakDollarsPerKWH:      0.373843,
+		FluxImportOffPeakDollarsPerKWH:   0.161662,
+		FluxExportStandardDollarsPerKWH:  0.111143,
+		FluxExportPeakDollarsPerKWH:      0.303116,
+		FluxExportOffPeakDollarsPerKWH:   0.047185,
+		IntelliFluxStandardDollarsPerKWH: 0.242493,
+		IntelliFluxPeakDollarsPerKWH:     0.303116,
+		GoPeakRate:                       0.3453,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.383123,
+		IOGFlexiblePeakDollarsPerKWH:     0.341553,
+		IOGMaxPeakDollarsPerKWH:          0.382729,
+		IOGFixedPeakDollarsPerKWH:        0.404354,
+		IOGLegacyPeakDollarsPerKWH:       0.361200,
+		CosyStandardRate:                 0.2880,
+		CosyPeakRate:                     0.4319,
+		CosyOffPeakRate:                  0.1412,
+		CosyFixedStandardRate:            0.3495,
+		CosyFixedPeakRate:                0.5242,
+		CosyFixedOffPeakRate:             0.1715,
 	},
 	"merseyside_wales": { // PES D / DNO 13
-		RegionCode:            "D",
-		ImportStandardRate:    0.2552,
-		ImportPeakRate:        0.3573,
-		ImportOffPeakRate:     0.1532,
-		ExportStandardRate:    0.1054,
-		ExportPeakRate:        0.3068,
-		ExportOffPeakRate:     0.0512,
-		GoPeakRate:            0.3575,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.3017,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.3017,
-		CosyPeakRate:          0.4525,
-		CosyOffPeakRate:       0.1479,
-		CosyFixedStandardRate: 0.3432,
-		CosyFixedPeakRate:     0.5149,
-		CosyFixedOffPeakRate:  0.1684,
+		RegionCode:                       "D",
+		ImportStandardRate:               0.2552,
+		ImportPeakRate:                   0.3573,
+		ImportOffPeakRate:                0.1532,
+		ExportStandardRate:               0.1054,
+		ExportPeakRate:                   0.3068,
+		ExportOffPeakRate:                0.0512,
+		FluxImportStandardDollarsPerKWH:  0.280502,
+		FluxImportPeakDollarsPerKWH:      0.391644,
+		FluxImportOffPeakDollarsPerKWH:   0.169360,
+		FluxExportStandardDollarsPerKWH:  0.116435,
+		FluxExportPeakDollarsPerKWH:      0.317549,
+		FluxExportOffPeakDollarsPerKWH:   0.049432,
+		IntelliFluxStandardDollarsPerKWH: 0.254040,
+		IntelliFluxPeakDollarsPerKWH:     0.317549,
+		GoPeakRate:                       0.3575,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.403378,
+		IOGFlexiblePeakDollarsPerKWH:     0.363146,
+		IOGMaxPeakDollarsPerKWH:          0.407225,
+		IOGFixedPeakDollarsPerKWH:        0.427067,
+		IOGLegacyPeakDollarsPerKWH:       0.373086,
+		CosyStandardRate:                 0.3017,
+		CosyPeakRate:                     0.4525,
+		CosyOffPeakRate:                  0.1479,
+		CosyFixedStandardRate:            0.3432,
+		CosyFixedPeakRate:                0.5149,
+		CosyFixedOffPeakRate:             0.1684,
 	},
 	"west_midlands": { // PES E / DNO 14
-		RegionCode:            "E",
-		ImportStandardRate:    0.2328,
-		ImportPeakRate:        0.3259,
-		ImportOffPeakRate:     0.1397,
-		ExportStandardRate:    0.0979,
-		ExportPeakRate:        0.2781,
-		ExportOffPeakRate:     0.0439,
-		GoPeakRate:            0.3333,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2785,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2772,
-		CosyPeakRate:          0.4158,
-		CosyOffPeakRate:       0.1359,
-		CosyFixedStandardRate: 0.3167,
-		CosyFixedPeakRate:     0.4751,
-		CosyFixedOffPeakRate:  0.1554,
+		RegionCode:                       "E",
+		ImportStandardRate:               0.2328,
+		ImportPeakRate:                   0.3259,
+		ImportOffPeakRate:                0.1397,
+		ExportStandardRate:               0.0979,
+		ExportPeakRate:                   0.2781,
+		ExportOffPeakRate:                0.0439,
+		FluxImportStandardDollarsPerKWH:  0.257761,
+		FluxImportPeakDollarsPerKWH:      0.359893,
+		FluxImportOffPeakDollarsPerKWH:   0.155630,
+		FluxExportStandardDollarsPerKWH:  0.106995,
+		FluxExportPeakDollarsPerKWH:      0.291805,
+		FluxExportOffPeakDollarsPerKWH:   0.045424,
+		IntelliFluxStandardDollarsPerKWH: 0.233444,
+		IntelliFluxPeakDollarsPerKWH:     0.291805,
+		GoPeakRate:                       0.3333,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.367501,
+		IOGFlexiblePeakDollarsPerKWH:     0.330171,
+		IOGMaxPeakDollarsPerKWH:          0.369753,
+		IOGFixedPeakDollarsPerKWH:        0.386704,
+		IOGLegacyPeakDollarsPerKWH:       0.349561,
+		CosyStandardRate:                 0.2772,
+		CosyPeakRate:                     0.4158,
+		CosyOffPeakRate:                  0.1359,
+		CosyFixedStandardRate:            0.3167,
+		CosyFixedPeakRate:                0.4751,
+		CosyFixedOffPeakRate:             0.1554,
 	},
 	"north_east": { // PES F / DNO 15
-		RegionCode:            "F",
-		ImportStandardRate:    0.2319,
-		ImportPeakRate:        0.3248,
-		ImportOffPeakRate:     0.1392,
-		ExportStandardRate:    0.0971,
-		ExportPeakRate:        0.2769,
-		ExportOffPeakRate:     0.0421,
-		GoPeakRate:            0.3332,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2769,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2756,
-		CosyPeakRate:          0.4134,
-		CosyOffPeakRate:       0.1352,
-		CosyFixedStandardRate: 0.3128,
-		CosyFixedPeakRate:     0.4692,
-		CosyFixedOffPeakRate:  0.1535,
+		RegionCode:                       "F",
+		ImportStandardRate:               0.2319,
+		ImportPeakRate:                   0.3248,
+		ImportOffPeakRate:                0.1392,
+		ExportStandardRate:               0.0971,
+		ExportPeakRate:                   0.2769,
+		ExportOffPeakRate:                0.0421,
+		FluxImportStandardDollarsPerKWH:  0.256271,
+		FluxImportPeakDollarsPerKWH:      0.357813,
+		FluxImportOffPeakDollarsPerKWH:   0.154730,
+		FluxExportStandardDollarsPerKWH:  0.106377,
+		FluxExportPeakDollarsPerKWH:      0.290119,
+		FluxExportOffPeakDollarsPerKWH:   0.045162,
+		IntelliFluxStandardDollarsPerKWH: 0.232095,
+		IntelliFluxPeakDollarsPerKWH:     0.290119,
+		GoPeakRate:                       0.3332,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.366442,
+		IOGFlexiblePeakDollarsPerKWH:     0.328789,
+		IOGMaxPeakDollarsPerKWH:          0.368540,
+		IOGFixedPeakDollarsPerKWH:        0.386270,
+		IOGLegacyPeakDollarsPerKWH:       0.349472,
+		CosyStandardRate:                 0.2756,
+		CosyPeakRate:                     0.4134,
+		CosyOffPeakRate:                  0.1352,
+		CosyFixedStandardRate:            0.3128,
+		CosyFixedPeakRate:                0.4692,
+		CosyFixedOffPeakRate:             0.1535,
 	},
 	"north_west": { // PES G / DNO 16
-		RegionCode:            "G",
-		ImportStandardRate:    0.2407,
-		ImportPeakRate:        0.3370,
-		ImportOffPeakRate:     0.1445,
-		ExportStandardRate:    0.1033,
-		ExportPeakRate:        0.2925,
-		ExportOffPeakRate:     0.0466,
-		GoPeakRate:            0.3425,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2957,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2868,
-		CosyPeakRate:          0.4302,
-		CosyOffPeakRate:       0.1407,
-		CosyFixedStandardRate: 0.3208,
-		CosyFixedPeakRate:     0.4812,
-		CosyFixedOffPeakRate:  0.1574,
+		RegionCode:                       "G",
+		ImportStandardRate:               0.2407,
+		ImportPeakRate:                   0.3370,
+		ImportOffPeakRate:                0.1445,
+		ExportStandardRate:               0.1033,
+		ExportPeakRate:                   0.2925,
+		ExportOffPeakRate:                0.0466,
+		FluxImportStandardDollarsPerKWH:  0.266681,
+		FluxImportPeakDollarsPerKWH:      0.372347,
+		FluxImportOffPeakDollarsPerKWH:   0.161015,
+		FluxExportStandardDollarsPerKWH:  0.110698,
+		FluxExportPeakDollarsPerKWH:      0.301903,
+		FluxExportOffPeakDollarsPerKWH:   0.046996,
+		IntelliFluxStandardDollarsPerKWH: 0.241523,
+		IntelliFluxPeakDollarsPerKWH:     0.301903,
+		GoPeakRate:                       0.3425,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.384711,
+		IOGFlexiblePeakDollarsPerKWH:     0.341340,
+		IOGMaxPeakDollarsPerKWH:          0.382607,
+		IOGFixedPeakDollarsPerKWH:        0.406090,
+		IOGLegacyPeakDollarsPerKWH:       0.358518,
+		CosyStandardRate:                 0.2868,
+		CosyPeakRate:                     0.4302,
+		CosyOffPeakRate:                  0.1407,
+		CosyFixedStandardRate:            0.3208,
+		CosyFixedPeakRate:                0.4812,
+		CosyFixedOffPeakRate:             0.1574,
 	},
 	"southern": { // PES H / DNO 20
-		RegionCode:            "H",
-		ImportStandardRate:    0.2434,
-		ImportPeakRate:        0.3408,
-		ImportOffPeakRate:     0.1461,
-		ExportStandardRate:    0.1008,
-		ExportPeakRate:        0.2900,
-		ExportOffPeakRate:     0.0474,
-		GoPeakRate:            0.3481,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2879,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2866,
-		CosyPeakRate:          0.4298,
-		CosyOffPeakRate:       0.1405,
-		CosyFixedStandardRate: 0.3208,
-		CosyFixedPeakRate:     0.4812,
-		CosyFixedOffPeakRate:  0.1574,
+		RegionCode:                       "H",
+		ImportStandardRate:               0.2434,
+		ImportPeakRate:                   0.3408,
+		ImportOffPeakRate:                0.1461,
+		ExportStandardRate:               0.1008,
+		ExportPeakRate:                   0.2900,
+		ExportOffPeakRate:                0.0474,
+		FluxImportStandardDollarsPerKWH:  0.266452,
+		FluxImportPeakDollarsPerKWH:      0.372027,
+		FluxImportOffPeakDollarsPerKWH:   0.160877,
+		FluxExportStandardDollarsPerKWH:  0.110603,
+		FluxExportPeakDollarsPerKWH:      0.301643,
+		FluxExportOffPeakDollarsPerKWH:   0.046956,
+		IntelliFluxStandardDollarsPerKWH: 0.241315,
+		IntelliFluxPeakDollarsPerKWH:     0.301643,
+		GoPeakRate:                       0.3481,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.375445,
+		IOGFlexiblePeakDollarsPerKWH:     0.336022,
+		IOGMaxPeakDollarsPerKWH:          0.376786,
+		IOGFixedPeakDollarsPerKWH:        0.396252,
+		IOGLegacyPeakDollarsPerKWH:       0.363918,
+		CosyStandardRate:                 0.2866,
+		CosyPeakRate:                     0.4298,
+		CosyOffPeakRate:                  0.1405,
+		CosyFixedStandardRate:            0.3208,
+		CosyFixedPeakRate:                0.4812,
+		CosyFixedOffPeakRate:             0.1574,
 	},
 	"south_east": { // PES J / DNO 19
-		RegionCode:            "J",
-		ImportStandardRate:    0.2458,
-		ImportPeakRate:        0.3441,
-		ImportOffPeakRate:     0.1475,
-		ExportStandardRate:    0.1024,
-		ExportPeakRate:        0.2979,
-		ExportOffPeakRate:     0.0505,
-		GoPeakRate:            0.3490,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2937,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2910,
-		CosyPeakRate:          0.4366,
-		CosyOffPeakRate:       0.1427,
-		CosyFixedStandardRate: 0.3111,
-		CosyFixedPeakRate:     0.4666,
-		CosyFixedOffPeakRate:  0.1527,
+		RegionCode:                       "J",
+		ImportStandardRate:               0.2458,
+		ImportPeakRate:                   0.3441,
+		ImportOffPeakRate:                0.1475,
+		ExportStandardRate:               0.1024,
+		ExportPeakRate:                   0.2979,
+		ExportOffPeakRate:                0.0505,
+		FluxImportStandardDollarsPerKWH:  0.270612,
+		FluxImportPeakDollarsPerKWH:      0.377835,
+		FluxImportOffPeakDollarsPerKWH:   0.163388,
+		FluxExportStandardDollarsPerKWH:  0.112329,
+		FluxExportPeakDollarsPerKWH:      0.306353,
+		FluxExportOffPeakDollarsPerKWH:   0.047689,
+		IntelliFluxStandardDollarsPerKWH: 0.245082,
+		IntelliFluxPeakDollarsPerKWH:     0.306353,
+		GoPeakRate:                       0.3490,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.386300,
+		IOGFlexiblePeakDollarsPerKWH:     0.347403,
+		IOGMaxPeakDollarsPerKWH:          0.389520,
+		IOGFixedPeakDollarsPerKWH:        0.407537,
+		IOGLegacyPeakDollarsPerKWH:       0.364808,
+		CosyStandardRate:                 0.2910,
+		CosyPeakRate:                     0.4366,
+		CosyOffPeakRate:                  0.1427,
+		CosyFixedStandardRate:            0.3111,
+		CosyFixedPeakRate:                0.4666,
+		CosyFixedOffPeakRate:             0.1527,
 	},
 	"south_wales": { // PES K / DNO 21
-		RegionCode:            "K",
-		ImportStandardRate:    0.2426,
-		ImportPeakRate:        0.3397,
-		ImportOffPeakRate:     0.1456,
-		ExportStandardRate:    0.1021,
-		ExportPeakRate:        0.2935,
-		ExportOffPeakRate:     0.0469,
-		GoPeakRate:            0.3451,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2919,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2875,
-		CosyPeakRate:          0.4313,
-		CosyOffPeakRate:       0.1410,
-		CosyFixedStandardRate: 0.3178,
-		CosyFixedPeakRate:     0.4767,
-		CosyFixedOffPeakRate:  0.1560,
+		RegionCode:                       "K",
+		ImportStandardRate:               0.2426,
+		ImportPeakRate:                   0.3397,
+		ImportOffPeakRate:                0.1456,
+		ExportStandardRate:               0.1021,
+		ExportPeakRate:                   0.2935,
+		ExportOffPeakRate:                0.0469,
+		FluxImportStandardDollarsPerKWH:  0.267334,
+		FluxImportPeakDollarsPerKWH:      0.373258,
+		FluxImportOffPeakDollarsPerKWH:   0.161409,
+		FluxExportStandardDollarsPerKWH:  0.110969,
+		FluxExportPeakDollarsPerKWH:      0.302642,
+		FluxExportOffPeakDollarsPerKWH:   0.047111,
+		IntelliFluxStandardDollarsPerKWH: 0.242114,
+		IntelliFluxPeakDollarsPerKWH:     0.302642,
+		GoPeakRate:                       0.3451,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.382726,
+		IOGFlexiblePeakDollarsPerKWH:     0.341234,
+		IOGMaxPeakDollarsPerKWH:          0.382729,
+		IOGFixedPeakDollarsPerKWH:        0.403920,
+		IOGLegacyPeakDollarsPerKWH:       0.360965,
+		CosyStandardRate:                 0.2875,
+		CosyPeakRate:                     0.4313,
+		CosyOffPeakRate:                  0.1410,
+		CosyFixedStandardRate:            0.3178,
+		CosyFixedPeakRate:                0.4767,
+		CosyFixedOffPeakRate:             0.1560,
 	},
 	"south_west": { // PES L / DNO 22
-		RegionCode:            "L",
-		ImportStandardRate:    0.2432,
-		ImportPeakRate:        0.3405,
-		ImportOffPeakRate:     0.1460,
-		ExportStandardRate:    0.1020,
-		ExportPeakRate:        0.2922,
-		ExportOffPeakRate:     0.0455,
-		GoPeakRate:            0.3470,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2917,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2878,
-		CosyPeakRate:          0.4317,
-		CosyOffPeakRate:       0.1411,
-		CosyFixedStandardRate: 0.3155,
-		CosyFixedPeakRate:     0.4733,
-		CosyFixedOffPeakRate:  0.1548,
+		RegionCode:                       "L",
+		ImportStandardRate:               0.2432,
+		ImportPeakRate:                   0.3405,
+		ImportOffPeakRate:                0.1460,
+		ExportStandardRate:               0.1020,
+		ExportPeakRate:                   0.2922,
+		ExportOffPeakRate:                0.0455,
+		FluxImportStandardDollarsPerKWH:  0.267616,
+		FluxImportPeakDollarsPerKWH:      0.373652,
+		FluxImportOffPeakDollarsPerKWH:   0.161579,
+		FluxExportStandardDollarsPerKWH:  0.111086,
+		FluxExportPeakDollarsPerKWH:      0.302961,
+		FluxExportOffPeakDollarsPerKWH:   0.047161,
+		IntelliFluxStandardDollarsPerKWH: 0.242369,
+		IntelliFluxPeakDollarsPerKWH:     0.302961,
+		GoPeakRate:                       0.3470,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.382858,
+		IOGFlexiblePeakDollarsPerKWH:     0.339957,
+		IOGMaxPeakDollarsPerKWH:          0.381273,
+		IOGFixedPeakDollarsPerKWH:        0.404064,
+		IOGLegacyPeakDollarsPerKWH:       0.362828,
+		CosyStandardRate:                 0.2878,
+		CosyPeakRate:                     0.4317,
+		CosyOffPeakRate:                  0.1411,
+		CosyFixedStandardRate:            0.3155,
+		CosyFixedPeakRate:                0.4733,
+		CosyFixedOffPeakRate:             0.1548,
 	},
 	"yorkshire": { // PES M / DNO 23
-		RegionCode:            "M",
-		ImportStandardRate:    0.2323,
-		ImportPeakRate:        0.3253,
-		ImportOffPeakRate:     0.1395,
-		ExportStandardRate:    0.0969,
-		ExportPeakRate:        0.2717,
-		ExportOffPeakRate:     0.0419,
-		GoPeakRate:            0.3306,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2748,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2772,
-		CosyPeakRate:          0.4158,
-		CosyOffPeakRate:       0.1359,
-		CosyFixedStandardRate: 0.3257,
-		CosyFixedPeakRate:     0.4885,
-		CosyFixedOffPeakRate:  0.1598,
+		RegionCode:                       "M",
+		ImportStandardRate:               0.2323,
+		ImportPeakRate:                   0.3253,
+		ImportOffPeakRate:                0.1395,
+		ExportStandardRate:               0.0969,
+		ExportPeakRate:                   0.2717,
+		ExportOffPeakRate:                0.0419,
+		FluxImportStandardDollarsPerKWH:  0.257757,
+		FluxImportPeakDollarsPerKWH:      0.359888,
+		FluxImportOffPeakDollarsPerKWH:   0.155627,
+		FluxExportStandardDollarsPerKWH:  0.106994,
+		FluxExportPeakDollarsPerKWH:      0.291801,
+		FluxExportOffPeakDollarsPerKWH:   0.045424,
+		IntelliFluxStandardDollarsPerKWH: 0.233441,
+		IntelliFluxPeakDollarsPerKWH:     0.291801,
+		GoPeakRate:                       0.3306,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.369355,
+		IOGFlexiblePeakDollarsPerKWH:     0.333362,
+		IOGMaxPeakDollarsPerKWH:          0.373270,
+		IOGFixedPeakDollarsPerKWH:        0.389163,
+		IOGLegacyPeakDollarsPerKWH:       0.346899,
+		CosyStandardRate:                 0.2772,
+		CosyPeakRate:                     0.4158,
+		CosyOffPeakRate:                  0.1359,
+		CosyFixedStandardRate:            0.3257,
+		CosyFixedPeakRate:                0.4885,
+		CosyFixedOffPeakRate:             0.1598,
 	},
 	"southern_scotland": { // PES N / DNO 18
-		RegionCode:            "N",
-		ImportStandardRate:    0.2377,
-		ImportPeakRate:        0.3328,
-		ImportOffPeakRate:     0.1427,
-		ExportStandardRate:    0.0955,
-		ExportPeakRate:        0.2719,
-		ExportOffPeakRate:     0.0442,
-		GoPeakRate:            0.3345,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2722,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2827,
-		CosyPeakRate:          0.4240,
-		CosyOffPeakRate:       0.1386,
-		CosyFixedStandardRate: 0.3201,
-		CosyFixedPeakRate:     0.4802,
-		CosyFixedOffPeakRate:  0.1571,
+		RegionCode:                       "N",
+		ImportStandardRate:               0.2377,
+		ImportPeakRate:                   0.3328,
+		ImportOffPeakRate:                0.1427,
+		ExportStandardRate:               0.0955,
+		ExportPeakRate:                   0.2719,
+		ExportOffPeakRate:                0.0442,
+		FluxImportStandardDollarsPerKWH:  0.262823,
+		FluxImportPeakDollarsPerKWH:      0.366961,
+		FluxImportOffPeakDollarsPerKWH:   0.158686,
+		FluxExportStandardDollarsPerKWH:  0.109097,
+		FluxExportPeakDollarsPerKWH:      0.297536,
+		FluxExportOffPeakDollarsPerKWH:   0.046316,
+		IntelliFluxStandardDollarsPerKWH: 0.238029,
+		IntelliFluxPeakDollarsPerKWH:     0.297536,
+		GoPeakRate:                       0.3345,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.378092,
+		IOGFlexiblePeakDollarsPerKWH:     0.342829,
+		IOGMaxPeakDollarsPerKWH:          0.384184,
+		IOGFixedPeakDollarsPerKWH:        0.398567,
+		IOGLegacyPeakDollarsPerKWH:       0.350731,
+		CosyStandardRate:                 0.2827,
+		CosyPeakRate:                     0.4240,
+		CosyOffPeakRate:                  0.1386,
+		CosyFixedStandardRate:            0.3201,
+		CosyFixedPeakRate:                0.4802,
+		CosyFixedOffPeakRate:             0.1571,
 	},
 	"northern_scotland": { // PES P / DNO 17
-		RegionCode:            "P",
-		ImportStandardRate:    0.2437,
-		ImportPeakRate:        0.3412,
-		ImportOffPeakRate:     0.1463,
-		ExportStandardRate:    0.0998,
-		ExportPeakRate:        0.2873,
-		ExportOffPeakRate:     0.0473,
-		GoPeakRate:            0.3445,
-		GoOffPeakRate:         0.0940,
-		IOGPeakRate:           0.2868,
-		IOGOffPeakRate:        0.0700,
-		CosyStandardRate:      0.2853,
-		CosyPeakRate:          0.4279,
-		CosyOffPeakRate:       0.1399,
-		CosyFixedStandardRate: 0.3414,
-		CosyFixedPeakRate:     0.5120,
-		CosyFixedOffPeakRate:  0.1675,
+		RegionCode:                       "P",
+		ImportStandardRate:               0.2437,
+		ImportPeakRate:                   0.3412,
+		ImportOffPeakRate:                0.1463,
+		ExportStandardRate:               0.0998,
+		ExportPeakRate:                   0.2873,
+		ExportOffPeakRate:                0.0473,
+		FluxImportStandardDollarsPerKWH:  0.265244,
+		FluxImportPeakDollarsPerKWH:      0.370340,
+		FluxImportOffPeakDollarsPerKWH:   0.160147,
+		FluxExportStandardDollarsPerKWH:  0.110101,
+		FluxExportPeakDollarsPerKWH:      0.300276,
+		FluxExportOffPeakDollarsPerKWH:   0.046743,
+		IntelliFluxStandardDollarsPerKWH: 0.240221,
+		IntelliFluxPeakDollarsPerKWH:     0.300276,
+		GoPeakRate:                       0.3445,
+		GoOffPeakRate:                    0.0940,
+		GoFixedPeakDollarsPerKWH:         0.379284,
+		IOGFlexiblePeakDollarsPerKWH:     0.330278,
+		IOGMaxPeakDollarsPerKWH:          0.370723,
+		IOGFixedPeakDollarsPerKWH:        0.401026,
+		IOGLegacyPeakDollarsPerKWH:       0.360434,
+		CosyStandardRate:                 0.2853,
+		CosyPeakRate:                     0.4279,
+		CosyOffPeakRate:                  0.1399,
+		CosyFixedStandardRate:            0.3414,
+		CosyFixedPeakRate:                0.5120,
+		CosyFixedOffPeakRate:             0.1675,
 	},
 }
 
@@ -375,95 +560,211 @@ func normalizeOctopusLocation(location string) (string, octopusRateConfig, error
 	return loc, cfg, nil
 }
 
+func appendOctopusFluxWindow(
+	periods []types.UtilityFeesPeriod,
+	start, end time.Time,
+	importOffPeakDollarsPerKWH, exportOffPeakDollarsPerKWH float64,
+	importPeakDollarsPerKWH, exportPeakDollarsPerKWH float64,
+	importStandardDollarsPerKWH, exportStandardDollarsPerKWH float64,
+) []types.UtilityFeesPeriod {
+	standardHours := []types.UtilityHourPeriod{
+		{HourStart: 5, HourEnd: 16},
+		{HourStart: 19, HourEnd: 24},
+		{HourStart: 0, HourEnd: 2},
+	}
+
+	// 1. Off-Peak: 02:00 – 05:00
+	periods = append(periods,
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Off-Peak",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       []types.UtilityHourPeriod{{HourStart: 2, HourEnd: 5}},
+			},
+			DollarsPerKWH: importOffPeakDollarsPerKWH,
+			Description:   "Octopus Flux Off-Peak Rate",
+		},
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Off-Peak Export",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       []types.UtilityHourPeriod{{HourStart: 2, HourEnd: 5}},
+			},
+			DollarsPerKWH:            exportOffPeakDollarsPerKWH,
+			SeparateGenerationCredit: true,
+			Description:              "Octopus Flux Off-Peak Export Tariff",
+		},
+	)
+
+	// 2. Peak: 16:00 – 19:00
+	periods = append(periods,
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Peak",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 19}},
+			},
+			DollarsPerKWH: importPeakDollarsPerKWH,
+			Description:   "Octopus Flux Peak Rate",
+		},
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Peak Export",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 19}},
+			},
+			DollarsPerKWH:            exportPeakDollarsPerKWH,
+			SeparateGenerationCredit: true,
+			Description:              "Octopus Flux Peak Export Tariff",
+		},
+	)
+
+	// 3. Standard / Day: 05:00 – 16:00 and 19:00 – 02:00
+	periods = append(periods,
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Standard",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       standardHours,
+			},
+			DollarsPerKWH: importStandardDollarsPerKWH,
+			Description:   "Octopus Flux Standard Rate",
+		},
+		types.UtilityFeesPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Standard Export",
+				Start:       start,
+				End:         end,
+				LocationPtr: lonLocation,
+				Hours:       standardHours,
+			},
+			DollarsPerKWH:            exportStandardDollarsPerKWH,
+			SeparateGenerationCredit: true,
+			Description:              "Octopus Flux Standard Export Tariff",
+		},
+	)
+
+	return periods
+}
+
 func octopusFluxFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 	_, cfg, err := normalizeOctopusLocation(options.Location)
 	if err != nil {
 		return nil, err
 	}
 
-	var periods []types.UtilityFeesPeriod
+	fluxRevisionStart := time.Date(2026, time.October, 19, 0, 0, 0, 0, lonLocation)
+	periods := make([]types.UtilityFeesPeriod, 0, 12)
 
-	// 1. Off-Peak: 02:00 – 05:00
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Off-Peak",
-			LocationPtr: lonLocation,
-			Hours:       []types.UtilityHourPeriod{{HourStart: 2, HourEnd: 5}},
-		},
-		DollarsPerKWH: cfg.ImportOffPeakRate,
-		Description:   "Octopus Flux Off-Peak Rate",
-	})
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Off-Peak Export",
-			LocationPtr: lonLocation,
-			Hours:       []types.UtilityHourPeriod{{HourStart: 2, HourEnd: 5}},
-		},
-		DollarsPerKWH:            cfg.ExportOffPeakRate,
-		SeparateGenerationCredit: true,
-		Description:              "Octopus Flux Off-Peak Export Tariff",
-	})
+	// Pre-2026-10-19 historical Octopus Flux rates.
+	periods = appendOctopusFluxWindow(
+		periods,
+		time.Time{},
+		fluxRevisionStart,
+		cfg.ImportOffPeakRate,
+		cfg.ExportOffPeakRate,
+		cfg.ImportPeakRate,
+		cfg.ExportPeakRate,
+		cfg.ImportStandardRate,
+		cfg.ExportStandardRate,
+	)
 
-	// 2. Peak: 16:00 – 19:00
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Peak",
-			LocationPtr: lonLocation,
-			Hours:       []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 19}},
-		},
-		DollarsPerKWH: cfg.ImportPeakRate,
-		Description:   "Octopus Flux Peak Rate",
-	})
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Peak Export",
-			LocationPtr: lonLocation,
-			Hours:       []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 19}},
-		},
-		DollarsPerKWH:            cfg.ExportPeakRate,
-		SeparateGenerationCredit: true,
-		Description:              "Octopus Flux Peak Export Tariff",
-	})
+	// Q4 2026 Octopus Flux rates effective 2026-10-19T00:00:00 Europe/London.
+	periods = appendOctopusFluxWindow(
+		periods,
+		fluxRevisionStart,
+		time.Time{},
+		cfg.FluxImportOffPeakDollarsPerKWH,
+		cfg.FluxExportOffPeakDollarsPerKWH,
+		cfg.FluxImportPeakDollarsPerKWH,
+		cfg.FluxExportPeakDollarsPerKWH,
+		cfg.FluxImportStandardDollarsPerKWH,
+		cfg.FluxExportStandardDollarsPerKWH,
+	)
 
-	// 3. Standard / Day: 05:00 – 16:00 and 19:00 – 02:00
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Standard",
-			LocationPtr: lonLocation,
-			Hours: []types.UtilityHourPeriod{
-				{HourStart: 5, HourEnd: 16},
-				{HourStart: 19, HourEnd: 24},
-				{HourStart: 0, HourEnd: 2},
+	return periods, nil
+}
+
+func octopusIntelligentFluxFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	_, cfg, err := normalizeOctopusLocation(options.Location)
+	if err != nil {
+		return nil, err
+	}
+
+	// Split Standard hours at midnight (00:00-16:00 and 19:00-24:00) so TimePeriod.Contains keeps hStart < hEnd.
+	standardHours := []types.UtilityHourPeriod{
+		{HourStart: 0, HourEnd: 16},
+		{HourStart: 19, HourEnd: 24},
+	}
+	peakHours := []types.UtilityHourPeriod{
+		{HourStart: 16, HourEnd: 19},
+	}
+
+	periods := []types.UtilityFeesPeriod{
+		// 1. Peak: 16:00 – 19:00 (1:1 import & export parity)
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Peak",
+				LocationPtr: lonLocation,
+				Hours:       peakHours,
 			},
+			DollarsPerKWH: cfg.IntelliFluxPeakDollarsPerKWH,
+			Description:   "Intelligent Octopus Flux Peak Rate",
 		},
-		DollarsPerKWH: cfg.ImportStandardRate,
-		Description:   "Octopus Flux Standard Rate",
-	})
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			Name:        "Standard Export",
-			LocationPtr: lonLocation,
-			Hours: []types.UtilityHourPeriod{
-				{HourStart: 5, HourEnd: 16},
-				{HourStart: 19, HourEnd: 24},
-				{HourStart: 0, HourEnd: 2},
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Peak Export",
+				LocationPtr: lonLocation,
+				Hours:       peakHours,
 			},
+			DollarsPerKWH:            cfg.IntelliFluxPeakDollarsPerKWH,
+			SeparateGenerationCredit: true,
+			Description:              "Intelligent Octopus Flux Peak Export Tariff",
 		},
-		DollarsPerKWH:            cfg.ExportStandardRate,
-		SeparateGenerationCredit: true,
-		Description:              "Octopus Flux Standard Export Tariff",
-	})
+		// 2. Standard / Day: 00:00 – 16:00 and 19:00 – 24:00 (1:1 import & export parity)
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Standard",
+				LocationPtr: lonLocation,
+				Hours:       standardHours,
+			},
+			DollarsPerKWH: cfg.IntelliFluxStandardDollarsPerKWH,
+			Description:   "Intelligent Octopus Flux Standard Rate",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Standard Export",
+				LocationPtr: lonLocation,
+				Hours:       standardHours,
+			},
+			DollarsPerKWH:            cfg.IntelliFluxStandardDollarsPerKWH,
+			SeparateGenerationCredit: true,
+			Description:              "Intelligent Octopus Flux Standard Export Tariff",
+		},
+	}
 
 	return periods, nil
 }
 
 func octopusExportPeriods(options types.UtilityRateOptions) []types.UtilityFeesPeriod {
-	exportRate := 0.1500 // Default: Outgoing Octopus Fixed 15p/kWh
+	exportDollarsPerKWH := octopusOutgoing12pDollarsPerKWH // Default: Outgoing Octopus 12p/kWh (OUTGOING-VAR-24-10-26)
 	switch options.GenerationRate {
+	case "outgoing_15p":
+		exportDollarsPerKWH = octopusOutgoing15pDollarsPerKWH
 	case "outgoing_12p":
-		exportRate = 0.1200
+		exportDollarsPerKWH = octopusOutgoing12pDollarsPerKWH
 	case "outgoing_prime", "outgoing_agile", "none":
-		exportRate = 0.0
+		exportDollarsPerKWH = 0.0
 	}
 
 	if options.GenerationRate == "outgoing_prime" {
@@ -475,7 +776,7 @@ func octopusExportPeriods(options types.UtilityRateOptions) []types.UtilityFeesP
 					LocationPtr: lonLocation,
 					Hours:       []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 19}},
 				},
-				DollarsPerKWH:            0.1600,
+				DollarsPerKWH:            octopusPrimeExportPeakDollarsPerKWH,
 				SeparateGenerationCredit: true,
 				Description:              "Prime Outgoing Octopus Peak Export Tariff",
 			},
@@ -488,19 +789,19 @@ func octopusExportPeriods(options types.UtilityRateOptions) []types.UtilityFeesP
 						{HourStart: 19, HourEnd: 24},
 					},
 				},
-				DollarsPerKWH:            0.0900,
+				DollarsPerKWH:            octopusPrimeExportOffPeakDollarsPerKWH,
 				SeparateGenerationCredit: true,
 				Description:              "Prime Outgoing Octopus Off-Peak Export Tariff",
 			},
 		}
 	}
-	if exportRate > 0 {
+	if exportDollarsPerKWH > 0 {
 		return []types.UtilityFeesPeriod{
 			{
 				TimePeriod: types.TimePeriod{
 					LocationPtr: lonLocation,
 				},
-				DollarsPerKWH:            exportRate,
+				DollarsPerKWH:            exportDollarsPerKWH,
 				SeparateGenerationCredit: true,
 				Description:              "Outgoing Octopus Export Tariff",
 			},
@@ -515,6 +816,13 @@ func octopusGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		return nil, err
 	}
 
+	offPeakDollarsPerKWH := cfg.GoOffPeakRate
+	peakDollarsPerKWH := cfg.GoPeakRate
+	if options.RateClass == "fixed" {
+		offPeakDollarsPerKWH = octopusGoFixedOffPeakDollarsPerKWH
+		peakDollarsPerKWH = cfg.GoFixedPeakDollarsPerKWH
+	}
+
 	periods := []types.UtilityFeesPeriod{
 		// 1. Overnight Off-Peak: 00:30 – 05:30 (5 hours)
 		{
@@ -525,7 +833,7 @@ func octopusGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 					{HourStart: 0, MinuteStart: 30, HourEnd: 5, MinuteEnd: 30},
 				},
 			},
-			DollarsPerKWH: cfg.GoOffPeakRate,
+			DollarsPerKWH: offPeakDollarsPerKWH,
 			Description:   "Octopus Go Off-Peak Rate",
 		},
 		// 2. Day Peak: 05:30 – 00:30 (19 hours)
@@ -538,7 +846,7 @@ func octopusGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 					{HourStart: 5, MinuteStart: 30, HourEnd: 24},
 				},
 			},
-			DollarsPerKWH: cfg.GoPeakRate,
+			DollarsPerKWH: peakDollarsPerKWH,
 			Description:   "Octopus Go Day Rate",
 		},
 	}
@@ -553,6 +861,20 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 		return nil, err
 	}
 
+	offPeakDollarsPerKWH := octopusIOGFlexibleOffPeakDollarsPerKWH
+	peakDollarsPerKWH := cfg.IOGFlexiblePeakDollarsPerKWH
+	switch options.RateClass {
+	case "max":
+		offPeakDollarsPerKWH = octopusIOGMaxOffPeakDollarsPerKWH
+		peakDollarsPerKWH = cfg.IOGMaxPeakDollarsPerKWH
+	case "fixed":
+		offPeakDollarsPerKWH = octopusIOGFixedOffPeakDollarsPerKWH
+		peakDollarsPerKWH = cfg.IOGFixedPeakDollarsPerKWH
+	case "legacy_24_10_29":
+		offPeakDollarsPerKWH = octopusIOGLegacyOffPeakDollarsPerKWH
+		peakDollarsPerKWH = cfg.IOGLegacyPeakDollarsPerKWH
+	}
+
 	periods := []types.UtilityFeesPeriod{
 		// 1. Overnight Off-Peak: 23:30 – 05:30 (6 hours)
 		{
@@ -564,7 +886,7 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 					{HourStart: 0, HourEnd: 5, MinuteEnd: 30},
 				},
 			},
-			DollarsPerKWH: cfg.IOGOffPeakRate,
+			DollarsPerKWH: offPeakDollarsPerKWH,
 			Description:   "Intelligent Octopus Go Off-Peak Rate",
 		},
 		// 2. Day Peak: 05:30 – 23:30 (18 hours)
@@ -576,7 +898,7 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 					{HourStart: 5, MinuteStart: 30, HourEnd: 23, MinuteEnd: 30},
 				},
 			},
-			DollarsPerKWH: cfg.IOGPeakRate,
+			DollarsPerKWH: peakDollarsPerKWH,
 			Description:   "Intelligent Octopus Go Day Rate",
 		},
 	}
@@ -647,8 +969,74 @@ func octopusCosyFees(options types.UtilityRateOptions) ([]types.UtilityFeesPerio
 	return periods, nil
 }
 
+func octopusLocationOption() types.UtilityRateOption {
+	return types.UtilityRateOption{
+		Field:       "location",
+		Name:        "Distribution Network (DNO / PES Region)",
+		Type:        types.UtilityOptionTypeSelect,
+		Description: "Select your regional electricity distribution network area.",
+		Choices:     octopusLocationChoices,
+		Default:     "london",
+	}
+}
+
+func octopusGenerationRateOption() types.UtilityRateOption {
+	return types.UtilityRateOption{
+		Field:       "generationRate",
+		Name:        "Export Tariff",
+		Type:        types.UtilityOptionTypeSelect,
+		Description: "Select your export credit agreement (e.g. Outgoing Octopus).",
+		Choices: []types.UtilityOptionChoice{
+			{Value: "outgoing_12p", Name: "Outgoing Octopus (12p/kWh)"},
+			{Value: "outgoing_15p", Name: "Outgoing Octopus Fixed (15p/kWh)"},
+			{Value: "outgoing_prime", Name: "Prime Outgoing Octopus (16p Peak / 9p Off-Peak)"},
+			{Value: "outgoing_agile", Name: "Agile Outgoing Octopus"},
+			{Value: "none", Name: "No Export Credit"},
+		},
+		Default: "outgoing_12p",
+	}
+}
+
+func octopusGoRateOptions() []types.UtilityRateOption {
+	return []types.UtilityRateOption{
+		{
+			Field:       "rateClass",
+			Name:        "Tariff Type",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select whether you are on the variable Flexible tariff or the 12M Fixed tariff.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "flexible", Name: "Octopus Go (Flexible)"},
+				{Value: "fixed", Name: "Octopus Go 12M Fixed"},
+			},
+			Default: "flexible",
+		},
+		octopusLocationOption(),
+		octopusGenerationRateOption(),
+	}
+}
+
+func octopusIntelligentGoRateOptions() []types.UtilityRateOption {
+	return []types.UtilityRateOption{
+		{
+			Field:       "rateClass",
+			Name:        "Tariff Type",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your Intelligent Octopus Go tariff variant.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "flexible", Name: "Intelligent Octopus Go (Flexible)"},
+				{Value: "max", Name: "Intelligent Octopus Go Max"},
+				{Value: "fixed", Name: "Intelligent Octopus Go 12M Fixed"},
+				{Value: "legacy_24_10_29", Name: "Intelligent Octopus Go (Legacy Oct 2024)"},
+			},
+			Default: "flexible",
+		},
+		octopusLocationOption(),
+		octopusGenerationRateOption(),
+	}
+}
+
 func octopusCosyRateOptions() []types.UtilityRateOption {
-	opts := []types.UtilityRateOption{
+	return []types.UtilityRateOption{
 		{
 			Field:       "rateClass",
 			Name:        "Tariff Type",
@@ -660,58 +1048,28 @@ func octopusCosyRateOptions() []types.UtilityRateOption {
 			},
 			Default: "flexible",
 		},
-	}
-	return append(opts, octopusGoRateOptions()...)
-}
-
-func octopusGoRateOptions() []types.UtilityRateOption {
-	return []types.UtilityRateOption{
-		{
-			Field:       "location",
-			Name:        "Distribution Network (DNO / PES Region)",
-			Type:        types.UtilityOptionTypeSelect,
-			Description: "Select your regional electricity distribution network area.",
-			Choices:     octopusLocationChoices,
-			Default:     "london",
-		},
-		{
-			Field:       "generationRate",
-			Name:        "Export Tariff",
-			Type:        types.UtilityOptionTypeSelect,
-			Description: "Select your export credit agreement (e.g. Outgoing Octopus).",
-			Choices: []types.UtilityOptionChoice{
-				{Value: "outgoing_15p", Name: "Outgoing Octopus Fixed (15p/kWh)"},
-				{Value: "outgoing_12p", Name: "Outgoing Octopus Fixed (12p/kWh)"},
-				{Value: "outgoing_prime", Name: "Prime Outgoing Octopus (16p Peak / 9p Off-Peak)"},
-				{Value: "outgoing_agile", Name: "Agile Outgoing Octopus"},
-				{Value: "none", Name: "No Export Credit"},
-			},
-			Default: "outgoing_15p",
-		},
+		octopusLocationOption(),
+		octopusGenerationRateOption(),
 	}
 }
 
 // octopusUtilityInfo returns metadata for Octopus Energy (UK).
 func octopusUtilityInfo() types.UtilityProviderInfo {
 	return types.UtilityProviderInfo{
-		ID:          "octopus",
-		Name:        "Octopus Energy (UK)",
-		RatesNotice: "Intelligent Octopus Flux is not supported at this time.",
+		ID:   "octopus",
+		Name: "Octopus Energy (UK)",
 		Rates: []types.UtilityRateInfo{
 			{
-				ID:   "octopus_flux",
-				Name: "Octopus Flux",
-				Options: []types.UtilityRateOption{
-					{
-						Field:       "location",
-						Name:        "Distribution Network (DNO / PES Region)",
-						Type:        types.UtilityOptionTypeSelect,
-						Description: "Select your regional electricity distribution network area.",
-						Choices:     octopusLocationChoices,
-						Default:     "london",
-					},
-				},
+				ID:      "octopus_flux",
+				Name:    "Octopus Flux",
+				Options: []types.UtilityRateOption{octopusLocationOption()},
 				GetFees: octopusFluxFees,
+			},
+			{
+				ID:      "octopus_intelligent_flux",
+				Name:    "Intelligent Octopus Flux",
+				Options: []types.UtilityRateOption{octopusLocationOption()},
+				GetFees: octopusIntelligentFluxFees,
 			},
 			{
 				ID:      "octopus_go",
@@ -722,7 +1080,7 @@ func octopusUtilityInfo() types.UtilityProviderInfo {
 			{
 				ID:      "octopus_intelligent_go",
 				Name:    "Intelligent Octopus Go",
-				Options: octopusGoRateOptions(),
+				Options: octopusIntelligentGoRateOptions(),
 				GetFees: octopusIntelligentGoFees,
 			},
 			{
