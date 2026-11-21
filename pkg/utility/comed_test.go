@@ -1886,6 +1886,60 @@ func TestComEd(t *testing.T) {
 			m.AssertExpectations(t)
 		})
 	})
+
+	t.Run("GetConfirmedPrices Mid-Hour Historical End Overlap Semantics", func(t *testing.T) {
+		ctx := context.Background()
+		nowCT := time.Date(2026, time.July, 15, 14, 20, 0, 0, ctLocation)
+		h10 := time.Date(2026, time.July, 14, 10, 0, 0, 0, ctLocation)
+		h11 := h10.Add(time.Hour)
+		h14Today := time.Date(2026, time.July, 15, 14, 0, 0, 0, ctLocation)
+
+		c := &baseComEdHourly{
+			nowFunc: func() time.Time { return nowCT },
+			historicalPrices: map[int64]types.Price{
+				h10.Unix(): {TSStart: h10, TSEnd: h11, DollarsPerKWH: 0.04},
+				h11.Unix(): {TSStart: h11, TSEnd: h11.Add(time.Hour), DollarsPerKWH: 0.05},
+			},
+			unconfirmedFetch: make(map[int64]time.Time),
+		}
+
+		// Mid-hour historical end [10:00, 10:30) includes the overlapping 10:00-11:00 hour
+		prices, err := c.GetConfirmedPrices(ctx, h10, h10.Add(30*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.InDelta(t, 0.04, prices[0].DollarsPerKWH, 1e-6)
+		}
+
+		// Sub-hour range [10:15, 10:45) includes the overlapping 10:00-11:00 hour
+		prices, err = c.GetConfirmedPrices(ctx, h10.Add(15*time.Minute), h10.Add(45*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+		}
+
+		// Multi-hour range ending mid-hour [10:00, 11:15) includes both 10:00 and 11:00
+		prices, err = c.GetConfirmedPrices(ctx, h10, h11.Add(15*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 2) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.Equal(t, h11, prices[1].TSStart)
+		}
+
+		// Empty and inverted mid-hour ranges return empty without fetching
+		empty, err := c.GetConfirmedPrices(ctx, h10.Add(15*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, empty)
+
+		inverted, err := c.GetConfirmedPrices(ctx, h10.Add(30*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inverted)
+
+		// Mid-hour end inside the current in-progress hour is still clamped to maxEnd (14:00)
+		inProgress, err := c.GetConfirmedPrices(ctx, h14Today, h14Today.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inProgress)
+	})
 }
 
 func TestComEdUtilityInfo(t *testing.T) {

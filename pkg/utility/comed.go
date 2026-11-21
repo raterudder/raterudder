@@ -524,14 +524,20 @@ func (c *baseComEdHourly) cachedConfirmedPrefix(start, end, nowCT time.Time) ([]
 func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	ctx = log.With(ctx, log.Ctx(ctx).With(slog.Time("start", start), slog.Time("end", end)))
 
+	if !start.Before(end) {
+		return []types.Price{}, nil
+	}
+
 	nowCT := c.now().In(ctLocation)
 	maxEnd := nowCT.Add(-5 * time.Minute).Truncate(time.Hour)
 
 	start = start.Truncate(time.Hour)
+	end = end.In(start.Location())
+	if truncated := end.Truncate(time.Hour); end.After(truncated) {
+		end = truncated.Add(time.Hour)
+	}
 	if end.After(maxEnd) {
 		end = maxEnd.In(start.Location())
-	} else {
-		end = end.In(start.Location()).Truncate(time.Hour)
 	}
 
 	if !start.Before(end) {

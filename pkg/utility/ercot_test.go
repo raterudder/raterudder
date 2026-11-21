@@ -1933,4 +1933,78 @@ func TestERCOT(t *testing.T) {
 			},
 		}))
 	})
+
+	t.Run("GetConfirmedPrices Mid-Hour Historical End Overlap Semantics", func(t *testing.T) {
+		ctx := context.Background()
+		nowCT := time.Date(2026, time.July, 15, 14, 20, 0, 0, ctLocation)
+		dayStart := time.Date(2026, time.July, 14, 0, 0, 0, 0, ctLocation)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		dateKey := "LZ_HOUSTON_" + dayStart.Format("20060102")
+		h10 := dayStart.Add(10 * time.Hour)
+		h11 := dayStart.Add(11 * time.Hour)
+		h14Today := time.Date(2026, time.July, 15, 14, 0, 0, 0, ctLocation)
+
+		dayPrices := make([]types.Price, 24)
+		for h := 0; h < 24; h++ {
+			start := dayStart.Add(time.Duration(h) * time.Hour)
+			dayPrices[h] = types.Price{
+				Provider:                      "ercot",
+				TSStart:                       start,
+				TSEnd:                         start.Add(time.Hour),
+				DollarsPerKWH:                 float64(h+1) * 0.01,
+				SeparateGenerationCredit:      true,
+				GenerationCreditDollarsPerKWH: float64(h+1) * 0.01,
+			}
+		}
+
+		base := &baseERCOT{
+			nowFunc: func() time.Time { return nowCT },
+			cachedPrices: map[string][]types.Price{
+				dateKey: dayPrices,
+			},
+			cachedPricesTime: map[string]time.Time{
+				dateKey: nowCT,
+			},
+			cachedConfirmedEnd: map[string]time.Time{
+				dateKey: dayEnd,
+			},
+		}
+
+		// Mid-hour historical end [10:00, 10:30) includes the overlapping 10:00-11:00 hour
+		prices, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h10, h10.Add(30*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.InDelta(t, 0.11, prices[0].DollarsPerKWH, 1e-6)
+		}
+
+		// Sub-hour range [10:15, 10:45) includes the overlapping 10:00-11:00 hour
+		prices, err = base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h10.Add(15*time.Minute), h10.Add(45*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+		}
+
+		// Multi-hour range ending mid-hour [10:00, 11:15) includes both 10:00 and 11:00
+		prices, err = base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h10, h11.Add(15*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 2) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.Equal(t, h11, prices[1].TSStart)
+		}
+
+		// Empty and inverted mid-hour ranges return empty without fetching
+		empty, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h10.Add(15*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, empty)
+
+		inverted, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h10.Add(30*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inverted)
+
+		// Mid-hour end inside the current in-progress hour is still clamped to nowHourCT (14:00)
+		inProgress, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h14Today, h14Today.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inProgress)
+	})
 }

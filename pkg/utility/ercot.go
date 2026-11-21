@@ -1377,13 +1377,17 @@ func (c *baseERCOT) GetConfirmedPrices(ctx context.Context, loadZone string, sta
 	if loadZone == "" {
 		return nil, fmt.Errorf("ercot load zone is required")
 	}
+	if !start.Before(end) {
+		return []types.Price{}, nil
+	}
 	nowHourCT := c.now().In(ctLocation).Truncate(time.Hour)
 	curr := start.In(ctLocation).Truncate(time.Hour)
 	endCT := end.In(ctLocation)
+	if truncated := endCT.Truncate(time.Hour); endCT.After(truncated) {
+		endCT = truncated.Add(time.Hour)
+	}
 	if endCT.After(nowHourCT) {
 		endCT = nowHourCT
-	} else {
-		endCT = endCT.Truncate(time.Hour)
 	}
 
 	if !curr.Before(endCT) {
