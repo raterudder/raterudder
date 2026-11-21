@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
 import { submitInterest, type UtilityProviderInfo, type ESSProviderInfo } from '../api';
@@ -61,11 +61,19 @@ export const InterestForm: React.FC<InterestFormProps> = ({
         }
     };
 
-    const sortedUtilities = utilitiesList
-        .filter(u => !u.hidden)
-        .map(u => ({ label: u.name, value: u.id }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-    sortedUtilities.push({ label: 'Other', value: 'other' });
+    const sortedUtilities = useMemo(() => {
+        const list = utilitiesList
+            .filter(u => !u.hidden)
+            .map(u => ({ label: u.name, value: u.id }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+        list.push({ label: 'Other', value: 'other' });
+        return list;
+    }, [utilitiesList]);
+
+    const selectedUtility = useMemo(
+        () => sortedUtilities.find(u => u.value === utility) ?? null,
+        [sortedUtilities, utility]
+    );
 
     return (
         <div>
@@ -75,13 +83,10 @@ export const InterestForm: React.FC<InterestFormProps> = ({
                     <div>
                         <label id="utility-label" htmlFor="utility" className="beta-interstitial-label">Utility Provider</label>
                         <Combobox.Root
-                            value={utility || ''}
-                            onValueChange={(value) => setUtility(value as string)}
+                            value={selectedUtility}
+                            onValueChange={(item) => setUtility(item?.value ?? '')}
                             items={sortedUtilities}
-                            itemToStringLabel={(val) => {
-                                if (val === 'other') return 'Other';
-                                return utilitiesList.find(u => u.id === val)?.name || val;
-                            }}
+                            isItemEqualToValue={(item, val) => item.value === val.value}
                         >
                             <div className="combobox-input-wrapper select-trigger">
                                 <Combobox.Input
@@ -103,7 +108,7 @@ export const InterestForm: React.FC<InterestFormProps> = ({
                                         </Combobox.Empty>
                                         <Combobox.List>
                                             {(item: { label: string, value: string }) => (
-                                                <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                                <Combobox.Item key={item.value} value={item} className="select-item">
                                                     {item.label}
                                                 </Combobox.Item>
                                             )}

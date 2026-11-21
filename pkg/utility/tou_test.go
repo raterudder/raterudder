@@ -424,6 +424,45 @@ func TestTOUUtility(t *testing.T) {
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
 		}
+		p, err = u.priceForTime(time.Date(2027, time.December, 24, 18, 0, 0, 0, mtLocation)) // Friday before Sat Dec 25 (no weekend holiday shift -> On-Peak)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.December, 31, 18, 0, 0, 0, mtLocation)) // Friday before Sat Jan 1, 2028 (no weekend holiday shift -> On-Peak)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+		}
+
+		// 4. Test Schedule 16.08 Net Metering TOD (netMeteringScheme: "tou_net"):
+		// separate On-Peak and Off-Peak 1:1 kWh credit banks
+		settings1608 := types.Settings{
+			UtilityProvider: "mvea",
+			UtilityRate:     "mvea_16_05",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "tou_net",
+			},
+		}
+		require.NoError(t, u.ApplySettings(context.Background(), settings1608))
+		assert.False(t, settings1608.UtilityRateOptions.IsFlatNetMetering())
+		// Pre-Oct 1, 2026 (before Schedule 16.08 took effect): still $0.00/kWh export credit
+		p, err = u.priceForTime(time.Date(2026, time.September, 30, 18, 0, 0, 0, mtLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.32371, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.ExportRateDollars(settings1608, nil), 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 18, 0, 0, 0, mtLocation)) // On-Peak
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.34500, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.34500, p.ExportRateDollars(settings1608, nil), 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 10, 0, 0, 0, mtLocation)) // Off-Peak
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08625, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.08625, p.ExportRateDollars(settings1608, nil), 1e-6)
+		}
 
 		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "mvea",

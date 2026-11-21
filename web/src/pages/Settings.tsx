@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type UtilityRateOptions, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
@@ -45,6 +45,12 @@ const countries = [
     { label: 'South Africa', value: 'ZA' }
 ];
 
+// Use Balanced profile degradation defaults for low-margin warnings rather than
+// adding per-profile complexity for a 1-cent difference.
+// Keep roughly aligned with Settings.GetOptimizationParams in pkg/types/settings.go.
+const minArbitrageWarningDollarsPerKWH = 0.02;
+const minBatteryExportWarningDollarsPerKWH = 0.03;
+
 interface LocationFormProps {
     settings: SettingsType;
     onChange: <K extends keyof SettingsType>(field: K, value: SettingsType[K]) => void;
@@ -56,10 +62,10 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
             <Field.Root className="form-group">
                 <Field.Label htmlFor="countryCode">Country</Field.Label>
                 <Combobox.Root
-                    value={settings.countryCode || ''}
-                    onValueChange={(val) => onChange("countryCode", val as string)}
+                    value={countries.find(c => c.value === settings.countryCode) ?? null}
+                    onValueChange={(item) => onChange("countryCode", item?.value ?? '')}
                     items={countries}
-                    itemToStringLabel={(val) => countries.find(c => c.value === val)?.label || val}
+                    isItemEqualToValue={(item, val) => item.value === val.value}
                 >
                     <div className="combobox-input-wrapper select-trigger">
                         <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />
@@ -74,7 +80,7 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
                             <Combobox.Popup className="select-popup">
                                 <Combobox.List>
                                     {(item: { label: string, value: string }) => (
-                                        <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                        <Combobox.Item key={item.value} value={item} className="select-item">
                                             {item.label}
                                         </Combobox.Item>
                                     )}
@@ -171,23 +177,28 @@ const UtilityForm = ({
     setIsUtilityDirty,
     onUtilityChange
 }: UtilityFormProps) => {
-    const sortedUtilities = utilities
+    const sortedUtilities = useMemo(() => utilities
         .filter(u => !u.hidden || u.id === settings.utilityProvider)
         .map(u => ({ label: u.name, value: u.id }))
-        .sort((a, b) => a.label.localeCompare(b.label));
+        .sort((a, b) => a.label.localeCompare(b.label)), [utilities, settings.utilityProvider]);
+
+    const selectedUtility = useMemo(
+        () => sortedUtilities.find(u => u.value === settings.utilityProvider) ?? null,
+        [sortedUtilities, settings.utilityProvider]
+    );
 
     const renderFormFields = () => (
         <>
             <Field.Root className="form-group">
                 <Field.Label htmlFor={isWizard ? "wizardUtilityService" : "utilityService"}>
-                    {isWizard ? "Utility Provider" : "Service"}
+                    Utility Provider
                 </Field.Label>
                 <Combobox.Root
-                    value={settings.utilityProvider || ''}
-                    onValueChange={(value) => {
+                    value={selectedUtility}
+                    onValueChange={(item) => {
                         if (setEditUtility) setEditUtility(true);
                         if (setIsUtilityDirty) setIsUtilityDirty(true);
-                        const providerID = value as string;
+                        const providerID = item?.value ?? '';
                         const provider = utilities.find(u => u.id === providerID);
                         const newSettings = {
                             ...settings,
@@ -214,11 +225,11 @@ const UtilityForm = ({
                         }
                     }}
                     items={sortedUtilities}
-                    itemToStringLabel={(val) => utilities.find(u => u.id === val)?.name || val}
+                    isItemEqualToValue={(item, val) => item.value === val.value}
                 >
                     <div className="combobox-input-wrapper select-trigger">
                         <Combobox.Input
-                            placeholder="Select a service..."
+                            placeholder="Select a utility..."
                             id={isWizard ? "wizardUtilityService" : "utilityService"}
                             className="combobox-input"
                         />
@@ -232,11 +243,11 @@ const UtilityForm = ({
                         <Combobox.Positioner className="select-positioner">
                             <Combobox.Popup className="select-popup">
                                 <Combobox.Empty>
-                                    <div className="select-item" style={{ pointerEvents: 'none' }}>No services found.</div>
+                                    <div className="select-item" style={{ pointerEvents: 'none' }}>No utilities found.</div>
                                 </Combobox.Empty>
                                 <Combobox.List>
                                     {(item: { label: string, value: string }) => (
-                                        <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                        <Combobox.Item key={item.value} value={item} className="select-item">
                                             {item.label}
                                         </Combobox.Item>
                                     )}
@@ -393,32 +404,30 @@ const UtilityForm = ({
                 );
             })()}
 
-            {!isWizard && (
-                <div className="utility-rate-unsupported-link">
-                    <Dialog.Root>
-                        <Dialog.Trigger className="inline-link" type="button">
-                            Don't see your rate or options?
-                        </Dialog.Trigger>
-                        <Dialog.Portal>
-                            <Dialog.Backdrop className="dialog-backdrop" />
-                            <Dialog.Popup className="dialog-popup">
-                                <Dialog.Title className="dialog-title">Request a Rate or Option</Dialog.Title>
-                                <Dialog.Description className="dialog-description">
-                                    Let us know which utility provider, state, or rate plan options you need.
-                                </Dialog.Description>
-                                <InterestForm
-                                    utilitiesList={utilities}
-                                    hideBattery={true}
-                                    alwaysShowDetails={true}
-                                />
-                                <Dialog.Close className="btn btn-secondary dialog-close-btn" type="button">
-                                    Close
-                                </Dialog.Close>
-                            </Dialog.Popup>
-                        </Dialog.Portal>
-                    </Dialog.Root>
-                </div>
-            )}
+            <div className="utility-rate-unsupported-link">
+                <Dialog.Root>
+                    <Dialog.Trigger className="inline-link" type="button">
+                        Don't see your rate or options?
+                    </Dialog.Trigger>
+                    <Dialog.Portal>
+                        <Dialog.Backdrop className="dialog-backdrop" />
+                        <Dialog.Popup className="dialog-popup">
+                            <Dialog.Title className="dialog-title">Request a Rate or Option</Dialog.Title>
+                            <Dialog.Description className="dialog-description">
+                                Let us know which utility provider, state, or rate plan options you need.
+                            </Dialog.Description>
+                            <InterestForm
+                                utilitiesList={utilities}
+                                hideBattery={true}
+                                alwaysShowDetails={true}
+                            />
+                            <Dialog.Close className="btn btn-secondary dialog-close-btn" type="button">
+                                Close
+                            </Dialog.Close>
+                        </Dialog.Popup>
+                    </Dialog.Portal>
+                </Dialog.Root>
+            </div>
 
             {!isWizard && editUtility && setEditUtility && (
                 <button type="button" className="text-button cancel-button" onClick={() => setEditUtility(false)} aria-label="Finish editing Utility Service">Done</button>
@@ -811,7 +820,9 @@ const ESSForm = ({
                                         {stageMessage}
                                     </div>
                                 )}
-                                {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => (
+                                {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => {
+                                    const isStage0LoginField = (cred.stage ?? 0) === 0 && (cred.required || cred.type === 'password');
+                                    return (
                                     <Field.Root key={cred.field} className="form-group">
                                         <Field.Label htmlFor={`ess-${cred.field}`}>{cred.name}</Field.Label>
                                         {cred.type === 'select' ? (
@@ -819,7 +830,7 @@ const ESSForm = ({
                                                 value={essCredentials[cred.field] || (cred.default !== undefined ? String(cred.default) : "")}
                                                 disabled={isSaving || isStaging}
                                                 onValueChange={(value) => {
-                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                    if (isStage0LoginField && (currentStage > 0 || hasSavedCredentialsForRetry)) {
                                                         onStage0FieldChange?.();
                                                     }
                                                     setEssCredentials(prev => ({ ...prev, [cred.field]: value as string }));
@@ -856,7 +867,7 @@ const ESSForm = ({
                                                 disabled={isSaving || isStaging}
                                                 onChange={(e) => {
                                                     const nextVal = e.target.value;
-                                                    if ((cred.stage ?? 0) === 0 && (currentStage > 0 || hasSavedCredentialsForRetry)) {
+                                                    if (isStage0LoginField && (currentStage > 0 || hasSavedCredentialsForRetry)) {
                                                         onStage0FieldChange?.();
                                                     }
                                                     setEssCredentials(prev => ({ ...prev, [cred.field]: nextVal }));
@@ -867,7 +878,8 @@ const ESSForm = ({
                                         )}
                                         {cred.description && <Field.Description>{cred.description}</Field.Description>}
                                     </Field.Root>
-                                ))}
+                                    );
+                                })}
                                 {currentStage > 0 && maxStage > 0 && !hasSavedCredentialsForRetry && handleESSResendStage && (
                                     <div style={{ marginTop: '-0.25rem', marginBottom: '0.75rem' }}>
                                         <button
@@ -1099,6 +1111,7 @@ const Settings = ({
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
     const [isESSDirty, setIsESSDirty] = useState(false);
     const [savedCredentialsProviders, setSavedCredentialsProviders] = useState<Record<string, boolean>>({});
+    const [reconnectRequiredProviders, setReconnectRequiredProviders] = useState<Record<string, boolean>>({});
     const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
     const [essProviders, setEssProviders] = useState<ESSProviderInfo[]>([]);
     const [loadingLists, setLoadingLists] = useState(true);
@@ -1557,6 +1570,7 @@ const Settings = ({
         setIsConnectAIDialogOpen(false);
         setIsManualAppsOpen(false);
         setSavedCredentialsProviders({});
+        setReconnectRequiredProviders({});
         setStageMessage(null);
         setResendCooldownSeconds(0);
 
@@ -1735,6 +1749,7 @@ const Settings = ({
             setIsESSDirty(false);
             setEditESS(Boolean(restored.ess && !restored.hasCredentials?.[restored.ess]));
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setError(null);
@@ -1942,7 +1957,10 @@ const Settings = ({
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             const hasSavedCredentials = Boolean(
-                essProvider && savedCredentialsProviders[essProvider.id]
+                essProvider && (
+                    savedCredentialsProviders[essProvider.id] ||
+                    (settings.hasCredentials?.[essProvider.id] && !reconnectRequiredProviders[essProvider.id])
+                )
             );
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
@@ -1981,6 +1999,7 @@ const Settings = ({
                 setOauthStatus('idle');
             }
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
@@ -2015,6 +2034,7 @@ const Settings = ({
                 submittedESS &&
                 /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
             ) {
+                setReconnectRequiredProviders(prev => ({ ...prev, [submittedESS]: true }));
                 setSavedCredentialsProviders(prev => {
                     if (!prev[submittedESS]) return prev;
                     const next = { ...prev };
@@ -2046,6 +2066,7 @@ const Settings = ({
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
         }
         setSettings(prev => prev ? ({ ...prev, [field]: value }) : null);
     };
@@ -2102,7 +2123,10 @@ const Settings = ({
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             const hasSavedCredentials = Boolean(
-                essProvider && savedCredentialsProviders[essProvider.id]
+                essProvider && (
+                    savedCredentialsProviders[essProvider.id] ||
+                    (settings.hasCredentials?.[essProvider.id] && !reconnectRequiredProviders[essProvider.id])
+                )
             );
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
@@ -2126,6 +2150,7 @@ const Settings = ({
                 setOauthStatus('idle');
             }
             setSavedCredentialsProviders({});
+            setReconnectRequiredProviders({});
             setStageMessage(null);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
@@ -2158,6 +2183,7 @@ const Settings = ({
                 submittedESS &&
                 /authorization code is invalid|code is invalid|invalid_grant|unauthorized/i.test(errMsg)
             ) {
+                setReconnectRequiredProviders(prev => ({ ...prev, [submittedESS]: true }));
                 setSavedCredentialsProviders(prev => {
                     if (!prev[submittedESS]) return prev;
                     const next = { ...prev };
@@ -2265,6 +2291,7 @@ const Settings = ({
             oauthListenerRef.current = null;
         }
 
+        const targetESS = settings?.ess;
         setOauthStatus('popup_open');
         setError(null);
 
@@ -2292,11 +2319,12 @@ const Settings = ({
                     ...prev,
                     [fieldName]: event.data.code
                 }));
-                if (settings?.ess) {
+                if (targetESS) {
+                    setReconnectRequiredProviders(prev => ({ ...prev, [targetESS]: true }));
                     setSavedCredentialsProviders(prev => {
-                        if (!prev[settings.ess]) return prev;
+                        if (!prev[targetESS]) return prev;
                         const next = { ...prev };
-                        delete next[settings.ess];
+                        delete next[targetESS];
                         return next;
                     });
                 }
@@ -2755,7 +2783,7 @@ const Settings = ({
                                         {scheduleMode === 'named' ? (
                                             <HelpButton
                                                 title="Rate Period Reserve Schedule"
-                                                description="Configures specific minimum battery reserve percentages for each utility rate period (e.g. On-Peak, Off-Peak). RateRudder ensures your battery holds higher reserves during expensive peak hours while allowing lower reserves during cheap off-peak hours for maximum savings."
+                                                description="Configures specific minimum battery reserve percentages for each utility rate period (e.g. On-Peak, Off-Peak). Setting a lower reserve floor during expensive On-Peak periods allows the battery to discharge and offset high rates, while a higher floor during cheaper Off-Peak periods preserves backup capacity."
                                             />
                                         ) : (
                                             <HelpButton
@@ -3203,9 +3231,9 @@ const Settings = ({
                                             <>
                                                 <p>Controls the risk profile, reserve safety buffers, and solar forecasting assumptions used by the planning algorithm:</p>
                                                 <ul>
-                                                    <li><strong>Aggressive:</strong> Maximizes financial savings with tighter buffers and minimal solar derating.</li>
-                                                    <li><strong>Balanced:</strong> Recommended optimizations balancing financial savings with safety margins.</li>
-                                                    <li><strong>Conservative:</strong> Holds higher energy reserves and applies wider buffers to protect against usage spikes or overcast weather.</li>
+                                                    <li><strong>Aggressive:</strong> Maximizes financial savings with tighter planning buffers, minimal solar derating, and lower profit hurdles.</li>
+                                                    <li><strong>Balanced:</strong> Recommended default balancing financial savings with moderate safety buffers and solar derating.</li>
+                                                    <li><strong>Conservative:</strong> Adds planning safety buffers, stronger overcast solar derating, and higher profit hurdles to protect against usage spikes or cloudy weather, while still discharging down to your configured minimum reserve to cover home load.</li>
                                                 </ul>
                                             </>
                                         }
@@ -3253,7 +3281,7 @@ const Settings = ({
                                 )}
                                 {settings.optimizationProfile === 'conservative' && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
-                                        Warning: A conservative profile will reduce your financial savings by holding more energy in reserve.
+                                        Warning: A conservative profile uses wider planning buffers and higher profit hurdles, which may reduce financial savings.
                                     </div>
                                 )}
                             </Field.Root>
@@ -3286,9 +3314,9 @@ const Settings = ({
                                     }}
                                 />
                                 <Field.Description>Required profit margin to trigger immediate charging to later use/export at higher prices. Leave blank to use the Optimization Profile default.</Field.Description>
-                                {(settings.minArbitrageDifferenceDollarsPerKWH ?? 0) > 0 && settings.minArbitrageDifferenceDollarsPerKWH < 0.03 && (
+                                {(settings.minArbitrageDifferenceDollarsPerKWH ?? 0) > 0 && settings.minArbitrageDifferenceDollarsPerKWH < minArbitrageWarningDollarsPerKWH && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-arbitrage-warning">
-                                        Warning: Setting this below $0.03/kWh may not cover battery degradation, making grid charging unprofitable.
+                                        Warning: Setting a very low arbitrage margin may not cover battery degradation, making grid charging unprofitable.
                                     </div>
                                 )}
                             </Field.Root>
@@ -3322,9 +3350,9 @@ const Settings = ({
                                         }}
                                     />
                                     <Field.Description>Minimum profit spread required to export battery energy directly to the grid. Leave blank to use the Optimization Profile default.</Field.Description>
-                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) > 0 && (settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) < 0.04 && (
+                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) > 0 && (settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) < minBatteryExportWarningDollarsPerKWH && (
                                         <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-battery-export-warning">
-                                            Warning: Setting this below $0.04/kWh may not cover battery degradation, making battery exports unprofitable.
+                                            Warning: Setting a very low export margin may not cover battery degradation, making battery exports unprofitable.
                                         </div>
                                     )}
                                 </Field.Root>

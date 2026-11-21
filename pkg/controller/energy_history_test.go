@@ -38,6 +38,8 @@ var energyHistoryBaselines = map[string]energyHistoryBaseline{
 	"site2_oct-nov.json": {maeKWH: 0.672, underPredictKWH: 1063.2, overPredictKWH: 237.6},
 	// site3 (America/Chicago): 13 vacation days + post-vacation recovery across varying temps (13.5..30.8°C)
 	"site3_late-summer.json": {maeKWH: 0.961, underPredictKWH: 1488.4, overPredictKWH: 922.6},
+	// site4 (America/New_York): November cold snaps (-0.6..30.0°C) with sharp morning electric auxiliary heating surges and daytime solar/AC transition
+	"site4_nov-cold.json": {maeKWH: 1.103, underPredictKWH: 204.6, overPredictKWH: 135.1},
 	// site5 (America/New_York): configured EVChargingStandby, 4 vacation days, and 1.67x heavy weekends
 	"site5_late-summer.json": {maeKWH: 0.764, underPredictKWH: 1432.5, overPredictKWH: 483.9},
 	// site5 (America/New_York): autumn cold snaps (-3.9..28.2°C, 96 hrs <= 3°C) with morning/overnight electric heating surges and EVChargingStandby

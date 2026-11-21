@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -383,6 +385,313 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, prices[0].DollarsPerKWH, prices4[0].DollarsPerKWH)
 		assert.Equal(t, 0.05, prices4[1].DollarsPerKWH)
 		m.AssertExpectations(t)
+	})
+
+	t.Run("GetConfirmedPrices Future Window Cache Hits Across 10 Polls", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		baseNow := time.Date(2026, time.October, 7, 14, 25, 10, 0, ctLocation)
+		currentNow := baseNow
+		syncStart := baseNow.Truncate(time.Hour).Add(-2 * time.Hour) // 12:00 CT
+		clampedEnd := baseNow.Truncate(time.Hour)                    // 14:00 CT
+
+		var httpCalls atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpCalls.Add(1)
+			var entries []string
+			for i := 0; i < 12; i++ {
+				t1 := syncStart.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"2.0"}`, t1.UnixMilli()))
+				t2 := syncStart.Add(time.Hour + time.Duration(i*5)*time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"3.0"}`, t2.UnixMilli()))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+		c.nowFunc = func() time.Time { return currentNow }
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", syncStart, clampedEnd).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 2 && p[0].Confirmed && p[1].Confirmed
+		}), 0).Return(nil).Once()
+
+		ctx := context.Background()
+		for i := 0; i < 10; i++ {
+			currentNow = baseNow.Add(time.Duration(i) * time.Second)
+			prices, err := c.GetConfirmedPrices(ctx, syncStart, currentNow.Add(12*time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, prices, 2) {
+				assert.InDelta(t, 0.02, prices[0].DollarsPerKWH, 1e-6)
+				assert.InDelta(t, 0.03, prices[1].DollarsPerKWH, 1e-6)
+			}
+		}
+
+		assert.Equal(t, int32(1), httpCalls.Load(), "expected 1 HTTP call and 9 memory hits across 10 now+12h polls")
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetConfirmedPrices Concurrent Workers Distinct Seconds Singleflight", func(t *testing.T) {
+		baseNow := time.Date(2026, time.October, 7, 14, 25, 10, 0, ctLocation)
+		syncStart := baseNow.Truncate(time.Hour).Add(-time.Hour) // 13:00 CT
+
+		var httpCalls atomic.Int32
+		startedCh := make(chan struct{})
+		releaseCh := make(chan struct{})
+		var startOnce sync.Once
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpCalls.Add(1)
+			startOnce.Do(func() { close(startedCh) })
+			<-releaseCh
+
+			var entries []string
+			for i := 0; i < 12; i++ {
+				sampleTS := syncStart.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"4.0"}`, sampleTS.UnixMilli()))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+		}))
+		defer ts.Close()
+
+		c := &baseComEdHourly{
+			apiURL:           ts.URL,
+			client:           ts.Client(),
+			historicalPrices: make(map[int64]types.Price),
+			unconfirmedFetch: make(map[int64]time.Time),
+			nowFunc:          func() time.Time { return baseNow },
+		}
+
+		const workers = 5
+		type workerResult struct {
+			prices []types.Price
+			err    error
+		}
+		resCh := make(chan workerResult, workers)
+
+		for i := 0; i < workers; i++ {
+			workerIdx := i
+			go func() {
+				// Each worker runs at a distinct second offset (and alternates UTC vs CT locations)
+				workerStart := syncStart.Add(time.Duration(workerIdx) * time.Second)
+				workerEnd := baseNow.Add(time.Duration(workerIdx)*time.Second + 12*time.Hour)
+				if workerIdx%2 == 1 {
+					workerStart = workerStart.UTC()
+					workerEnd = workerEnd.UTC()
+				}
+				prices, err := c.GetConfirmedPrices(context.Background(), workerStart, workerEnd)
+				resCh <- workerResult{prices: prices, err: err}
+			}()
+		}
+
+		<-startedCh
+		time.Sleep(50 * time.Millisecond)
+		close(releaseCh)
+
+		for i := 0; i < workers; i++ {
+			res := <-resCh
+			require.NoError(t, res.err)
+			if assert.Len(t, res.prices, 1) {
+				assert.InDelta(t, 0.04, res.prices[0].DollarsPerKWH, 1e-6)
+				assert.Equal(t, syncStart.Unix(), res.prices[0].TSStart.Unix())
+			}
+		}
+
+		assert.Equal(t, int32(1), httpCalls.Load(), "expected 5 concurrent workers across distinct seconds to share 1 singleflight fetch")
+	})
+
+	t.Run("GetConfirmedPrices Five Minute Horizon Clamping And Empty Range", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		// At 14:04:30 CT, hour 13:00-14:00 ended < 5 minutes ago, so clamped end is 13:00 CT
+		nowBeforeBuffer := time.Date(2026, time.October, 7, 14, 4, 30, 0, ctLocation)
+		hour13 := time.Date(2026, time.October, 7, 13, 0, 0, 0, ctLocation)
+
+		var httpCalls atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+		c.nowFunc = func() time.Time { return nowBeforeBuffer }
+
+		prices, err := c.GetConfirmedPrices(context.Background(), hour13, nowBeforeBuffer.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, prices)
+		assert.Equal(t, int32(0), httpCalls.Load())
+		m.AssertNotCalled(t, "GetUtilityPrices")
+	})
+
+	t.Run("GetConfirmedPrices Requires Every Hour In Range Confirmed In DB", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		nowCT := time.Date(2026, time.October, 7, 14, 25, 0, 0, ctLocation)
+		hour12 := time.Date(2026, time.October, 7, 12, 0, 0, 0, ctLocation)
+		hour13 := hour12.Add(time.Hour)
+		hour14 := hour13.Add(time.Hour)
+
+		var httpCalls atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpCalls.Add(1)
+			var entries []string
+			for i := 0; i < 12; i++ {
+				sampleTS := hour13.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"5.0"}`, sampleTS.UnixMilli()))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+		c.nowFunc = func() time.Time { return nowCT }
+
+		// DB only has hour 12 confirmed and is missing hour 13 completely
+		m.On("GetUtilityPrices", mock.Anything, "comed", hour12, hour14).Return([]types.PriceState{
+			{
+				Price:     types.Price{Provider: "comed_besh", TSStart: hour12, TSEnd: hour13, DollarsPerKWH: 0.02},
+				Confirmed: true,
+				TSUpdated: nowCT.Add(-time.Hour),
+			},
+		}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 1 && p[0].TSStart.Equal(hour13) && p[0].Confirmed
+		}), 0).Return(nil).Once()
+
+		prices, err := c.GetConfirmedPrices(context.Background(), hour12, nowCT.Add(12*time.Hour))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 2) {
+			assert.InDelta(t, 0.02, prices[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.05, prices[1].DollarsPerKWH, 1e-6)
+		}
+		assert.Equal(t, int32(1), httpCalls.Load())
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetConfirmedPrices Two Minute Cooldown For Unconfirmed Past Hour", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		currentNow := time.Date(2026, time.October, 7, 14, 10, 0, 0, ctLocation)
+		hour12 := time.Date(2026, time.October, 7, 12, 0, 0, 0, ctLocation)
+		hour13 := hour12.Add(time.Hour)
+		hour14 := hour13.Add(time.Hour)
+
+		var httpCalls atomic.Int32
+		var fullSamples atomic.Bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpCalls.Add(1)
+			var entries []string
+			for i := 0; i < 12; i++ {
+				t12 := hour12.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"2.0"}`, t12.UnixMilli()))
+			}
+			sampleCount13 := 10
+			if fullSamples.Load() {
+				sampleCount13 = 12
+			}
+			for i := 0; i < sampleCount13; i++ {
+				t13 := hour13.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"6.0"}`, t13.UnixMilli()))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+		c.nowFunc = func() time.Time { return currentNow }
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", hour12, hour14).Return([]types.PriceState{}, nil).Once()
+		var firstUpsert []types.PriceState
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+			firstUpsert = args.Get(2).([]types.PriceState)
+		}).Return(nil).Once()
+
+		ctx := context.Background()
+		// 1. Initial poll at 14:10:00 confirms hour 12, leaves hour 13 unconfirmed (10 < 12 samples)
+		prices1, err := c.GetConfirmedPrices(ctx, hour12, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, prices1, 1)
+		assert.Equal(t, int32(1), httpCalls.Load())
+
+		// 2. Repeated polls within 2 minutes skip ComEd API and DB calls
+		for _, offset := range []time.Duration{15 * time.Second, 45 * time.Second, 90 * time.Second, 119 * time.Second} {
+			currentNow = time.Date(2026, time.October, 7, 14, 10, 0, 0, ctLocation).Add(offset)
+			pricesRetry, retryErr := c.GetConfirmedPrices(ctx, hour12, currentNow.Add(12*time.Hour))
+			require.NoError(t, retryErr)
+			assert.Len(t, pricesRetry, 1)
+		}
+		assert.Equal(t, int32(1), httpCalls.Load(), "expected repeated fetches within 2 minutes to be skipped")
+
+		// 3. A cold instance reading the fresh unconfirmed DB state within 2 minutes also skips API fetch
+		cCold := configuredComEdHourly(m)
+		cCold.apiURL = ts.URL
+		cCold.client = ts.Client()
+		cCold.nowFunc = func() time.Time { return currentNow }
+		m.On("GetUtilityPrices", mock.Anything, "comed", hour12, hour14).Return(firstUpsert, nil).Once()
+		coldPrices, err := cCold.GetConfirmedPrices(ctx, hour12, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		assert.Len(t, coldPrices, 1)
+		assert.Equal(t, int32(1), httpCalls.Load(), "expected cold instance within 2-minute DB cooldown to skip API fetch")
+
+		// 4. After 2 minutes elapse and remaining samples arrive, hour 13 is fetched and confirmed
+		fullSamples.Store(true)
+		currentNow = time.Date(2026, time.October, 7, 14, 12, 1, 0, ctLocation)
+		m.On("GetUtilityPrices", mock.Anything, "comed", hour13, hour14).Return(firstUpsert[1:], nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 1 && p[0].TSStart.Equal(hour13) && p[0].Confirmed
+		}), 0).Return(nil).Once()
+
+		pricesAfterCooldown, err := c.GetConfirmedPrices(ctx, hour12, currentNow.Add(12*time.Hour))
+		require.NoError(t, err)
+		if assert.Len(t, pricesAfterCooldown, 2) {
+			assert.InDelta(t, 0.02, pricesAfterCooldown[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.06, pricesAfterCooldown[1].DollarsPerKWH, 1e-6)
+		}
+		assert.Equal(t, int32(2), httpCalls.Load())
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetConfirmedPrices Historical Replay Full Past Range", func(t *testing.T) {
+		nowCT := time.Date(2026, time.October, 10, 14, 25, 0, 0, ctLocation)
+		// Mirrors cmd/replayplan/main.go: GetConfirmedPrices(ctx, hourStart, tomorrowEnd.Add(2*time.Hour))
+		replayDay := time.Date(2026, time.October, 5, 0, 0, 0, 0, ctLocation)
+		replayEnd := replayDay.AddDate(0, 0, 2).Add(2 * time.Hour) // 50 hours, all preceding nowCT
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var entries []string
+			for h := replayDay; h.Before(replayEnd); h = h.Add(time.Hour) {
+				for i := 0; i < 12; i++ {
+					sampleTS := h.Add(time.Duration(i*5) * time.Minute)
+					entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"2.5"}`, sampleTS.UnixMilli()))
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+		}))
+		defer ts.Close()
+
+		c := &baseComEdHourly{
+			apiURL:           ts.URL,
+			client:           ts.Client(),
+			historicalPrices: make(map[int64]types.Price),
+			unconfirmedFetch: make(map[int64]time.Time),
+			nowFunc:          func() time.Time { return nowCT },
+		}
+
+		prices, err := c.GetConfirmedPrices(context.Background(), replayDay, replayEnd)
+		require.NoError(t, err)
+		assert.Len(t, prices, 50)
 	})
 
 	t.Run("GetFuturePrices DB Caching", func(t *testing.T) {
@@ -1576,6 +1885,60 @@ func TestComEd(t *testing.T) {
 
 			m.AssertExpectations(t)
 		})
+	})
+
+	t.Run("GetConfirmedPrices Mid-Hour Historical End Overlap Semantics", func(t *testing.T) {
+		ctx := context.Background()
+		nowCT := time.Date(2026, time.July, 15, 14, 20, 0, 0, ctLocation)
+		h10 := time.Date(2026, time.July, 14, 10, 0, 0, 0, ctLocation)
+		h11 := h10.Add(time.Hour)
+		h14Today := time.Date(2026, time.July, 15, 14, 0, 0, 0, ctLocation)
+
+		c := &baseComEdHourly{
+			nowFunc: func() time.Time { return nowCT },
+			historicalPrices: map[int64]types.Price{
+				h10.Unix(): {TSStart: h10, TSEnd: h11, DollarsPerKWH: 0.04},
+				h11.Unix(): {TSStart: h11, TSEnd: h11.Add(time.Hour), DollarsPerKWH: 0.05},
+			},
+			unconfirmedFetch: make(map[int64]time.Time),
+		}
+
+		// Mid-hour historical end [10:00, 10:30) includes the overlapping 10:00-11:00 hour
+		prices, err := c.GetConfirmedPrices(ctx, h10, h10.Add(30*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.InDelta(t, 0.04, prices[0].DollarsPerKWH, 1e-6)
+		}
+
+		// Sub-hour range [10:15, 10:45) includes the overlapping 10:00-11:00 hour
+		prices, err = c.GetConfirmedPrices(ctx, h10.Add(15*time.Minute), h10.Add(45*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 1) {
+			assert.Equal(t, h10, prices[0].TSStart)
+		}
+
+		// Multi-hour range ending mid-hour [10:00, 11:15) includes both 10:00 and 11:00
+		prices, err = c.GetConfirmedPrices(ctx, h10, h11.Add(15*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, prices, 2) {
+			assert.Equal(t, h10, prices[0].TSStart)
+			assert.Equal(t, h11, prices[1].TSStart)
+		}
+
+		// Empty and inverted mid-hour ranges return empty without fetching
+		empty, err := c.GetConfirmedPrices(ctx, h10.Add(15*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, empty)
+
+		inverted, err := c.GetConfirmedPrices(ctx, h10.Add(30*time.Minute), h10.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inverted)
+
+		// Mid-hour end inside the current in-progress hour is still clamped to maxEnd (14:00)
+		inProgress, err := c.GetConfirmedPrices(ctx, h14Today, h14Today.Add(15*time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, inProgress)
 	})
 }
 

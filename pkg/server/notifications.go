@@ -45,6 +45,9 @@ var ffNotifications = feats.Bool("notifications", false)
 
 // Tunable notification thresholds for anomaly detection.
 // These constants are grouped here for easy iteration and simulation against actual site history.
+//
+// NOTE: Keep notification help copy, summary previews, and any static frontend constants in
+// web/src/components/NotificationModal.tsx synchronized whenever these thresholds or rules change.
 const (
 	// defaultSummaryFlavor is the default notification flavor for morning and evening summaries.
 	defaultSummaryFlavor = "home_planner"
@@ -111,9 +114,10 @@ const (
 	solarUnderproductionMinDeficitKW = 2.5
 
 	// Ratio of actual generation to forecasted generation below which an alert is triggered.
-	solarUnderproductionRatioLow    = 0.50 // 50% of forecast (noticeable underproduction / dirty panels)
+	// Low sensitivity alerts only on severe shortfalls; high sensitivity alerts on moderate shortfalls.
+	solarUnderproductionRatioLow    = 0.15 // 15% of forecast (severe underproduction / inverter offline)
 	solarUnderproductionRatioMedium = 0.30 // 30% of forecast (moderate underproduction / partial string failure)
-	solarUnderproductionRatioHigh   = 0.15 // 15% of forecast (severe underproduction / inverter offline)
+	solarUnderproductionRatioHigh   = 0.50 // 50% of forecast (noticeable underproduction / dirty panels)
 
 	// Maximum cloud cover percentage above which underproduction alerts are suppressed (clouds explain deficit).
 	solarUnderproductionMaxCloudCoverPercent = 60.0
@@ -876,27 +880,43 @@ type siteRecentNotifications struct {
 	logs []types.NotificationLog
 }
 
-func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string, loc *time.Location) bool {
+func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string, loc *time.Location, onlyDelivered bool) bool {
 	if loc == nil {
 		loc = time.UTC
 	}
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
-			if l.TSCreated.In(loc).Format("2006-01-02") == dateStr {
-				return true
+		if l.UserID != userID || l.Type != notifType {
+			continue
+		}
+		if onlyDelivered {
+			if !l.Success || l.Muted {
+				continue
 			}
+		} else if !l.Success && !l.Muted {
+			continue
+		}
+		if l.TSCreated.In(loc).Format("2006-01-02") == dateStr {
+			return true
 		}
 	}
 	return false
 }
 
-func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time.Duration, now time.Time) bool {
+func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time.Duration, now time.Time, onlyDelivered bool) bool {
 	cutoff := now.Add(-d)
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
-			if l.TSCreated.After(cutoff) {
-				return true
+		if l.UserID != userID || l.Type != notifType {
+			continue
+		}
+		if onlyDelivered {
+			if !l.Success || l.Muted {
+				continue
 			}
+		} else if !l.Success && !l.Muted {
+			continue
+		}
+		if l.TSCreated.After(cutoff) {
+			return true
 		}
 	}
 	return false
@@ -1824,7 +1844,7 @@ func (s *Server) handleMorningSummaryNotifications(
 			continue
 		}
 		// Ensure only one morning summary is delivered per user per calendar day
-		if getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc, true) {
 			continue
 		}
 
@@ -1897,7 +1917,7 @@ func (s *Server) handleEveningSummaryNotifications(
 			continue
 		}
 		// Ensure only one evening summary is delivered per user per calendar day
-		if getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc, true) {
 			continue
 		}
 
@@ -2355,6 +2375,7 @@ func (s *Server) handlePriceSpikeNotifications(
 			}
 
 			var eventStart, eventEnd, extremeTime time.Time
+			var activePrice types.Price
 			var activeCost, extremeCost, refPrice float64
 			var isCurrent, isFuture bool
 			var refPriceCurrent, refPriceNext float64
@@ -2365,6 +2386,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				isCurrent = qualifiesAsPriceAnomaly(currentCost, refPriceCurrent, rawCosts, reqPercentile, minDelta, isDip)
 			}
 			if isCurrent {
+				activePrice = data.currentPrice
 				eventStart = data.currentPrice.TSStart
 				eventEnd = data.currentPrice.TSEnd
 				activeCost = currentCost
@@ -2377,6 +2399,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				refPriceNext = computeTimeOfDayWindowRefPrice(histPrices, nextPrice.TSStart, siteLoc, medianCost, isDip)
 				isFuture = qualifiesAsPriceAnomaly(nextPriceCost, refPriceNext, rawCosts, reqPercentile, minDelta, isDip)
 				if isFuture {
+					activePrice = nextPrice
 					eventStart = nextPrice.TSStart
 					eventEnd = nextPrice.TSEnd
 					activeCost = nextPriceCost
@@ -2570,7 +2593,7 @@ func (s *Server) handlePriceSpikeNotifications(
 				}
 
 				secondSentence = fmt.Sprintf("Electricity rates are surging significantly above recent prices ($%.2f/kWh). RateRudder will prioritize battery power to protect your home.", refPrice)
-				reserveSOC := data.settings.GetMinBatterySOC(ctx, eventStart, siteLoc, types.Price{DollarsPerKWH: activeCost})
+				reserveSOC := data.settings.GetMinBatterySOC(ctx, eventStart, siteLoc, activePrice)
 				if reserveSOC <= 0 {
 					reserveSOC = data.settings.MinBatterySOC
 				}
@@ -2803,7 +2826,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			continue
 		}
 
-		if getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location(), true) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: already sent today",
 				slog.String("userID", userID),
 				slog.String("date", todayDateStr),
@@ -2818,7 +2841,9 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, sensitivity, title, body, metadata)
+			if !getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location(), false) {
+				s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, sensitivity, title, body, metadata)
+			}
 			continue
 		}
 
@@ -2909,7 +2934,7 @@ func (s *Server) handleVPPDispatchNotifications(
 		if !notifConfig.RealTimeAlertEnabled(notifConfig.VPPDispatchAlert) {
 			continue
 		}
-		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
+		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now(), true) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping vpp dispatch notification: within deduplication window",
 				slog.String("userID", userID),
 				slog.Duration("window", vppDispatchDeduplicationWindow),
@@ -2926,7 +2951,9 @@ func (s *Server) handleVPPDispatchNotifications(
 			"batteryKW":  fmt.Sprintf("%.2f", status.BatteryKW),
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeVPPDispatch, "", title, body, metadata)
+			if !getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now(), false) {
+				s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeVPPDispatch, "", title, body, metadata)
+			}
 			continue
 		}
 

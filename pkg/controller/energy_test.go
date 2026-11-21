@@ -1293,6 +1293,390 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 	})
 
+	t.Run("ColdDayExemptFromUpperIQROnElectricHeatingSite", func(t *testing.T) {
+		now := time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC)
+		startDate := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		for d := 0; d < 28; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				var tempC, load float64
+				switch {
+				case d < 20:
+					tempC = 15.0
+					load = 1.0
+				case d < 26:
+					if h <= 8 {
+						tempC = 9.0 - float64(d-20)*0.6
+						load = 1.0 + 0.45*(10.0-tempC)
+					} else {
+						tempC = 11.0
+						load = 1.2
+					}
+				default:
+					if h <= 8 {
+						tempC = -2.0
+						load = 4.5
+					} else {
+						tempC = 3.0
+						load = 2.5
+					}
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todayHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			tempC := 3.0
+			if h <= 8 {
+				tempC = -2.0
+			}
+			todayHW = append(todayHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC},
+			})
+		}
+		weatherWithToday := append(weather, types.Weather{TSDayStart: todayStart, ForecastHours: todayHW})
+
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weatherWithToday, types.Settings{})
+		if assert.Len(t, model, 24) {
+			assert.Greater(t, model[5].AvgHomeLoadKWH, 3.5, "cold-snap electric heating days must be exempt from upper IQR removal")
+		}
+
+		modelNoWeather, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		if assert.Len(t, modelNoWeather, 24) {
+			assert.Less(t, modelNoWeather[5].AvgHomeLoadKWH, 2.0, "non-weather upper IQR outlier filtering must remain intact when weather is absent")
+		}
+	})
+
+	t.Run("WeightedPoolTemperatureGapBridgesDay2ColdSnapAndFadesInSteadyWinter", func(t *testing.T) {
+		now := time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC)
+		startSnap := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+		var snapHistory []types.EnergyStats
+		var snapWeather []types.Weather
+
+		for d := 0; d < 27; d++ {
+			dayTime := startSnap.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				var tempC, load float64
+				switch {
+				case d < 20:
+					tempC = 14.0
+					load = 1.0
+				case d < 26:
+					if h <= 8 {
+						tempC = 9.0 - float64(d-20)
+						load = 1.0 + 0.45*(10.0-tempC)
+					} else {
+						tempC = 10.0
+						load = 1.0
+					}
+				default:
+					if h <= 8 {
+						tempC = 1.0
+						load = 1.0 + 0.45*9.0
+					} else {
+						tempC = 6.0
+						load = 1.0
+					}
+				}
+				snapHistory = append(snapHistory, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			snapWeather = append(snapWeather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todaySnapHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			tempC := 6.0
+			if h <= 8 {
+				tempC = 1.0
+			}
+			todaySnapHW = append(todaySnapHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC},
+			})
+		}
+		snapWeather = append(snapWeather, types.Weather{TSDayStart: todayStart, ForecastHours: todaySnapHW})
+
+		modelSnap, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, snapHistory, snapWeather, types.Settings{})
+		if assert.Len(t, modelSnap, 24) {
+			assert.Greater(t, modelSnap[5].AvgHomeLoadKWH, 3.5, "weighted pool temperature gap must bridge Day 2 of a cold snap")
+		}
+
+		// Steady winter: 10 mild days (14.0C, 1.0 kWh) followed by 12 steady cold days (1.0C, 5.0 kWh morning)
+		// so hvac.heatingHours[5] is genuinely active (temp spread 13C >= 4C, HDD spread 9C >= 3C), while
+		// recent 1.0C days dominate the pool so weighted-median pool gap decays to zero.
+		startSteady := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+		var steadyHistory []types.EnergyStats
+		var steadyWeather []types.Weather
+		for d := 0; d < 22; d++ {
+			dayTime := startSteady.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				tempC := 14.0
+				load := 1.0
+				if d >= 10 {
+					tempC = 1.0
+					load = 1.2
+					if h <= 8 {
+						load = 5.0
+					}
+				}
+				steadyHistory = append(steadyHistory, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			steadyWeather = append(steadyWeather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+		var todaySteadyHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todaySteadyHW = append(todaySteadyHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: 1.0},
+			})
+		}
+		steadyWeather = append(steadyWeather, types.Weather{TSDayStart: todayStart, ForecastHours: todaySteadyHW})
+
+		modelSteady, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, steadyHistory, steadyWeather, types.Settings{})
+		if assert.Len(t, modelSteady, 24) {
+			assert.InDelta(t, 5.0, modelSteady[5].AvgHomeLoadKWH, 0.35, "gap extrapolation must decay to zero in steady cold winter")
+		}
+	})
+
+	t.Run("SymmetricHotWeatherPoolGapExtrapolatesHeatwaveDay2", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 3, 0, 0, 0, time.UTC)
+		startDate := time.Date(2026, 6, 23, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		for d := 0; d < 27; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				var tempC, load float64
+				switch {
+				case d < 20:
+					tempC = 18.0
+					load = 1.0
+				case d < 26:
+					if h >= 11 && h <= 19 {
+						tempC = 23.0 + float64(d-20)
+						load = 1.0 + 0.40*(tempC-22.0)
+					} else {
+						tempC = 19.0
+						load = 1.0
+					}
+				default:
+					if h >= 11 && h <= 19 {
+						tempC = 33.0
+						load = 1.0 + 0.40*11.0
+					} else {
+						tempC = 24.0
+						load = 1.0
+					}
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todayHotHW, todayMildHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			ts := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC)
+			tempHot := 24.0
+			if h >= 11 && h <= 19 {
+				tempHot = 33.0
+			}
+			todayHotHW = append(todayHotHW, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempHot}})
+			todayMildHW = append(todayMildHW, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: 18.0}})
+		}
+
+		hotWeather := append(append([]types.Weather(nil), weather...), types.Weather{TSDayStart: todayStart, ForecastHours: todayHotHW})
+		modelHot, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, hotWeather, types.Settings{})
+		if assert.Len(t, modelHot, 24) {
+			assert.Greater(t, modelHot[15].AvgHomeLoadKWH, 3.8, "symmetric cooling pool-gap extrapolation must boost Day 2 heatwave load")
+		}
+
+		mildWeather := append(append([]types.Weather(nil), weather...), types.Weather{TSDayStart: todayStart, ForecastHours: todayMildHW})
+		modelMild, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, mildWeather, types.Settings{})
+		if assert.Len(t, modelMild, 24) {
+			assert.Less(t, modelMild[15].AvgHomeLoadKWH, 1.5, "cooling extrapolation must not fire on mild forecast days")
+		}
+	})
+
+	t.Run("SharpHVACSetbackDampensNeighborBlend", func(t *testing.T) {
+		now := time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC)
+		startDate := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 16.0 - float64(d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 1.0
+				if h == 5 || h == 6 {
+					load = 1.0 + 0.55*max(0.0, 10.0-tempC)
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todayHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todayHW = append(todayHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: 1.0},
+			})
+		}
+		weather = append(weather, types.Weather{TSDayStart: todayStart, ForecastHours: todayHW})
+
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
+		if assert.Len(t, model, 24) {
+			assert.Greater(t, model[5].AvgHomeLoadKWH, 4.2, "sharp morning HVAC setback recovery must dampen adjacent quiet-hour blending")
+			assert.Less(t, model[4].AvgHomeLoadKWH, 1.5, "symmetric reverse setback dampening must prevent 05:00 peak from inflating quiet 04:00")
+		}
+	})
+
+	t.Run("HotDayExemptFromUpperIQROnElectricCoolingSite", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 3, 0, 0, 0, time.UTC)
+		startDate := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		for d := 0; d < 28; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				var tempC, load float64
+				switch {
+				case d < 20:
+					tempC = 18.0
+					load = 1.0
+				case d < 26:
+					if h >= 11 && h <= 19 {
+						tempC = 23.0 + float64(d-20)
+						load = 1.0 + 0.40*(tempC-22.0)
+					} else {
+						tempC = 19.0
+						load = 1.0
+					}
+				default:
+					if h >= 11 && h <= 19 {
+						tempC = 35.0
+						load = 4.5
+					} else {
+						tempC = 26.0
+						load = 2.5
+					}
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todayHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			tempC := 26.0
+			if h >= 11 && h <= 19 {
+				tempC = 35.0
+			}
+			todayHW = append(todayHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC},
+			})
+		}
+		weatherWithToday := append(weather, types.Weather{TSDayStart: todayStart, ForecastHours: todayHW})
+
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weatherWithToday, types.Settings{})
+		if assert.Len(t, model, 24) {
+			assert.Greater(t, model[15].AvgHomeLoadKWH, 3.5, "extreme heatwave AC days must be exempt from upper IQR removal")
+		}
+
+		modelNoWeather, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		if assert.Len(t, modelNoWeather, 24) {
+			assert.Less(t, modelNoWeather[15].AvgHomeLoadKWH, 2.0, "non-weather upper IQR outlier filtering must remain intact")
+		}
+	})
+
+	t.Run("WeightedMedianPoolTempPreventsDoubleCountingUnderConservativeP70", func(t *testing.T) {
+		// Under Conservative (P70), once recent 1.0C days represent > 50% of the recency- and
+		// temperature-weighted pool, P70 already equals the 1.0C load (5.05 kWh) and the weighted
+		// median effectivePoolTempC (0.50) equals 1.0C, avoiding a redundant pool-gap boost.
+		now := time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC)
+		startDate := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		for d := 0; d < 18; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			var hw []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				var tempC, load float64
+				switch {
+				case d < 8:
+					tempC = 14.0
+					load = 1.0
+				case d < 12:
+					tempC = 4.5
+					load = 1.0
+					if h <= 8 {
+						load = 1.0 + 0.45*(10.0-tempC)
+					}
+				default:
+					tempC = 1.0
+					load = 1.2
+					if h <= 8 {
+						load = 1.0 + 0.45*(10.0-tempC)
+					}
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+				hw = append(hw, types.HourlyWeather{TSHourStart: ts, HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: tempC}})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dayTime, ForecastHours: hw})
+		}
+
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		var todayHW []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todayHW = append(todayHW, types.HourlyWeather{
+				TSHourStart:          time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				HourlyWeatherMetrics: types.HourlyWeatherMetrics{TemperatureC: 1.0},
+			})
+		}
+		weather = append(weather, types.Weather{TSDayStart: todayStart, ForecastHours: todayHW})
+
+		settings := types.Settings{HomeLoadPredictionStrategy: "conservative"}
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+		if assert.Len(t, model, 24) {
+			assert.InDelta(t, 5.05, model[5].AvgHomeLoadKWH, 0.30, "P70 prediction must not double-count pool gap once 1.0C dominates upper tail")
+		}
+	})
+
 	t.Run("VacationModeShift", func(t *testing.T) {
 		// History baseline has load 2.0.
 		// Yesterday is low (0.5), and today is also low (0.5).

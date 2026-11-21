@@ -798,4 +798,137 @@ func TestDetectIntermittentEVAndLoadSpikes(t *testing.T) {
 			assert.True(t, ignored[dayHourKey{date: "2026-07-04", hour: 1}])
 		})
 	})
+
+	t.Run("ElectricHeatingColdMorningsPreservedWhileStackedEVFiltered", func(t *testing.T) {
+		startDate := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		weatherByHour := make(map[time.Time]float64)
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 16.0 - float64(d)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				weatherByHour[ts.Truncate(time.Hour).UTC()] = tempC
+				load := 1.2
+				if h <= 8 {
+					load = 1.0 + 0.55*max(0.0, 10.0-tempC)
+				}
+				if d == 15 && h == 2 {
+					load += 9.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		ignored, ignoredRef, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(history), weatherByHour, types.Settings{}, 0.5)
+		assert.False(t, ignored[dayHourKey{date: "2026-11-16", hour: 5}], "cold electric heating at 05:00 must be preserved")
+		assert.False(t, ignored[dayHourKey{date: "2026-11-16", hour: 6}], "cold electric heating at 06:00 must be preserved")
+		assert.True(t, ignored[dayHourKey{date: "2026-11-16", hour: 2}], "EV stacked on top of electric heating must be flagged")
+		assert.GreaterOrEqual(t, ignoredRef[dayHourKey{date: "2026-11-16", hour: 2}], 3.0)
+	})
+
+	t.Run("MorningOnlyElectricHeatingPreservedWhileOvernightEVFiltered", func(t *testing.T) {
+		startDate := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		weatherByHour := make(map[time.Time]float64)
+		evDays := map[int]bool{2: true, 6: true, 10: true, 14: true}
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 16.0 - float64(d)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				weatherByHour[ts.Truncate(time.Hour).UTC()] = tempC
+				load := 1.0
+				if h <= 4 {
+					load = 0.8
+					if evDays[d] && (h == 1 || h == 2) {
+						load = 8.5
+					}
+				} else if h >= 6 && h <= 8 {
+					load = 1.4 + 0.50*max(0.0, 10.0-tempC)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		ignored, ignoredRef, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(history), weatherByHour, types.Settings{}, 0.5)
+		for _, dStr := range []string{"2026-11-03", "2026-11-07", "2026-11-11", "2026-11-15"} {
+			for _, hr := range []int{1, 2} {
+				k := dayHourKey{date: dStr, hour: hr}
+				assert.True(t, ignored[k], "overnight EV %s h=%d must be flagged", dStr, hr)
+				assert.Less(t, ignoredRef[k], 1.5, "overnight EV ref load %s h=%d must stay quiet", dStr, hr)
+			}
+		}
+		for _, dStr := range []string{"2026-11-15", "2026-11-16"} {
+			for _, hr := range []int{6, 7, 8} {
+				assert.False(t, ignored[dayHourKey{date: dStr, hour: hr}], "morning heating %s h=%d must be preserved", dStr, hr)
+			}
+		}
+	})
+
+	t.Run("GasFurnaceBlowerSlopeDoesNotMaskColdNightEV", func(t *testing.T) {
+		startDate := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		weatherByHour := make(map[time.Time]float64)
+		evDays := map[int]bool{11: true, 13: true, 15: true}
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 16.0 - float64(d)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				weatherByHour[ts.Truncate(time.Hour).UTC()] = tempC
+				load := 0.8 + 0.025*max(0.0, 10.0-tempC)
+				if evDays[d] && (h == 1 || h == 2) {
+					load = 8.2
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		ignored, _, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(history), weatherByHour, types.Settings{}, 0.5)
+		for _, dStr := range []string{"2026-11-12", "2026-11-14", "2026-11-16"} {
+			for _, hr := range []int{1, 2} {
+				assert.True(t, ignored[dayHourKey{date: dStr, hour: hr}], "cold-night EV %s h=%d must still be flagged", dStr, hr)
+			}
+		}
+	})
+
+	t.Run("ConfirmedCoolingLateEvening23hPreserved", func(t *testing.T) {
+		startDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		weatherByHour := make(map[time.Time]float64)
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 18.0 + float64(d)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				weatherByHour[ts.Truncate(time.Hour).UTC()] = tempC
+				load := 0.8
+				if h >= 11 {
+					load = 1.2 + 0.42*max(0.0, tempC-22.0)
+				}
+				if d == 15 && h == 2 {
+					load = 8.8
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		ignored, _, _, _, _ := detectIntermittentEVAndLoadSpikes(ctx, buildDayMap(history), weatherByHour, types.Settings{}, 0.5)
+		assert.False(t, ignored[dayHourKey{date: "2026-07-15", hour: 23}], "hot late-evening cooling on 2026-07-15 h=23 must be preserved")
+		assert.False(t, ignored[dayHourKey{date: "2026-07-16", hour: 23}], "hot late-evening cooling on 2026-07-16 h=23 must be preserved")
+		assert.True(t, ignored[dayHourKey{date: "2026-07-16", hour: 2}], "overnight EV session at 02:00 must be flagged")
+	})
 }

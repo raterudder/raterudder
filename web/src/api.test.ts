@@ -173,7 +173,7 @@ describe('updateSettings', () => {
         vi.restoreAllMocks();
     });
 
-    it('throws UpdateSettingsError with credentialsSaved=true when server confirms tokens were persisted', async () => {
+    it('throws UpdateSettingsError with credentialsSaved=true when server confirms replacement tokens were persisted', async () => {
         vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
             new Response(
                 JSON.stringify({
@@ -217,7 +217,6 @@ describe('updateSettings', () => {
         expect((caught as Error).message).toBe('failed to verify ess credentials: failed to exchange auth code: invalid_grant');
         expect((caught as UpdateSettingsError).credentialsSaved).toBe(false);
     });
-
     it('falls back to default message with credentialsSaved=false on non-JSON error responses', async () => {
         vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
             new Response('Bad Gateway', { status: 502 })

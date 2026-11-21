@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -65,26 +66,33 @@ type Server struct {
 	controller *controller.Controller
 	weather    weather.Service
 
-	listenAddr string
-	devProxy   string
-	httpServer *http.Server
+	listenAddr      string
+	boundAddrMu     sync.RWMutex
+	boundListenAddr string
+	devProxy        string
+	httpServer      *http.Server
 
-	updateSpecificEmail   string
-	updateOIDCVerifier    tokenVerifier
-	adminEmails           []string
-	oidcAudiences         map[string]string
-	oidcVerifiers         map[string]tokenVerifier
-	bypassAuth            bool
-	encryptionKey         string
-	sessionEncryptionKey  string
-	appsEncryptionKey     string
-	sessionDuration       time.Duration
-	release               string
-	featuresEnvironment   string
-	serverName            string
-	webCacheDuration      time.Duration
-	webImageCacheDuration time.Duration
-	showHidden            bool
+	updateSpecificEmail    string
+	updateSpecificAudience string
+	updateOIDCVerifier     tokenVerifier
+	adminEmails            []string
+	oidcAudiences          map[string]string
+	oidcVerifiers          map[string]tokenVerifier
+	newOIDCProvider        func(context.Context, string) (*oidc.Provider, error)
+	oidcMu                 sync.RWMutex
+	oidcProviders          map[string]*oidc.Provider
+	oidcProviderGroup      singleflight.Group
+	bypassAuth             bool
+	encryptionKey          string
+	sessionEncryptionKey   string
+	appsEncryptionKey      string
+	sessionDuration        time.Duration
+	release                string
+	featuresEnvironment    string
+	serverName             string
+	webCacheDuration       time.Duration
+	webImageCacheDuration  time.Duration
+	showHidden             bool
 
 	clientLimiters     sync.Map
 	cimdCache          sync.Map
@@ -102,11 +110,12 @@ type Server struct {
 	vapidSubject    string
 	gridOutageDelay time.Duration
 
-	featsMu        sync.RWMutex
-	featsFetchMu   sync.Mutex
-	featsEvaluator *feats.Evaluator
-	featsUpdatedAt time.Time
-	featsFetchedAt time.Time
+	featsMu           sync.RWMutex
+	featsFetchMu      sync.Mutex
+	featsEvaluator    *feats.Evaluator
+	featsUpdatedAt    time.Time
+	featsFetchedAt    time.Time
+	featsRetryBackoff time.Duration
 
 	mcpServerOnce sync.Once
 	mcpServer     *mcp.Server
@@ -245,59 +254,34 @@ func (s *Server) configureOIDC(
 	updateSpecificAudience string,
 	newProvider func(context.Context, string) (*oidc.Provider, error),
 ) error {
-	var googleProvider *oidc.Provider
+	if newProvider == nil {
+		newProvider = oidc.NewProvider
+	}
+
 	if len(oidcAudiences) > 0 {
-		s.oidcAudiences = make(map[string]string, len(oidcAudiences))
-		s.oidcVerifiers = make(map[string]tokenVerifier, len(oidcAudiences))
-		for n, a := range oidcAudiences {
-			switch n {
-			case "google":
-				var err error
-				googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-				if err != nil {
-					log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-					return err
-				}
-				s.oidcVerifiers[n] = googleProvider.Verifier(&oidc.Config{ClientID: a}).Verify
-				s.oidcAudiences[n] = a
-			case "apple":
-				provider, err := newProvider(ctx, "https://appleid.apple.com")
-				if err != nil {
-					log.Ctx(ctx).Error("failed to initialize Apple OIDC provider", slog.Any("error", err))
-					return err
-				}
-				s.oidcVerifiers[n] = provider.Verifier(&oidc.Config{ClientID: a}).Verify
-				s.oidcAudiences[n] = a
-			default:
+		for n := range oidcAudiences {
+			if !isUserOIDCClient(n) {
 				log.Ctx(ctx).Error("unsupported oidc audience client", slog.String("client", n))
 				return fmt.Errorf("unsupported oidc audience client: %s", n)
 			}
 		}
 	} else if oidcAudience != "" {
-		var err error
-		googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-		if err != nil {
-			log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-			return err
-		}
-		s.oidcVerifiers = map[string]tokenVerifier{
-			"google": googleProvider.Verifier(&oidc.Config{ClientID: oidcAudience}).Verify,
-		}
-		s.oidcAudiences = map[string]string{
+		oidcAudiences = map[string]string{
 			"google": oidcAudience,
 		}
+	} else {
+		oidcAudiences = nil
 	}
-	if updateSpecificAudience != "" {
-		if googleProvider == nil {
-			var err error
-			googleProvider, err = newProvider(ctx, "https://accounts.google.com")
-			if err != nil {
-				log.Ctx(ctx).Error("failed to initialize Google OIDC provider", slog.Any("error", err))
-				return err
-			}
-		}
-		s.updateOIDCVerifier = googleProvider.Verifier(&oidc.Config{ClientID: updateSpecificAudience}).Verify
-	}
+
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+
+	s.newOIDCProvider = newProvider
+	s.oidcAudiences = oidcAudiences
+	s.updateSpecificAudience = updateSpecificAudience
+	s.oidcProviders = nil
+	s.oidcVerifiers = make(map[string]tokenVerifier)
+	s.updateOIDCVerifier = nil
 	return nil
 }
 
@@ -469,11 +453,25 @@ func (s *Server) getUpdateSpecificAuth(r *http.Request) bool {
 	return false
 }
 
+func (s *Server) boundAddr() string {
+	s.boundAddrMu.RLock()
+	defer s.boundAddrMu.RUnlock()
+	return s.boundListenAddr
+}
+
 // Run starts the HTTP server and blocks until the context is canceled or an error occurs.
 // It also handles graceful shutdown when the context is done.
 func (s *Server) Run(ctx context.Context) error {
-	// trigger a refresh of the feature config
-	s.getFeatsEvaluator(ctx)
+	bgCtx, cancelBg := context.WithCancel(ctx)
+	defer cancelBg()
+
+	// Warm OIDC providers once in parallel with initial feature flag loading so neither blocks the other.
+	go s.warmOIDC(bgCtx)
+	// Load feature flags (blocking up to featsFetchTimeout) and keep retrying in the background if it fails.
+	s.retryFeatsUntilLoaded(bgCtx)
+	if ctx.Err() != nil {
+		return nil
+	}
 
 	s.httpServer = &http.Server{
 		Addr:              s.listenAddr,
@@ -484,12 +482,21 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       15 * time.Second,
 	}
 
-	// use a channel to capturing server errors
+	ln, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return fmt.Errorf("server error: %w", err)
+	}
+	addr := ln.Addr().String()
+	s.boundAddrMu.Lock()
+	s.boundListenAddr = addr
+	s.boundAddrMu.Unlock()
+
+	// use a channel to capture server errors
 	errChan := make(chan error, 1)
 	go func() {
 		defer close(errChan)
-		log.Ctx(ctx).InfoContext(ctx, "starting server", slog.String("addr", s.listenAddr))
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Ctx(ctx).InfoContext(ctx, "starting server", slog.String("addr", addr))
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- err
 		}
 	}()
@@ -521,6 +528,11 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if s.storage == nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: storage not configured")
+		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+		return
+	}
 	if err := s.storage.Ping(r.Context()); err != nil {
 		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
 		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
@@ -544,22 +556,38 @@ func isImageFile(p string) bool {
 
 func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		hasTrailingSlash := strings.HasSuffix(r.URL.Path, "/")
+		rooted := path.Clean("/" + r.URL.Path)
+		cleanedPath := path.Clean(strings.TrimPrefix(rooted, "/"))
+		if !fs.ValidPath(cleanedPath) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if rooted != "/" && hasTrailingSlash {
+			r.URL.Path = rooted + "/"
+		} else {
+			r.URL.Path = rooted
+		}
+
+		isWellKnownPath := cleanedPath == ".well-known" || strings.HasPrefix(cleanedPath, ".well-known/")
 		isAssetsPath := cleanedPath == "assets" || strings.HasPrefix(cleanedPath, "assets/")
 		// Default to serving index.html for unknown paths (SPA)
-		if r.URL.Path != "/" {
+		if rooted != "/" {
 			// Check if the file exists in the filesystem
 			f, err := dir.Open(cleanedPath)
 			if err == nil {
 				stat, statErr := f.Stat()
 				f.Close()
-				if statErr == nil && stat.IsDir() && isAssetsPath {
+				if statErr == nil && stat.IsDir() && (isWellKnownPath || isAssetsPath) {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
+			} else if errors.Is(err, fs.ErrInvalid) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
 			} else if errors.Is(err, fs.ErrNotExist) {
 				// Don't fallback to index.html for .well-known or /assets/
-				if strings.HasPrefix(r.URL.Path, "/.well-known/") || isAssetsPath {
+				if isWellKnownPath || isAssetsPath {
 					// we don't write JSON here because we don't know what file type is expected
 					http.Error(w, "not found", http.StatusNotFound)
 					return

@@ -181,7 +181,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			siteCtx, cancel := context.WithTimeout(gCtx, 60*time.Second)
+			siteCtx, cancel := context.WithTimeout(gCtx, 90*time.Second)
 			defer cancel()
 
 			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))
@@ -650,7 +650,7 @@ func (s *Server) performSiteUpdate(
 }
 
 func (s *Server) insertAction(ctx context.Context, siteID string, action types.Action) error {
-	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	return s.storage.InsertAction(insertCtx, siteID, action)
 }
@@ -1579,12 +1579,16 @@ func (s *Server) getCombinedHistory(
 	return combinedEnergy, combinedWeather, nil
 }
 
-// getSummaryLatestDate returns the latest TSDayStart from the slice of HistorySummary.
+// getSummaryLatestDate returns the latest energy TSDayStart from the slice of HistorySummary.
+// Weather entries are intentionally ignored: weather can be stored and summarized for a day
+// (e.g. after the 6-hour threshold) before delayed ESS energy telemetry arrives, and advancing
+// the latest summary date based on weather would cause updateHistorySummary to skip backfilling
+// that day's late-arriving energy data.
 func getSummaryLatestDate(summaries []types.HistorySummary) time.Time {
 	var latest time.Time
 	for _, s := range summaries {
 		for _, day := range s.Energy {
-			if latest.IsZero() || day.TSDayStart.After(latest) {
+			if !day.TSDayStart.IsZero() && (latest.IsZero() || day.TSDayStart.After(latest)) {
 				latest = day.TSDayStart
 			}
 		}
