@@ -1,331 +1,146 @@
 import { extractError, extractErrorWithBody, fetchSettings, fetchAuthStatus, login, logout } from './apiCore';
+import {
+    ActionReason,
+    AppType,
+    BatteryMode,
+    HIGH_HOME_LOAD_MIN_KW_HIGH,
+    HIGH_HOME_LOAD_MIN_KW_LOW,
+    HIGH_HOME_LOAD_MIN_KW_MEDIUM,
+    SolarMode,
+    type Action,
+    type ActionsAndSavingsResponse,
+    type AdminFeatureFlag,
+    type AdminSite,
+    type AlertSensitivity,
+    type AnomalyAlertSensitivity,
+    type AuthStatus,
+    type CreateAppResponse,
+    type CredentialsPayload,
+    type ESSAuthStatus,
+    type ESSCredentialField,
+    type ESSCredentialFieldChoice,
+    type ESSCredentialFieldType,
+    type ESSProviderInfo,
+    type EnergyHistoryRes,
+    type EnergyStats,
+    type EveningSummaryFlavor,
+    type FeatureCriteria,
+    type Feedback,
+    type ForecastResponse,
+    type HistoryEnergyResponse,
+    type HourlySavingsStatsDebugging,
+    type InterestSubmission,
+    type MinBatterySOCPeriod,
+    type MorningSummaryFlavor,
+    type NotificationSubscriptionsResponse,
+    type OAuthClientInfo,
+    type Plan,
+    type PlanPeriod,
+    type PriceHistoryRes,
+    type PriceInfo,
+    type PushSubscription,
+    type PushSubscriptionKeys,
+    type SavingsStats,
+    type Settings,
+    type SettingsUpdateRequest,
+    type ShortPlanPeriod,
+    type SimulationParams,
+    type Site,
+    type SiteLocation,
+    type SitePermissions,
+    type SystemAlarm,
+    type SystemStatus,
+    type SystemStorm,
+    type TimePeriod,
+    type UserApp,
+    type UserNotificationSettings,
+    type UserSite,
+    type UtilityFeesPeriod,
+    type UtilityHourPeriod,
+    type UtilityOptionChoice,
+    type UtilityOptionType,
+    type UtilityProviderInfo,
+    type UtilityRateInfo,
+    type UtilityRateOption,
+    type UtilityRateOptions,
+    type VPPEvent,
+    type WeatherRes,
+} from './apiTypes.gen';
+
 export { fetchSettings, fetchAuthStatus, login, logout };
 
-export interface SystemAlarm {
-    name: string;
-    description: string;
-    timestamp: string;
-    code: string;
-}
-
-export interface SystemStorm {
-    description: string;
-    tsStart: string;
-    tsEnd: string;
-}
-
-export interface SystemStatus {
-    alarms?: SystemAlarm[];
-    storms?: SystemStorm[];
-    // Add other fields from backend if useful, but alarms is what we need now
-    [key: string]: any;
-}
-
-export const ActionReason = {
-    AlwaysChargeBelowThreshold: 'alwaysChargeBelowThreshold',
-    MissingBattery: 'missingBattery',
-    DeficitCharge: 'deficitCharge',
-    ArbitrageChargeExport: 'arbitrageChargeExport',
-    ArbitrageChargeSave: 'arbitrageChargeSave',
-    DischargeBeforeCapacity: 'dischargeBeforeCapacity',
-    DeficitSaveForPeak: 'deficitSaveForPeak',
-    DischargeAtPeak: 'dischargeAtPeak',
-    ArbitrageSave: 'dischargeAtPeak',
-    SufficientBattery: 'sufficientBattery',
-    SufficientBatteryTillCharge: 'sufficientBatteryTillCharge',
-    EmergencyMode: 'emergencyMode',
-    HasAlarms: 'hasAlarms',
-    GridUnavailable: 'gridUnavailable',
-    WaitingToCharge: 'waitingToCharge',
-    PreventSolarCurtailment: 'preventSolarCurtailment',
-    HoldSimilarPrice: 'holdSimilarPrice',
-    BatteryAtReserve: 'batteryAtReserve',
-    VPPActive: 'vppActive',
-    VPPPrep: 'vppPrep',
-    EVChargingStandby: 'evChargingStandby',
-    ArbitrageHoldExport: 'arbitrageHoldExport',
-    ArbitrageHoldSave: 'arbitrageHoldSave',
-    DirectExport: 'directExport',
-    // deprecated - but we don't delete them because old actions still have them
-    DeficitSave: 'deficitSave',
-    ArbitrageCharge: 'arbitrageCharge',
-    ArbitrageHold: 'arbitrageHold',
-} as const;
-
-export type ActionReason = typeof ActionReason[keyof typeof ActionReason];
-
-export interface PriceInfo {
-    tsStart: string;
-    tsEnd: string;
-    dollarsPerKWH: number;
-    gridUseDollarsPerKWH: number; // delivery adder; true grid charge cost = dollarsPerKWH + gridUseDollarsPerKWH
-}
-
-export interface SimulationParams {
-    clippingCapKWH: number;
-    panelAzimuth: number;
-    panelTilt: number;
-    averageSolarEfficiency: number;
-}
-
-export interface Action {
-    timestamp: string;
-    systemTimestamp?: string;
-    batteryMode: number;
-    solarMode: number;
-    targetBatteryMode?: number;
-    targetSolarMode?: number;
-    chargeToSoc?: number;
-    reason?: ActionReason;
-    description: string;
-    currentPrice?: PriceInfo;
-    futurePrice?: PriceInfo;
-    deficitAt?: string;
-    hitBufferedDeficitAt?: string;
-    hitThresholdDeficitAt?: string;
-    capacityAt?: string;
-    systemStatus?: SystemStatus;
-    dryRun?: boolean;
-    fault?: boolean;
-    paused?: boolean;
-    simulationParams?: SimulationParams;
-    recentHomeUsageKWH?: number;
-    q3HomeUsageKWH?: number;
-    recentHomeUsageAbnormal?: boolean;
-    plan?: Plan;
-}
-
-export const BatteryMode = {
-    NoChange: 0,
-    Standby: 1,
-    ChargeAny: 2,
-    Load: -1,
-    Export: -2,
-} as const;
-
-export type BatteryMode = typeof BatteryMode[keyof typeof BatteryMode];
-
-export const SolarMode = {
-    NoChange: 0,
-    NoExport: 1,
-    Any: 2,
-    Export: 3,
-} as const;
-
-export type SolarMode = typeof SolarMode[keyof typeof SolarMode];
-
-export interface PlanPeriod {
-    tsStart: string;
-    tsEnd: string;
-    durationHours: number;
-    importDollars: number;
-    exportDollars?: number;
-    batteryMode: BatteryMode;
-    solarMode: SolarMode;
-    reason: ActionReason;
-    startSoc: number;
-    endSoc: number;
-    reserveSOC?: number;
-    loadKWH?: number;
-    solarKWH?: number;
-    gridImportKWH: number;
-    gridExportKWH: number;
-    costDollars: number;
-}
-
-export interface Plan {
-    tsCreated: string;
-    horizonHours: number;
-    totalProjectedCost: number;
-    totalExportCredits: number;
-    netEconomicBenefit: number;
-    periods: PlanPeriod[];
-}
-
-export const fetchActions = async (start: Date, end: Date, siteID?: string): Promise<Action[]|null> => {
-    const startStr = start.toISOString();
-    const endStr = end.toISOString();
-    const query = new URLSearchParams({
-        start: startStr,
-        end: endStr,
-    });
-    if (siteID) {
-        query.append('siteID', siteID);
-    }
-    const response = await fetch(`/api/history/actions?${query.toString()}`);
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to fetch actions'));
-    }
-    return response.json();
+export {
+    ActionReason,
+    AppType,
+    BatteryMode,
+    HIGH_HOME_LOAD_MIN_KW_HIGH,
+    HIGH_HOME_LOAD_MIN_KW_LOW,
+    HIGH_HOME_LOAD_MIN_KW_MEDIUM,
+    SolarMode,
+    type Action,
+    type ActionsAndSavingsResponse,
+    type AdminFeatureFlag,
+    type AdminSite,
+    type AlertSensitivity,
+    type AnomalyAlertSensitivity,
+    type AuthStatus,
+    type CreateAppResponse,
+    type CredentialsPayload,
+    type ESSAuthStatus,
+    type ESSCredentialField,
+    type ESSCredentialFieldChoice,
+    type ESSCredentialFieldType,
+    type ESSProviderInfo,
+    type EnergyHistoryRes,
+    type EnergyStats,
+    type EveningSummaryFlavor,
+    type FeatureCriteria,
+    type Feedback,
+    type ForecastResponse,
+    type HistoryEnergyResponse,
+    type HourlySavingsStatsDebugging,
+    type InterestSubmission,
+    type MinBatterySOCPeriod,
+    type MorningSummaryFlavor,
+    type NotificationSubscriptionsResponse,
+    type OAuthClientInfo,
+    type Plan,
+    type PlanPeriod,
+    type PriceHistoryRes,
+    type PriceInfo,
+    type PushSubscription,
+    type PushSubscriptionKeys,
+    type SavingsStats,
+    type Settings,
+    type ShortPlanPeriod,
+    type SimulationParams,
+    type Site,
+    type SiteLocation,
+    type SitePermissions,
+    type SystemAlarm,
+    type SystemStatus,
+    type SystemStorm,
+    type TimePeriod,
+    type UserApp,
+    type UserNotificationSettings,
+    type UserSite,
+    type UtilityFeesPeriod,
+    type UtilityHourPeriod,
+    type UtilityOptionChoice,
+    type UtilityOptionType,
+    type UtilityProviderInfo,
+    type UtilityRateInfo,
+    type UtilityRateOption,
+    type UtilityRateOptions,
+    type VPPEvent,
+    type WeatherRes,
 };
-
-export interface SavingsStats {
-    timestamp: string;
-    endTimestamp?: string;
-    cost: number;
-    credit: number;
-    batterySavings: number;
-    solarSavings: number;
-    avoidedCost: number;
-    chargingCost: number;
-    solarGenerated: number;
-    gridImported: number;
-    gridExported: number;
-    homeUsed: number;
-    batteryUsed: number;
-    totalSavingsDollars?: number;
-    solarAndBatterySavingsDollars?: number;
-    rateRudderSavingsDollars?: number;
-    selfConsumptionCostDollars?: number;
-    selfConsumptionCreditDollars?: number;
-    gridOnlyCostDollars?: number;
-    storedEnergyValueDollars?: number;
-    estimated?: boolean;
-}
-
-export interface UtilityRateOptions {
-    generationRate?: string;
-    location?: string;
-    [key: string]: any;
-}
-
-export interface UtilityOptionChoice {
-    value: string;
-    name: string;
-}
-
-export type UtilityOptionType = 'select' | 'switch';
-
-export interface UtilityRateOption {
-    field: string;
-    name: string;
-    type: UtilityOptionType;
-    description?: string;
-    choices?: UtilityOptionChoice[];
-    default?: any;
-    hidden?: boolean;
-    dependsOn?: Record<string, any[]>;
-}
-
-export interface UtilityProviderInfo {
-  id: string;
-  name: string;
-  ratesNotice?: string;
-  rates?: UtilityRateInfo[];
-  hidden?: boolean;
-}
-
-export interface UtilityRateInfo {
-  id: string;
-  name: string;
-  options?: UtilityRateOption[];
-}
-
-export interface ESSCredentialFieldChoice {
-    value: string;
-    name: string;
-}
-
-export type ESSCredentialFieldType = 'select' | 'string' | 'password';
-
-export interface ESSCredentialField {
-  field: string;
-  name: string;
-  type: ESSCredentialFieldType;
-  required: boolean;
-  description?: string;
-  choices?: ESSCredentialFieldChoice[];
-  default?: any;
-  stage?: number;
-  hidden?: boolean;
-  oneTime?: boolean;
-}
-
-export interface ESSProviderInfo {
-  id: string;
-  name: string;
-  credentials?: ESSCredentialField[];
-  oAuthURLs?: Record<string, string>;
-  oAuthKey?: ESSCredentialField;
-  hidden?: boolean;
-}
-
-export interface SiteLocation {
-    postalCode?: string;
-    latitude?: number;
-    longitude?: number;
-    city?: string;
-    countryCode?: string;
-    timeZone?: string;
-    elevation?: number;
-}
-
-export interface Settings {
-    dryRun: boolean;
-    pause: boolean;
-    countryCode: string;
-    postalCode: string;
-    location?: SiteLocation;
-    release: string;
-    minArbitrageDifferenceDollarsPerKWH: number;
-    minBatteryExportDifferenceDollarsPerKWH?: number;
-    minBatterySOC: number;
-    minBatterySOCPeriods?: MinBatterySOCPeriod[];
-    evChargingStandby?: boolean;
-    customGridSettings?: boolean;
-    manageTOUSchedules?: boolean;
-    gridChargeBatteries: boolean;
-    gridExportSolar: boolean;
-    gridExportBatteries: boolean;
-    solarTrendRatioMax: number;
-    solarBellCurveMultiplier: number;
-    solarNetMeteringCreditsValue: string;
-    utilityProvider: string;
-    utilityRate: string;
-    utilityRateOptions: UtilityRateOptions;
-    ess: string;
-    hasCredentials: {
-        [key: string]: boolean;
-    };
-    features?: Record<string, boolean>;
-    notifications?: Record<string, UserNotificationSettings>;
-    essAuthStatus?: {
-        consecutiveFailures: number;
-        lastAttempt: string;
-        consecutiveSetFailures?: number;
-        consecutiveUserFailures?: number;
-        lastUserAttempt?: string;
-    };
-    homeLoadPredictionStrategy?: string;
-    optimizationProfile?: string;
-}
-
-export interface UtilityHourPeriod {
-    hourStart: number;
-    minuteStart?: number;
-    hourEnd: number;
-    minuteEnd?: number;
-}
-
-export interface TimePeriod {
-    name?: string;
-    start?: string;
-    end?: string;
-    hours?: UtilityHourPeriod[];
-    daysOfTheWeek?: number[];
-    specificDates?: string[];
-}
-
-export interface MinBatterySOCPeriod extends TimePeriod {
-    minBatterySOC: number;
-    utilityPeriodName?: string;
-}
 
 export const fetchUtilityPeriods = async (
     siteID?: string,
     utilityProvider?: string,
     utilityRate?: string,
-    utilityRateOptions?: Record<string, any>
+    utilityRateOptions?: UtilityRateOptions
 ): Promise<TimePeriod[] | null> => {
     const query = new URLSearchParams();
     if (siteID) {
@@ -347,21 +162,6 @@ export const fetchUtilityPeriods = async (
     return response.json();
 };
 
-export interface FranklinCredentials {
-    username: string;
-    md5Password: string;
-    gatewayID: string;
-    userType?: string;
-}
-
-export type CredentialsPayload = Record<string, Record<string, any>>;
-
-export interface SettingsUpdate {
-    settings: Settings;
-    credentials?: CredentialsPayload;
-    siteID?: string;
-}
-
 export class UpdateSettingsError extends Error {
     credentialsSaved: boolean;
 
@@ -373,18 +173,15 @@ export class UpdateSettingsError extends Error {
 }
 
 export const updateSettings = async (settings: Settings, siteID?: string, credentials?: CredentialsPayload): Promise<void> => {
-    const payload: any = {
-        ...settings,
-        siteID: siteID,
+    const { hasCredentials, features, ...baseSettings } = settings;
+    void hasCredentials;
+    void features;
+
+    const payload: SettingsUpdateRequest = {
+        ...baseSettings,
+        ...(siteID ? { siteID } : {}),
+        ...(credentials ? { credentials } : {}),
     };
-
-    if (siteID) {
-        payload.siteID = siteID;
-    }
-
-    if (credentials) {
-        payload.credentials = credentials;
-    }
 
     const response = await fetch('/api/settings', {
         method: 'POST',
@@ -398,24 +195,6 @@ export const updateSettings = async (settings: Settings, siteID?: string, creden
         throw new UpdateSettingsError(message, Boolean(body?.credentialsSaved));
     }
 };
-
-export interface Site {
-    id: string;
-}
-
-export interface UserSite extends Site {
-    name: string;
-}
-
-export interface AuthStatus {
-    loggedIn: boolean;
-    userID?: string;
-    email: string;
-    authRequired: boolean;
-    clientIDs: Record<string, string>;
-    sites?: UserSite[];
-    termsAccepted?: boolean;
-}
 
 export const acceptTerms = async (): Promise<void> => {
     const response = await fetch('/api/auth/acceptTerms', {
@@ -453,24 +232,6 @@ export const deleteUser = async (): Promise<void> => {
         throw new Error(await extractError(response, 'Failed to delete user'));
     }
 };
-
-export interface AdminSite extends Site {
-    lastAction?: Action;
-    alias?: string;
-    features?: Record<string, boolean>;
-}
-
-export interface FeatureCriteria {
-    siteIDs?: string[];
-    sitePercent?: number;
-    value: boolean;
-}
-
-export interface AdminFeatureFlag {
-    name: string;
-    defaultValue: boolean;
-    criteria?: FeatureCriteria[];
-}
 
 export const listFeatures = async (): Promise<AdminFeatureFlag[]> => {
     const response = await fetch('/api/list/features', {
@@ -600,16 +361,6 @@ export const fetchESSList = async (siteID?: string): Promise<ESSProviderInfo[]> 
     return response.json();
 };
 
-export interface Feedback {
-    id: string;
-    sentiment: string;
-    comment: string;
-    siteID: string;
-    userID: string;
-    extra: Record<string, string>;
-    timestamp: string;
-}
-
 export async function submitFeedback(siteID: string, sentiment: string, comment: string, extra: Record<string, string>): Promise<void> {
     const response = await fetch('/api/feedback', {
         method: 'POST',
@@ -636,18 +387,6 @@ export async function listFeedback(limit?: number, lastFeedbackID?: string): Pro
     return response.json();
 }
 
-export interface InterestSubmission {
-    email: string;
-    utility: string;
-    battery: string;
-    utilityProviderName: string;
-    state: string;
-    planName: string;
-    batteryName: string;
-    comments: string;
-    timestamp: string;
-}
-
 export async function submitInterest(submission: Omit<InterestSubmission, 'email' | 'timestamp'>): Promise<void> {
     const response = await fetch('/api/interest', {
         method: 'POST',
@@ -671,68 +410,6 @@ export async function listInterest(limit?: number): Promise<InterestSubmission[]
     return response.json();
 }
 
-export interface EnergyHistoryRes {
-    tsHourStart: string;
-    avgBatterySOC: number;
-    solarKWH: number;
-    homeLoadKWH?: number;
-}
-
-export interface PriceHistoryRes {
-    tsHourStart: string;
-    dollarsPerKWH: number;
-    gridUseDollarsPerKWH: number;
-    exportDollarsPerKWH?: number;
-}
-
-export interface WeatherRes {
-    tsHourStart: string;
-    irradiance: number;
-    temperatureC?: number;
-    temperatureCellC?: number;
-    snowfallCM?: number;
-    improvedSolarGeneration?: number;
-    unclippedSolarGeneration?: number;
-    improvedHomeLoad?: number;
-    snowDepthCM?: number;
-    tempFactor?: number;
-    snowFactor?: number;
-}
-
-export interface ForecastResponse {
-    plan?: Plan;
-    latestAction?: Action;
-    energyHistory?: EnergyHistoryRes[];
-    priceHistory?: PriceHistoryRes[];
-    futurePrices?: PriceHistoryRes[];
-    weather?: WeatherRes[];
-    updated?: string;
-}
-export interface EnergyStats {
-    tsHourStart: string;
-    timeLocation?: string;
-    minBatterySOC: number;
-    maxBatterySOC: number;
-    batteryChargedKWH: number;
-    batteryUsedKWH: number;
-    solarKWH: number;
-    homeKWH: number;
-    gridExportKWH: number;
-    gridImportKWH: number;
-    vppExportKWH?: number;
-    batteryToHomeKWH: number;
-    solarToHomeKWH: number;
-    solarToBatteryKWH: number;
-    solarToGridKWH: number;
-    batteryToGridKWH: number;
-    alarms?: SystemAlarm[];
-}
-
-export interface HistoryEnergyResponse {
-    energy: EnergyStats[];
-    weather: WeatherRes[];
-}
-
 export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<HistoryEnergyResponse> => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -752,16 +429,22 @@ export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<H
     return response.json();
 };
 
-export const submitESSStage = async (ess: string, credentials: Record<string, any>, siteID?: string): Promise<void> => {
-    const payload: any = {
+export const submitESSStage = async (
+    ess: string,
+    credentials: Record<string, string | number | boolean | undefined>,
+    siteID?: string
+): Promise<void> => {
+    const payload: {
+        ess: string;
+        credentials: CredentialsPayload;
+        siteID?: string;
+    } = {
         ess,
         credentials: {
             [ess]: credentials,
         },
+        ...(siteID ? { siteID } : {}),
     };
-    if (siteID) {
-        payload.siteID = siteID;
-    }
     const response = await fetch('/api/ess/stage', {
         method: 'POST',
         headers: {
@@ -777,12 +460,6 @@ export const submitESSStage = async (ess: string, credentials: Record<string, an
 interface SavingsPeriod {
     start: Date;
     end: Date;
-}
-
-export interface ActionsAndSavingsResponse {
-    actions: Action[];
-    savings: SavingsStats;
-    savingsPeriods?: SavingsStats[];
 }
 
 export const fetchActionsAndSavings = async (
@@ -815,68 +492,6 @@ export const fetchActionsAndSavings = async (
     return response.json();
 };
 
-export type MorningSummaryFlavor = 'metrics_heavy' | 'home_planner' | 'executive' | 'pilot';
-export type EveningSummaryFlavor = 'metrics_heavy' | 'home_planner' | 'executive' | 'pilot';
-export type AnomalyAlertSensitivity = '' | 'disabled' | 'low' | 'medium' | 'high';
-export type AlertSensitivity = 'disabled' | 'low' | 'medium' | 'high';
-
-export interface UserNotificationSettings {
-    allAlertSensitivity?: AlertSensitivity | '';
-    morningSummaryEnabled: boolean;
-    morningSummaryHour: number;
-    morningSummaryFlavor: MorningSummaryFlavor;
-    eveningSummaryEnabled?: boolean;
-    eveningSummaryHour?: number;
-    eveningSummaryFlavor?: EveningSummaryFlavor;
-    gridOutageAlert?: boolean;
-    priceSpikeAlert?: AnomalyAlertSensitivity;
-    solarUnderproductionAlert?: AnomalyAlertSensitivity;
-    highHomeLoadAlert?: AnomalyAlertSensitivity;
-    vppDispatchAlert?: boolean;
-    quietPeriods?: TimePeriod[];
-}
-
-export interface PushSubscriptionKeys {
-    p256dh: string;
-    auth: string;
-}
-
-export interface PushSubscription {
-    id?: string;
-    endpoint: string;
-    keys: PushSubscriptionKeys;
-    userAgent?: string;
-    appType?: string;
-    tsCreated?: string;
-}
-
-export interface NotificationLog {
-    id: string;
-    tsCreated: string;
-    userID: string;
-    type: string;
-    flavor: string;
-    title: string;
-    body: string;
-    success: boolean;
-    muted?: boolean;
-    statusCode: number;
-    error?: string;
-    clicked?: boolean;
-    tsClicked?: string;
-    metadata?: Record<string, string>;
-}
-
-export interface MonthlyNotificationLogs {
-    tsMonthStart: string;
-    logs: NotificationLog[];
-}
-
-export interface NotificationSubscriptionsResponse {
-    subscriptions: PushSubscription[];
-    notificationsEnabled: boolean;
-}
-
 export const fetchNotificationSubscriptions = async (): Promise<NotificationSubscriptionsResponse> => {
     const response = await fetch('/api/notifications/subscriptions');
     if (!response.ok) {
@@ -893,7 +508,10 @@ export const fetchVAPIDPublicKey = async (): Promise<ArrayBuffer> => {
     return await response.arrayBuffer();
 };
 
-export const subscribePushNotification = async (subscription: PushSubscription, sendTest: boolean = false): Promise<void> => {
+export const subscribePushNotification = async (
+    subscription: Omit<PushSubscription, 'id' | 'tsCreated'> & Partial<Pick<PushSubscription, 'id' | 'tsCreated'>>,
+    sendTest: boolean = false
+): Promise<void> => {
     const response = await fetch('/api/notifications/subscribe', {
         method: 'POST',
         headers: {
@@ -931,27 +549,6 @@ export const updateNotificationSettings = async (siteID: string, settings: UserN
         throw new Error(await extractError(response, 'Failed to update notification settings'));
     }
 };
-
-export const AppType = {
-    APIKey: 1,
-    OAuth: 2,
-} as const;
-
-export type AppType = typeof AppType[keyof typeof AppType];
-
-export interface UserApp {
-    id: string;
-    name: string;
-    clientDomain?: string;
-    type: AppType;
-    siteID: string;
-    tsCreated: string;
-}
-
-export interface CreateAppResponse {
-    app: UserApp;
-    token: string;
-}
 
 export const fetchApps = async (siteID: string): Promise<UserApp[]> => {
     const query = new URLSearchParams({ siteID });
@@ -992,13 +589,6 @@ export const revokeApp = async (siteID: string, id: string): Promise<void> => {
         throw new Error(await extractError(response, 'Failed to revoke app'));
     }
 };
-
-export interface OAuthClientInfo {
-    clientName: string;
-    redirectURI: string;
-    clientDomain?: string;
-    verified: boolean;
-}
 
 export const fetchOAuthClientInfo = async (params: {
     clientID: string;

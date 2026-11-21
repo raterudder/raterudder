@@ -17,6 +17,7 @@ describe('SavingsHero', () => {
         gridExported: 5,
         homeUsed: 40,
         batteryUsed: 10,
+        hourlyDebugging: [],
         totalSavingsDollars: 32,
         solarAndBatterySavingsDollars: 25,
         rateRudderSavingsDollars: 7,

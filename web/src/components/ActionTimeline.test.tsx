@@ -2,8 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ActionTimeline from './ActionTimeline';
-import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
+import { BatteryMode, SolarMode, ActionReason, type Action, type SystemStatus } from '../api';
 import { type ActionSummary } from '../utils/dashboardUtils';
+
+const baseSystemStatus: SystemStatus = {
+    timestamp: '2026-06-25T12:00:00Z',
+    batterySOC: 50,
+    batteryKW: 0,
+    batteryCapacityKWH: 13.5,
+    maxBatteryChargeKW: 5,
+    maxBatteryDischargeKW: 5,
+    solarKW: 0,
+    gridKW: 0,
+    homeKW: 1,
+    elevatedMinBatterySOC: false,
+    batteryAboveMinSOC: true,
+};
 
 describe('ActionTimeline', () => {
     it('renders regular action items', () => {
@@ -11,6 +25,8 @@ describe('ActionTimeline', () => {
             timestamp: new Date().toISOString(),
             batteryMode: BatteryMode.Standby,
             solarMode: SolarMode.NoExport,
+            reason: '' as Action['reason'],
+            systemStatus: baseSystemStatus,
             description: 'Test action'
         }];
         render(<ActionTimeline groupedActions={actions} />);
@@ -60,6 +76,7 @@ describe('ActionTimeline', () => {
             batteryMode: BatteryMode.ChargeAny,
             solarMode: SolarMode.NoExport,
             reason: ActionReason.VPPPrep,
+            systemStatus: baseSystemStatus,
             description: 'Upcoming VPP Event prep charging'
         }];
         const { container } = render(<ActionTimeline groupedActions={actions} />);
@@ -75,6 +92,7 @@ describe('ActionTimeline', () => {
             batteryMode: BatteryMode.Standby,
             solarMode: SolarMode.NoExport,
             reason: ActionReason.VPPActive,
+            systemStatus: baseSystemStatus,
             description: 'Active VPP Event'
         }];
         const { container } = render(<ActionTimeline groupedActions={actions} />);
@@ -90,8 +108,9 @@ describe('ActionTimeline', () => {
             batteryMode: BatteryMode.Standby,
             solarMode: SolarMode.Any,
             reason: ActionReason.HoldSimilarPrice,
+            systemStatus: baseSystemStatus,
             description: 'Holding battery for solar export',
-            currentPrice: { dollarsPerKWH: 0.21, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            currentPrice: { provider: 'comed', dollarsPerKWH: 0.21, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
         }];
         const { container } = render(<ActionTimeline groupedActions={actions} />);
         expect(screen.getByText('Standby for Similar Price')).toBeInTheDocument();
@@ -107,32 +126,36 @@ describe('ActionTimeline', () => {
                 batteryMode: BatteryMode.Export,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
+                systemStatus: baseSystemStatus,
                 description: 'Battery & Solar Grid Export',
-                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: { provider: 'comed', dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             },
             {
                 timestamp: new Date().toISOString(),
                 batteryMode: BatteryMode.Export,
                 solarMode: SolarMode.NoExport,
                 reason: ActionReason.DirectExport,
+                systemStatus: baseSystemStatus,
                 description: 'Direct Battery Export',
-                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: { provider: 'comed', dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             },
             {
                 timestamp: new Date().toISOString(),
                 batteryMode: BatteryMode.Standby,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
+                systemStatus: baseSystemStatus,
                 description: 'Peak Defense Standby',
-                currentPrice: { dollarsPerKWH: 0.40, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: { provider: 'comed', dollarsPerKWH: 0.40, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             },
             {
                 timestamp: new Date().toISOString(),
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
+                systemStatus: baseSystemStatus,
                 description: 'Direct Solar Export',
-                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: { provider: 'comed', dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             }
         ];
         const { container } = render(<ActionTimeline groupedActions={actions} />);
@@ -155,6 +178,7 @@ describe('ActionTimeline', () => {
                 batteryMode: BatteryMode.Export,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
+                systemStatus: baseSystemStatus,
                 capacityAt: new Date(Date.now() + 3600000).toISOString(),
                 description: 'Direct Export'
             }
@@ -200,7 +224,7 @@ describe('ActionTimeline', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBatteryTillCharge,
                 description: 'Night action',
-                systemStatus: { solarKW: 0, batterySOC: 60 }
+                systemStatus: { ...baseSystemStatus, solarKW: 0, batterySOC: 60 }
             }
         ];
         const { rerender } = render(<ActionTimeline groupedActions={actions} />);
@@ -213,7 +237,7 @@ describe('ActionTimeline', () => {
                 groupedActions={[
                     {
                         ...actions[0],
-                        systemStatus: { solarKW: 3.2, batterySOC: 60 }
+                        systemStatus: { ...baseSystemStatus, solarKW: 3.2, batterySOC: 60 }
                     }
                 ]}
             />
@@ -261,7 +285,7 @@ describe('ActionTimeline', () => {
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
                 description: 'Detailed explanation text',
-                systemStatus: { batterySOC: 75, solarKW: 2.1 }
+                systemStatus: { ...baseSystemStatus, batterySOC: 75, solarKW: 2.1 }
             }
         ];
         render(<ActionTimeline groupedActions={actions} collapsible />);

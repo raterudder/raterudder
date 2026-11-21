@@ -9,6 +9,9 @@ import {
     fetchVAPIDPublicKey,
     subscribePushNotification,
     unsubscribePushNotification,
+    HIGH_HOME_LOAD_MIN_KW_LOW,
+    HIGH_HOME_LOAD_MIN_KW_MEDIUM,
+    HIGH_HOME_LOAD_MIN_KW_HIGH,
     type Settings,
     type UserNotificationSettings,
     type PushSubscription,
@@ -1445,9 +1448,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                     Alerts you when home electricity consumption surges abnormally, warning whether your battery will run out or has already reached reserve, with actionable electricity price guidance. Automatically suppressed during detected overnight EV charging (when EV Charging Standby is enabled), solar coverage, and off-peak cheapest rate hours (on low/medium sensitivity).
                                                                 </p>
                                                                 <ul>
-                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during extreme, unusually high home load surges for this time of day.</li>
-                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts on large, unusual home load surges for this time of day.</li>
-                                                                    <li><strong>High Sensitivity:</strong> Alerts on elevated home loads above your typical usage for closer monitoring.</li>
+                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during extreme, unusually high home load surges (&ge; {HIGH_HOME_LOAD_MIN_KW_LOW.toFixed(1)} kW) for this time of day.</li>
+                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts on large, unusual home load surges (&ge; {HIGH_HOME_LOAD_MIN_KW_MEDIUM.toFixed(1)} kW) for this time of day.</li>
+                                                                    <li><strong>High Sensitivity:</strong> Alerts on elevated home loads (&ge; {HIGH_HOME_LOAD_MIN_KW_HIGH.toFixed(1)} kW) above your typical usage for closer monitoring.</li>
                                                                 </ul>
                                                                 <NotificationSample
                                                                     headerLabel="Sample High Home Load Alert"

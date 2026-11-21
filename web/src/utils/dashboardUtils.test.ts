@@ -25,7 +25,29 @@ import {
     getHourInTimeZone,
     type ActionSummary
 } from './dashboardUtils';
-import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
+import { BatteryMode, SolarMode, ActionReason, type Action, type SystemStatus, type PriceInfo } from '../api';
+
+const baseSystemStatus: SystemStatus = {
+    timestamp: '2026-07-22T00:00:00Z',
+    batterySOC: 50,
+    batteryKW: 0,
+    batteryCapacityKWH: 13.5,
+    maxBatteryChargeKW: 5,
+    maxBatteryDischargeKW: 5,
+    solarKW: 0,
+    gridKW: 0,
+    homeKW: 1,
+    elevatedMinBatterySOC: false,
+    batteryAboveMinSOC: true,
+};
+
+const makePrice = (dollarsPerKWH: number, gridUseDollarsPerKWH = 0, tsStart = '', tsEnd = ''): PriceInfo => ({
+    provider: 'comed',
+    dollarsPerKWH,
+    gridUseDollarsPerKWH,
+    tsStart,
+    tsEnd,
+});
 
 describe('dashboardUtils', () => {
     describe('getCurrencySymbol', () => {
@@ -89,7 +111,9 @@ describe('dashboardUtils', () => {
             description: 'Fallback',
             timestamp: '',
             batteryMode: BatteryMode.Standby,
-            solarMode: SolarMode.NoExport
+            solarMode: SolarMode.NoExport,
+            reason: '' as Action['reason'],
+            systemStatus: baseSystemStatus,
         };
 
         it('returns description if no reason is present', () => {
@@ -106,8 +130,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.SufficientBatteryTillCharge,
                 deficitAt: '2026-05-20T19:24:00-05:00',
-                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.15),
+                futurePrice: makePrice(0.05)
             };
             const text = getReasonText(action);
             expect(text).toContain('If we rely on the battery, it would deplete');
@@ -122,8 +146,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.SufficientBatteryTillCharge,
                 deficitAt: '2026-05-20T19:24:00-05:00',
-                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.15),
+                futurePrice: makePrice(0.05)
             };
             const text = getReasonText(action, '£');
             expect(text).toContain('£ 0.050');
@@ -136,8 +160,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.SufficientBatteryTillCharge,
                 deficitAt: '2026-05-20T19:24:00-05:00',
-                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.055),
+                futurePrice: makePrice(0.055)
             };
             const text1 = getReasonText(action1);
             expect(text1).toContain('charging window with the same price is coming up');
@@ -148,8 +172,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.SufficientBatteryTillCharge,
                 deficitAt: '2026-05-20T19:24:00-05:00',
-                currentPrice: { dollarsPerKWH: 0.060, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.060),
+                futurePrice: makePrice(0.055)
             };
             const text2 = getReasonText(action2);
             expect(text2).toContain('charging window with the same price is coming up');
@@ -161,8 +185,8 @@ describe('dashboardUtils', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.DeficitCharge,
-                currentPrice: { dollarsPerKWH: 0.1, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.5, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.1),
+                futurePrice: makePrice(0.5)
             };
             const text = getReasonText(action);
             expect(text).toContain('Charging now');
@@ -174,8 +198,8 @@ describe('dashboardUtils', () => {
             const action1 = {
                 ...baseAction,
                 reason: ActionReason.DeficitCharge,
-                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.055),
+                futurePrice: makePrice(0.055)
             };
             const text1 = getReasonText(action1);
             expect(text1).toContain('same price as');
@@ -185,8 +209,8 @@ describe('dashboardUtils', () => {
             const action2 = {
                 ...baseAction,
                 reason: ActionReason.DeficitCharge,
-                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.060, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.055),
+                futurePrice: makePrice(0.060)
             };
             const text2 = getReasonText(action2);
             expect(text2).toContain('same price as');
@@ -203,7 +227,7 @@ describe('dashboardUtils', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.HoldSimilarPrice,
-                currentPrice: { dollarsPerKWH: 0.21, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.21)
             };
             const text = getReasonText(action);
             expect(text).toContain('Current electricity price ($ 0.210/kWh) is comparable to the expected export credit');
@@ -224,8 +248,8 @@ describe('dashboardUtils', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.VPPPrep,
-                currentPrice: { dollarsPerKWH: 0.08, gridUseDollarsPerKWH: 0.02, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.25, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.08, 0.02),
+                futurePrice: makePrice(0.25, 0.05)
             };
             const text = getReasonText(action);
             expect(text).toContain('Preparing for upcoming Virtual Power Plant (VPP) event.');
@@ -237,8 +261,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.DeficitSaveForPeak,
                 deficitAt: '2026-06-16T08:33:00Z',
-                currentPrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.05),
+                futurePrice: makePrice(0.10)
             };
             const text = getReasonText(action);
             expect(text).toContain('If we rely on the battery, it would deplete around');
@@ -251,8 +275,8 @@ describe('dashboardUtils', () => {
                 reason: ActionReason.DeficitSaveForPeak,
                 deficitAt: '0001-01-01T00:00:00Z',
                 hitBufferedDeficitAt: '2026-06-16T08:33:00Z',
-                currentPrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.05),
+                futurePrice: makePrice(0.10)
             };
             const text = getReasonText(action);
             expect(text).toContain('If we rely on the battery, it would deplete around');
@@ -266,8 +290,8 @@ describe('dashboardUtils', () => {
                 deficitAt: '0001-01-01T00:00:00Z',
                 hitThresholdDeficitAt: '0001-01-01T00:00:00Z',
                 hitBufferedDeficitAt: '0001-01-01T00:00:00Z',
-                currentPrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.05),
+                futurePrice: makePrice(0.10)
             };
             const text = getReasonText(action);
             expect(text).not.toContain('If we rely on the battery, it would deplete');
@@ -279,8 +303,8 @@ describe('dashboardUtils', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.WaitingToCharge,
-                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.15),
+                futurePrice: makePrice(0.05)
             };
             const text = getReasonText(action);
             expect(text).toContain('A cheaper charging window is coming up');
@@ -291,8 +315,8 @@ describe('dashboardUtils', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.WaitingToCharge,
-                currentPrice: { dollarsPerKWH: 0.092, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.091, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(0.092),
+                futurePrice: makePrice(0.091)
             };
             const text = getReasonText(action);
             expect(text).toContain('A charging window is coming up which is similar in price or cheaper than now');
@@ -306,7 +330,7 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.ArbitrageChargeSave,
                 solarMode: SolarMode.NoExport,
-                currentPrice: { dollarsPerKWH: -0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+                currentPrice: makePrice(-0.05)
             };
             expect(getReasonText(action)).toContain('Disabled solar export');
         });
@@ -339,8 +363,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.ArbitrageChargeExport,
                 batteryMode: BatteryMode.ChargeAny,
-                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.300, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                currentPrice: makePrice(0.208),
+                futurePrice: makePrice(0.300),
                 plan: {
                     ...basePlan,
                     periods: [
@@ -389,8 +413,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.ArbitrageHoldExport,
                 batteryMode: BatteryMode.Standby,
-                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
-                futurePrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                currentPrice: makePrice(0.15),
+                futurePrice: makePrice(0.35),
                 plan: {
                     ...basePlan,
                     periods: [
@@ -434,7 +458,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
-                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
+                currentPrice: makePrice(0.35, 0.05),
             };
             const textSolar = getReasonText(actionSolar);
             expect(textSolar).toContain('High solar export credit window active');
@@ -445,7 +469,7 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 batteryMode: BatteryMode.Standby,
                 reason: ActionReason.DirectExport,
-                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
+                currentPrice: makePrice(0.35, 0.05),
             };
             const textStandby = getReasonText(actionStandby);
             expect(textStandby).toContain('High electricity price window active');
@@ -457,7 +481,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Export,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
-                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                currentPrice: makePrice(0.50),
             };
             const textBatteryExport = getReasonText(actionBatteryExport);
             expect(textBatteryExport).toContain('Discharging battery and exporting solar to the grid');
@@ -619,10 +643,12 @@ describe('dashboardUtils', () => {
             const action: Action = {
                 timestamp: '2026-07-22T04:09:26.947167547Z',
                 systemTimestamp: '0001-01-01T00:00:00Z',
-                batteryMode: 1,
-                solarMode: 2,
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Any,
                 description: 'test',
+                reason: '' as Action['reason'],
                 systemStatus: {
+                    ...baseSystemStatus,
                     timestamp: '2026-07-22T00:09:26.947167547-04:00'
                 }
             };
@@ -654,12 +680,9 @@ describe('dashboardUtils', () => {
                 timestamp: '2026-07-22T04:00:00Z',
                 batteryMode: BatteryMode.ChargeAny,
                 solarMode: SolarMode.NoExport,
-                currentPrice: {
-                    tsStart: '2026-07-22T04:00:00Z',
-                    tsEnd: '2026-07-22T05:00:00Z',
-                    dollarsPerKWH: 0.05,
-                    gridUseDollarsPerKWH: 0
-                },
+                reason: ActionReason.AlwaysChargeBelowThreshold,
+                systemStatus: baseSystemStatus,
+                currentPrice: makePrice(0.05, 0, '2026-07-22T04:00:00Z', '2026-07-22T05:00:00Z'),
                 plan: {
                     tsCreated: '2026-07-22T04:00:00Z',
                     horizonHours: 2,
@@ -694,6 +717,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.BatteryAtReserve,
+                systemStatus: baseSystemStatus,
                 plan: {
                     tsCreated: '2026-07-22T04:00:00Z',
                     horizonHours: 2,
@@ -728,7 +752,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
-                systemStatus: { batterySOC: 78, solarKW: 6.2, homeKW: 1.1 },
+                systemStatus: { ...baseSystemStatus, batterySOC: 78, solarKW: 6.2, homeKW: 1.1 },
                 plan: {
                     tsCreated: '2026-07-22T10:27:00-05:00',
                     horizonHours: 24,
@@ -776,7 +800,7 @@ describe('dashboardUtils', () => {
             const fullSolarAction: Action = {
                 ...chargingAction,
                 timestamp: '2026-07-22T12:00:00-05:00',
-                systemStatus: { batterySOC: 100, solarKW: 5.0, homeKW: 1.2 },
+                systemStatus: { ...baseSystemStatus, batterySOC: 100, solarKW: 5.0, homeKW: 1.2 },
                 plan: {
                     ...chargingAction.plan!,
                     tsCreated: '2026-07-22T12:00:00-05:00',
@@ -835,7 +859,9 @@ describe('dashboardUtils', () => {
                 description: 'test',
                 timestamp: '2026-07-22T04:00:00Z',
                 batteryMode: BatteryMode.Load,
-                solarMode: SolarMode.Any
+                solarMode: SolarMode.Any,
+                reason: '' as Action['reason'],
+                systemStatus: baseSystemStatus,
             };
             expect(getActionTitle({ ...base, reason: ActionReason.SufficientBatteryTillCharge })).toBe('Using Battery Until Cheap Window');
             expect(getActionTitle({ ...base, reason: ActionReason.SufficientBattery })).toBe('Self-Powered');
@@ -855,7 +881,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
-                systemStatus: { batterySOC: 75, solarKW: 5.5, homeKW: 1.2 },
+                systemStatus: { ...baseSystemStatus, batterySOC: 75, solarKW: 5.5, homeKW: 1.2 },
             };
             expect(getActionLoadSubType(solarCharging, 68)).toBe('solarCharge');
             expect(getReasonText(solarCharging, '$', 'solarCharge')).toBe(
@@ -868,7 +894,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
-                systemStatus: { batterySOC: 99.6, solarKW: 4.5, homeKW: 1.1 },
+                systemStatus: { ...baseSystemStatus, batterySOC: 99.6, solarKW: 4.5, homeKW: 1.1 },
             };
             expect(getActionLoadSubType(solarFull, 99.6)).toBe('solarFull');
             expect(getReasonText(solarFull, '$', 'solarFull')).toBe(
@@ -881,7 +907,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
-                systemStatus: { batterySOC: 82, solarKW: 0.1, homeKW: 2.5 },
+                systemStatus: { ...baseSystemStatus, batterySOC: 82, solarKW: 0.1, homeKW: 2.5 },
             };
             expect(getActionLoadSubType(batteryDischarging, 86)).toBe('load');
         });
@@ -902,17 +928,19 @@ describe('dashboardUtils', () => {
             expect(hasSolarActivity({
                 description: '',
                 timestamp: '',
-                batteryMode: 1,
-                solarMode: 2,
-                systemStatus: { solarKW: 0 }
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Any,
+                reason: '' as Action['reason'],
+                systemStatus: { ...baseSystemStatus, solarKW: 0 }
             })).toBe(false);
 
             expect(hasSolarActivity({
                 description: '',
                 timestamp: '',
-                batteryMode: 1,
-                solarMode: 2,
-                systemStatus: { solarKW: 2.4 }
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Any,
+                reason: '' as Action['reason'],
+                systemStatus: { ...baseSystemStatus, solarKW: 2.4 }
             })).toBe(true);
         });
     });
@@ -930,7 +958,8 @@ describe('dashboardUtils', () => {
                     timestamp: '2026-07-22T16:30:00-05:00',
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
-                    reason: ActionReason.SufficientBatteryTillCharge
+                    reason: ActionReason.SufficientBatteryTillCharge,
+                    systemStatus: baseSystemStatus,
                 },
                 count: 4,
                 alarms: new Set(),
@@ -953,7 +982,7 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Export,
                 solarMode: SolarMode.Export,
                 reason: ActionReason.DirectExport,
-                systemStatus: { batterySOC: 89 }
+                systemStatus: { ...baseSystemStatus, batterySOC: 89 }
             };
 
             const standbySummary: ActionSummary = {
@@ -967,7 +996,8 @@ describe('dashboardUtils', () => {
                     timestamp: '2026-07-22T14:20:00-05:00',
                     batteryMode: BatteryMode.Standby,
                     solarMode: SolarMode.Any,
-                    reason: ActionReason.ArbitrageHoldExport
+                    reason: ActionReason.ArbitrageHoldExport,
+                    systemStatus: baseSystemStatus,
                 },
                 count: 6,
                 alarms: new Set(),
@@ -995,7 +1025,8 @@ describe('dashboardUtils', () => {
                     timestamp: '2026-07-22T11:30:00-05:00',
                     batteryMode: BatteryMode.ChargeAny,
                     solarMode: SolarMode.Any,
-                    reason: ActionReason.ArbitrageChargeExport
+                    reason: ActionReason.ArbitrageChargeExport,
+                    systemStatus: baseSystemStatus,
                 },
                 count: 15,
                 alarms: new Set(),
@@ -1032,7 +1063,8 @@ describe('dashboardUtils', () => {
                 timestamp: '2026-07-22T10:00:00-05:00',
                 batteryMode: BatteryMode.Standby,
                 solarMode: SolarMode.Any,
-                systemStatus: { batterySOC: 100 }
+                reason: '' as Action['reason'],
+                systemStatus: { ...baseSystemStatus, batterySOC: 100 }
             };
             const summary = buildDaySummary([standbyAction], '$');
             expect(summary.beats).toHaveLength(1);
@@ -1054,7 +1086,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Standby,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.WaitingToCharge,
-                    systemStatus: { solarKW: 1.5, batterySOC: 31.4 }
+                    systemStatus: { ...baseSystemStatus, solarKW: 1.5, batterySOC: 31.4 }
                 },
                 count: 2,
                 alarms: new Set(),
@@ -1084,7 +1116,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Standby,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.WaitingToCharge,
-                    systemStatus: { solarKW: 0, batterySOC: 49.9 }
+                    systemStatus: { ...baseSystemStatus, solarKW: 0, batterySOC: 49.9 }
                 },
                 count: 3,
                 alarms: new Set(),
@@ -1123,7 +1155,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Standby,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.HoldSimilarPrice,
-                    systemStatus: { batterySOC: 79.7 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 79.7 }
                 },
                 count: 3,
                 alarms: new Set(),
@@ -1146,8 +1178,8 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.ChargeAny,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.ArbitrageChargeExport,
-                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
-                systemStatus: { batterySOC: 65.8 }
+                currentPrice: makePrice(0.208, 0, '2026-10-19T21:00:00-04:00', ''),
+                systemStatus: { ...baseSystemStatus, batterySOC: 65.8 }
             };
 
             const singleStandby: Action = {
@@ -1156,8 +1188,8 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Standby,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.ArbitrageHoldExport,
-                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
-                systemStatus: { batterySOC: 65.1 }
+                currentPrice: makePrice(0.208, 0, '2026-10-19T21:00:00-04:00', ''),
+                systemStatus: { ...baseSystemStatus, batterySOC: 65.1 }
             };
 
             const initialCharge: ActionSummary = {
@@ -1172,7 +1204,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.ChargeAny,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.ArbitrageChargeExport,
-                    systemStatus: { batterySOC: 49.0 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 49.0 }
                 },
                 count: 3,
                 alarms: new Set(),
@@ -1202,8 +1234,8 @@ describe('dashboardUtils', () => {
                 batteryMode: BatteryMode.Load,
                 solarMode: SolarMode.Any,
                 reason: ActionReason.SufficientBattery,
-                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
-                systemStatus: { batterySOC: 65.1 }
+                currentPrice: makePrice(0.208, 0, '2026-10-19T21:00:00-04:00', ''),
+                systemStatus: { ...baseSystemStatus, batterySOC: 65.1 }
             };
 
             const summaryWithOtherPeriod = buildDaySummary(
@@ -1230,7 +1262,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.SufficientBattery,
-                    systemStatus: { batterySOC: 100, solarKW: 5.2, homeKW: 1.4 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 100, solarKW: 5.2, homeKW: 1.4 }
                 },
                 count: 9,
                 alarms: new Set(),
@@ -1261,7 +1293,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.SufficientBattery,
-                    systemStatus: { batterySOC: 99, solarKW: 6.0, homeKW: 1.1 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 99, solarKW: 6.0, homeKW: 1.1 }
                 },
                 count: 10,
                 alarms: new Set(),
@@ -1292,7 +1324,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.SufficientBattery,
-                    systemStatus: { batterySOC: 40, solarKW: 0.1, homeKW: 1.5 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 40, solarKW: 0.1, homeKW: 1.5 }
                 },
                 count: 23,
                 alarms: new Set(),
@@ -1339,7 +1371,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.DischargeAtPeak,
-                    systemStatus: { batterySOC: 50, solarKW: 0, homeKW: 1.5 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 50, solarKW: 0, homeKW: 1.5 }
                 },
                 count: 11,
                 alarms: new Set(),
@@ -1369,7 +1401,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.ChargeAny,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.DeficitCharge,
-                    systemStatus: { batterySOC: 77, solarKW: 0.2, homeKW: 0.9 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 77, solarKW: 0.2, homeKW: 0.9 }
                 },
                 count: 3,
                 alarms: new Set(),
@@ -1400,7 +1432,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.SufficientBattery,
-                    systemStatus: { batterySOC: 58, solarKW: 1.5, homeKW: 0.8 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 58, solarKW: 1.5, homeKW: 0.8 }
                 },
                 count: 14,
                 alarms: new Set(),
@@ -1431,7 +1463,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Load,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.SufficientBattery,
-                    systemStatus: { batterySOC: 45, solarKW: 0.8, homeKW: 1.0 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 45, solarKW: 0.8, homeKW: 1.0 }
                 },
                 count: 2,
                 alarms: new Set(),
@@ -1462,7 +1494,7 @@ describe('dashboardUtils', () => {
                     batteryMode: BatteryMode.Standby,
                     solarMode: SolarMode.Any,
                     reason: ActionReason.DeficitSaveForPeak,
-                    systemStatus: { batterySOC: 46, solarKW: 0.2, homeKW: 0.9 }
+                    systemStatus: { ...baseSystemStatus, batterySOC: 46, solarKW: 0.2, homeKW: 0.9 }
                 },
                 count: 30,
                 alarms: new Set(),

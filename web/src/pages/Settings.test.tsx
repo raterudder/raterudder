@@ -945,7 +945,7 @@ describe('App & Settings', () => {
         };
         (fetchSettings as any).mockResolvedValue(enphaseSettings);
         (api.fetchESSList as any).mockResolvedValue([
-            ...defaultESSProviders,
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
             {
                 id: 'enphase',
                 name: 'Enphase',
@@ -1305,8 +1305,8 @@ describe('App & Settings', () => {
             vi.useRealTimers();
         }
 
-        // Editing an optional non-login field (e.g. serialNumber / energySiteID) after credentialsSaved: true must NOT require another login
-        const optionalSiteInput = screen.getByLabelText(/Energy Site ID \(Optional\)/i);
+        // Editing an optional non-login field (serialNumber) after credentialsSaved: true must NOT require another login
+        const optionalSiteInput = screen.getByLabelText(/Serial Number \(Optional\)/i);
         await user.type(optionalSiteInput, 'TG-SERIAL-42');
         expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
 
@@ -1321,7 +1321,7 @@ describe('App & Settings', () => {
             ess: 'tesla',
         }), expect.any(String), {
             tesla: {
-                energySiteID: 'TG-SERIAL-42',
+                serialNumber: 'TG-SERIAL-42',
             },
         });
 
@@ -1373,7 +1373,7 @@ describe('App & Settings', () => {
             hasCredentials: {}
         });
         (api.fetchESSList as any).mockResolvedValue([
-            ...defaultESSProviders,
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
             {
                 id: 'enphase',
                 name: 'Enphase',
@@ -1548,7 +1548,7 @@ describe('App & Settings', () => {
             hasCredentials: {}
         });
         (api.fetchESSList as any).mockResolvedValue([
-            ...defaultESSProviders,
+            ...defaultESSProviders.filter(p => p.id !== 'enphase'),
             {
                 id: 'enphase',
                 name: 'Enphase',
@@ -2470,7 +2470,7 @@ describe('App & Settings', () => {
                 features: { enphaseExportSchedules: true },
             });
             (api.fetchESSList as any).mockResolvedValue([
-                ...defaultESSProviders,
+                ...defaultESSProviders.filter(p => p.id !== 'enphase'),
                 {
                     id: 'enphase',
                     name: 'Enphase',
@@ -2540,7 +2540,7 @@ describe('App & Settings', () => {
                 features: { enphaseExportSchedules: true },
             });
             (api.fetchESSList as any).mockResolvedValue([
-                ...defaultESSProviders,
+                ...defaultESSProviders.filter(p => p.id !== 'enphase'),
                 {
                     id: 'enphase',
                     name: 'Enphase',

@@ -353,6 +353,8 @@ describe('AdminPage', () => {
         vi.mocked(listSites).mockResolvedValue([
             {
                 id: 'site1',
+                inviteCode: 'invite-1',
+                permissions: [],
                 features: { alphaFeature: true, solarModelV2: true },
             },
         ]);

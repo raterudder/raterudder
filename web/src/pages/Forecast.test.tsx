@@ -11,7 +11,7 @@ const { fetchModeling, fetchSettings } = api;
 
 vi.mock('../api');
 
-function makeTestPlan(): Plan {
+function makeTestPlan(): Plan & { periods: PlanPeriod[] } {
     const base = new Date('2026-02-11T14:00:00Z');
     const periods: PlanPeriod[] = [];
     for (let i = 0; i < 24; i++) {

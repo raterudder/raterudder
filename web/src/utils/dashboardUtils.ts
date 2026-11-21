@@ -927,7 +927,7 @@ const classifySummaryItem = (
 
 export const getSummaryBeatHeadline = (
     category: SummaryPhaseCategory,
-    action: Pick<Action, 'reason' | 'batteryMode' | 'solarMode' | 'systemStatus'>,
+    action: Pick<Action, 'reason' | 'batteryMode' | 'solarMode'> & Partial<Pick<Action, 'systemStatus'>>,
     isCurrent: boolean,
     solarPoweredFlat = false
 ): string => {

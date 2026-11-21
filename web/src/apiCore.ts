@@ -1,4 +1,4 @@
-import type { AuthStatus, Settings } from './api';
+import type { AuthStatus, Settings } from './apiTypes.gen';
 
 export interface ExtractedError {
     message: string;
