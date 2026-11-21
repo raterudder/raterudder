@@ -439,6 +439,9 @@ func (s UserNotificationSettings) RealTimeAlertSensitivity(customVal string) str
 	if s.AllAlertSensitivity != "" {
 		return s.AllAlertSensitivity
 	}
+	if customVal == "disabled" {
+		return ""
+	}
 	return customVal
 }
 

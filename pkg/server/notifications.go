@@ -3714,19 +3714,25 @@ func (s *Server) handleUpdateNotificationSettings(w http.ResponseWriter, r *http
 		req.Settings.EveningSummaryFlavor = defaultSummaryFlavor
 	}
 	switch req.Settings.PriceSpikeAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.PriceSpikeAlert = ""
 	default:
 		writeJSONError(w, "invalid price spike alert sensitivity", http.StatusBadRequest)
 		return
 	}
 	switch req.Settings.SolarUnderproductionAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.SolarUnderproductionAlert = ""
 	default:
 		writeJSONError(w, "invalid solar underproduction alert sensitivity", http.StatusBadRequest)
 		return
 	}
 	switch req.Settings.HighHomeLoadAlert {
-	case "", "disabled", "low", "medium", "high":
+	case "", "low", "medium", "high":
+	case "disabled":
+		req.Settings.HighHomeLoadAlert = ""
 	default:
 		writeJSONError(w, "invalid high home load alert sensitivity", http.StatusBadRequest)
 		return

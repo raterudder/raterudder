@@ -127,6 +127,9 @@ const alertSensitivityLabels: Record<AlertSensitivity, string> = {
     high: 'High Sensitivity'
 };
 
+const normalizePerAlertSensitivity = (val?: AnomalyAlertSensitivity): AnomalyAlertSensitivity =>
+    (!val || val === 'disabled') ? '' : val;
+
 interface NotificationSampleProps {
     headerLabel?: string;
     title: string;
@@ -320,9 +323,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     : defaultSettingsValues.eveningSummaryHour,
                 eveningSummaryFlavor: server.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
                 gridOutageAlert: server.gridOutageAlert ?? defaultSettingsValues.gridOutageAlert,
-                priceSpikeAlert: server.priceSpikeAlert || '',
-                solarUnderproductionAlert: server.solarUnderproductionAlert || '',
-                highHomeLoadAlert: server.highHomeLoadAlert || '',
+                priceSpikeAlert: normalizePerAlertSensitivity(server.priceSpikeAlert),
+                solarUnderproductionAlert: normalizePerAlertSensitivity(server.solarUnderproductionAlert),
+                highHomeLoadAlert: normalizePerAlertSensitivity(server.highHomeLoadAlert),
                 vppDispatchAlert: server.vppDispatchAlert ?? defaultSettingsValues.vppDispatchAlert,
                 quietPeriods: server.quietPeriods || [],
             } : defaultSettingsValues;
@@ -447,14 +450,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSwitchToCustom = () => {
-        const sens = draftSettings.allAlertSensitivity || 'medium';
+        const sens: AnomalyAlertSensitivity = draftSettings.allAlertSensitivity === 'disabled'
+            ? ''
+            : (draftSettings.allAlertSensitivity || 'medium');
         handleUpdateDraft({
             allAlertSensitivity: '',
             gridOutageAlert: draftSettings.gridOutageAlert ?? true,
             vppDispatchAlert: draftSettings.vppDispatchAlert ?? true,
-            priceSpikeAlert: (draftSettings.priceSpikeAlert && draftSettings.priceSpikeAlert !== 'disabled') ? draftSettings.priceSpikeAlert : sens,
-            solarUnderproductionAlert: (draftSettings.solarUnderproductionAlert && draftSettings.solarUnderproductionAlert !== 'disabled') ? draftSettings.solarUnderproductionAlert : sens,
-            highHomeLoadAlert: (draftSettings.highHomeLoadAlert && draftSettings.highHomeLoadAlert !== 'disabled') ? draftSettings.highHomeLoadAlert : sens,
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert) || sens,
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert) || sens,
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert) || sens,
         });
     };
 
@@ -477,6 +482,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         const settingsToSave: UserNotificationSettings = {
             ...draftSettings,
             allAlertSensitivity: draftSettings.allAlertSensitivity ?? '',
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert),
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert),
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert),
             morningSummaryFlavor: draftSettings.morningSummaryFlavor || defaultSettingsValues.morningSummaryFlavor,
             morningSummaryHour: draftSettings.morningSummaryHour ?? defaultSettingsValues.morningSummaryHour,
             eveningSummaryFlavor: draftSettings.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,

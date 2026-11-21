@@ -1172,6 +1172,69 @@ describe('NotificationModal', () => {
         });
     });
 
+    it('normalizes disabled per-alert sensitivities to empty strings when switching from Disabled to Custom', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    allAlertSensitivity: 'disabled',
+                    priceSpikeAlert: 'disabled',
+                    solarUnderproductionAlert: 'disabled',
+                    highHomeLoadAlert: 'disabled',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        });
+
+        // Switch from Recommended ("disabled") to Custom
+        fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+
+        expect(screen.getByRole('button', { name: 'Custom' })).toHaveClass('active');
+
+        // Save Preferences
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    allAlertSensitivity: '',
+                    priceSpikeAlert: '',
+                    solarUnderproductionAlert: '',
+                    highHomeLoadAlert: '',
+                })
+            );
+            expect(mockOnSaved).toHaveBeenCalled();
+            expect(mockOnClose).toHaveBeenCalled();
+        });
+    });
+
     it('renders Android browser guidance banner when visiting on Android in browser tab and hides when standalone', async () => {
         vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
         window.matchMedia = vi.fn().mockReturnValue({ matches: false });
