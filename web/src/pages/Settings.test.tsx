@@ -711,7 +711,7 @@ describe('App & Settings', () => {
         fireEvent.click(saveBtn);
 
         await waitFor(() => {
-            expect(screen.getByText('The Email field is required.')).toBeInTheDocument();
+            expect(screen.getAllByText('The Email field is required.').length).toBeGreaterThan(0);
         });
 
         // Fill Email, still missing Password
@@ -720,7 +720,7 @@ describe('App & Settings', () => {
         fireEvent.click(saveBtn);
 
         await waitFor(() => {
-            expect(screen.getByText('The Password field is required.')).toBeInTheDocument();
+            expect(screen.getAllByText('The Password field is required.').length).toBeGreaterThan(0);
         });
     });
 
@@ -1122,13 +1122,13 @@ describe('App & Settings', () => {
 
         // Expect error to be shown
         await waitFor(() => {
-            expect(screen.getByText('Failed to verify credentials')).toBeInTheDocument();
+            expect(screen.getAllByText('Failed to verify credentials').length).toBeGreaterThan(0);
         });
 
         // Click save again - now it should fail because authCode was cleared and is required
         await user.click(saveBtn);
         await waitFor(() => {
-            expect(screen.getByText('Login to connect your energy system.')).toBeInTheDocument();
+            expect(screen.getAllByText('Login to connect your energy system.').length).toBeGreaterThan(0);
         });
     });
 
@@ -1168,7 +1168,7 @@ describe('App & Settings', () => {
         await user.click(saveBtn);
 
         await waitFor(() => {
-            expect(screen.getByText('failed to verify ess credentials: upstream status 503')).toBeInTheDocument();
+            expect(screen.getAllByText('failed to verify ess credentials: upstream status 503').length).toBeGreaterThan(0);
         });
         expect(updateSettings).toHaveBeenCalledTimes(1);
         expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
@@ -1234,7 +1234,7 @@ describe('App & Settings', () => {
         await user.click(saveBtn);
 
         await waitFor(() => {
-            expect(screen.getByText(/The authorization code expired\. Please click 'Login to link account' again/i)).toBeInTheDocument();
+            expect(screen.getAllByText(/The authorization code expired\. Please click 'Login to link account' again/i).length).toBeGreaterThan(0);
         });
         expect(updateSettings).toHaveBeenCalledTimes(1);
         expect(updateSettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
@@ -1248,7 +1248,7 @@ describe('App & Settings', () => {
         // Clicking Save Settings again without re-authenticating MUST NOT reuse hasCredentials.tesla on the old account
         await user.click(saveBtn);
         await waitFor(() => {
-            expect(screen.getByText('Login to connect your energy system.')).toBeInTheDocument();
+            expect(screen.getAllByText('Login to connect your energy system.').length).toBeGreaterThan(0);
         });
         expect(updateSettings).toHaveBeenCalledTimes(1);
 
@@ -1267,7 +1267,7 @@ describe('App & Settings', () => {
         await user.click(saveBtn);
 
         await waitFor(() => {
-            expect(screen.getByText('failed to verify ess credentials: upstream status 503')).toBeInTheDocument();
+            expect(screen.getAllByText('failed to verify ess credentials: upstream status 503').length).toBeGreaterThan(0);
             expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
         });
         expect(updateSettings).toHaveBeenCalledTimes(2);
@@ -1285,7 +1285,7 @@ describe('App & Settings', () => {
             }));
         });
         await waitFor(() => {
-            expect(screen.getByText(/Authorization was cancelled or permissions were not granted/i)).toBeInTheDocument();
+            expect(screen.getAllByText(/Authorization was cancelled or permissions were not granted/i).length).toBeGreaterThan(0);
             expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
         });
 
@@ -1442,7 +1442,7 @@ describe('App & Settings', () => {
         await user.click(screen.getByText('Save Settings'));
 
         await waitFor(() => {
-            expect(screen.getByText('failed to fetch location data: invalid postal code')).toBeInTheDocument();
+            expect(screen.getAllByText('failed to fetch location data: invalid postal code').length).toBeGreaterThan(0);
         });
         // Auth code should NOT have been cleared since the server rejected before ESS auth
         expect(screen.getByText(/Received code! Save Settings below to complete./i)).toBeInTheDocument();
@@ -1482,7 +1482,7 @@ describe('App & Settings', () => {
         await user.click(screen.getByText('Save Settings'));
 
         await waitFor(() => {
-            expect(screen.getByText('failed to verify ess credentials: dial tcp: network is unreachable')).toBeInTheDocument();
+            expect(screen.getAllByText('failed to verify ess credentials: dial tcp: network is unreachable').length).toBeGreaterThan(0);
             expect(screen.getByText(/Account linked! Click Save Settings below to retry/i)).toBeInTheDocument();
         });
 
@@ -1616,12 +1616,12 @@ describe('App & Settings', () => {
             Object.assign(new Error('failed to verify ess credentials: failed to exchange auth code: invalid_grant'), { credentialsSaved: false })
         );
         await user.click(screen.getByText('Save Settings'));
-        await screen.findByText(/failed to exchange auth code: invalid_grant/i);
+        await screen.findAllByText(/failed to exchange auth code: invalid_grant/i);
         expect(updateSettings).toHaveBeenCalledTimes(1);
 
         // Clicking Save Settings again MUST NOT send { tesla: {} } against the old account
         await user.click(screen.getByText('Save Settings'));
-        await screen.findByText('Login to connect your energy system.');
+        await screen.findAllByText('Login to connect your energy system.');
         expect(updateSettings).toHaveBeenCalledTimes(1);
 
         // 2. Fresh authCode exchanges (credentialsSaved: true), then fails validation with 503
@@ -1646,12 +1646,12 @@ describe('App & Settings', () => {
             Object.assign(new Error('failed to verify ess credentials: unauthorized'), { credentialsSaved: false })
         );
         await user.click(screen.getByText('Save Settings'));
-        await screen.findByText(/failed to verify ess credentials: unauthorized/i);
+        await screen.findAllByText(/failed to verify ess credentials: unauthorized/i);
         expect(screen.queryByText(/Account linked!/i)).not.toBeInTheDocument();
         expect(updateSettings).toHaveBeenCalledTimes(3);
 
         await user.click(screen.getByText('Save Settings'));
-        await screen.findByText('Login to connect your energy system.');
+        await screen.findAllByText('Login to connect your energy system.');
         expect(updateSettings).toHaveBeenCalledTimes(3);
 
         windowOpenSpy.mockRestore();
@@ -1768,7 +1768,7 @@ describe('App & Settings', () => {
 
         // Expect error to be shown, success banner to be gone, and login button to be back
         await waitFor(() => {
-            expect(screen.getByText('Failed to verify credentials')).toBeInTheDocument();
+            expect(screen.getAllByText('Failed to verify credentials').length).toBeGreaterThan(0);
             expect(screen.queryByText('Received code! Save Settings below to complete.')).not.toBeInTheDocument();
             expect(screen.getByRole('button', { name: /Login to link account/i })).toBeInTheDocument();
         });
@@ -4072,7 +4072,7 @@ describe('App & Settings', () => {
             // Rate limit error from server includes lockout explanation
             (api.updateSettings as any).mockRejectedValueOnce(new Error('ESS rate limited, try again in 28s'));
             await user.click(saveBtn);
-            expect(await screen.findByText(/ESS rate limited, try again in 28s\. RateRudder temporarily pauses login attempts/i)).toBeInTheDocument();
+            expect((await screen.findAllByText(/ESS rate limited, try again in 28s\. RateRudder temporarily pauses login attempts/i)).length).toBeGreaterThan(0);
 
             // Succeeding re-auth on an already-configured ESS clears warnings without opening the initial grid confirmation modal
             (api.updateSettings as any).mockResolvedValueOnce(undefined);
@@ -4110,10 +4110,342 @@ describe('App & Settings', () => {
             const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
             await user.click(saveBtn);
 
-            expect(await screen.findByText(/failed to fetch location data for postal code/i)).toBeInTheDocument();
+            expect((await screen.findAllByText(/failed to fetch location data for postal code/i)).length).toBeGreaterThan(0);
             expect(screen.queryByTestId('ess-retry-caution')).not.toBeInTheDocument();
             expect(screen.queryByTestId('ess-cooldown-warning')).not.toBeInTheDocument();
             expect(screen.queryByTestId('ess-auth-warning')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('Unified Draft Guards and Visible Validation', () => {
+        it('opens editESS without false dirty state on initial load, then activates unsaved bar and leave guard on credential or OAuth edits, and resets on Discard', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: {},
+            });
+
+            await navigateToSettings();
+
+            // Req 2: editESS is open on initial load, but isDirty is false (no unsaved bar, no false leave prompt)
+            const emailInput = await screen.findByLabelText('Email');
+            expect(emailInput).toBeInTheDocument();
+            expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+
+            const confirmSpy = vi.spyOn(window, 'confirm');
+            const dashboardLinks = screen.getAllByRole('link', { name: 'Dashboard' });
+            fireEvent.click(dashboardLinks[0]);
+            await waitFor(() => {
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
+            });
+            expect(confirmSpy).not.toHaveBeenCalled();
+
+            // Return to Settings and edit ESS credentials (Req 1)
+            fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+            const emailInputAgain = await screen.findByLabelText('Email');
+            await user.type(emailInputAgain, 'battery@example.com');
+
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+            // Never write plaintext credentials to storage or history state
+            expect(JSON.stringify(window.localStorage)).not.toContain('battery@example.com');
+            expect(JSON.stringify(window.sessionStorage)).not.toContain('battery@example.com');
+            expect(JSON.stringify(window.history.state)).not.toContain('battery@example.com');
+
+            confirmSpy.mockReturnValueOnce(false);
+            fireEvent.click(screen.getAllByRole('link', { name: 'Dashboard' })[0]);
+            expect(confirmSpy).toHaveBeenCalledWith('You have unsaved changes. Are you sure you want to leave?');
+            expect(screen.getByLabelText('Email')).toHaveValue('battery@example.com');
+
+            // Discard clears essCredentials and hides unsaved bar
+            await user.click(screen.getByRole('button', { name: 'Discard' }));
+            expect(screen.getByLabelText('Email')).toHaveValue('');
+            expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+
+            // Switch to Tesla OAuth and verify handleOAuthLogin activates unsaved bar and Discard resets oauthStatus
+            const essSelect = screen.getByLabelText(/ESS Type|System Type/i);
+            await user.click(essSelect);
+            await user.click(await screen.findByRole('option', { name: 'Tesla' }));
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            await user.click(screen.getByRole('button', { name: /Login to link account/i }));
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'oauth-test-code', state: defaultAuthStatus.sites![0].id },
+                }));
+            });
+
+            await screen.findByText(/Received code! Save Settings below to complete./i);
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: 'Discard' }));
+            expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+            expect(screen.queryByText(/Received code!/i)).not.toBeInTheDocument();
+
+            windowOpenSpy.mockRestore();
+            confirmSpy.mockRestore();
+        });
+
+        it('guards viewSite query changes and browser Back (popstate) navigation when dirty, while skipping prompts during site deletion', async () => {
+            const user = userEvent.setup();
+            await navigateToSettings();
+
+            const minSocInput = await screen.findByLabelText(/Minimum Battery %/i);
+            fireEvent.change(minSocInput, { target: { value: '42' } });
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            const confirmSpy = vi.spyOn(window, 'confirm');
+
+            // Same-pathname non-viewSite query update does not prompt
+            window.history.replaceState(null, '', '/settings?tou=1');
+            expect(confirmSpy).not.toHaveBeenCalled();
+
+            // Changing viewSite on /settings prompts and blocks when cancelled
+            confirmSpy.mockReturnValueOnce(false);
+            window.history.pushState(null, '', '/settings?viewSite=other-site');
+            expect(confirmSpy).toHaveBeenCalledTimes(1);
+            expect(window.location.search).toBe('?tou=1');
+            expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(42);
+
+            // Browser Back (popstate) prompts and restores /settings when cancelled
+            confirmSpy.mockReturnValueOnce(false);
+            act(() => {
+                window.dispatchEvent(new PopStateEvent('popstate'));
+            });
+            expect(confirmSpy).toHaveBeenCalledTimes(2);
+            expect(window.location.pathname).toBe('/settings');
+            expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(42);
+
+            // Deleting site skips beforeunload / leave prompts
+            const originalLocation = window.location;
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: {
+                    ...originalLocation,
+                    origin: originalLocation.origin,
+                    pathname: '/settings',
+                    search: '',
+                    hash: '',
+                    href: 'http://localhost:3000/settings',
+                },
+            });
+            try {
+                await user.click(screen.getByRole('button', { name: 'Delete Site' }));
+                const dialog = await screen.findByRole('dialog');
+                await user.click(within(dialog).getByRole('button', { name: /^Delete$/i }));
+
+                await waitFor(() => {
+                    expect(deleteSite).toHaveBeenCalled();
+                });
+
+                const unloadEvent = new Event('beforeunload', { cancelable: true });
+                window.dispatchEvent(unloadEvent);
+                expect(unloadEvent.defaultPrevented).toBe(false);
+            } finally {
+                Object.defineProperty(window, 'location', {
+                    configurable: true,
+                    value: originalLocation,
+                });
+                confirmSpy.mockRestore();
+            }
+        });
+
+        it('preserves dirty form drafts and essCredentials when NotificationModal saves or Pause/Resume is toggled', async () => {
+            const user = userEvent.setup();
+            let serverSettings = {
+                ...defaultSettings,
+                minBatterySOC: 15,
+                pause: false,
+                ess: 'franklin',
+                hasCredentials: {},
+                features: { notifications: true },
+                notifications: { gridOutage: false },
+            };
+            (api.fetchSettings as any).mockImplementation(async () => ({ ...serverSettings }));
+            (api.updateSettings as any).mockImplementation(async (next: any) => {
+                serverSettings = { ...next };
+            });
+
+            await navigateToSettings();
+
+            // Make dirty edits to both form field and ESS credentials
+            const minSocInput = await screen.findByLabelText(/Minimum Battery %/i);
+            await user.clear(minSocInput);
+            await user.type(minSocInput, '55');
+            const emailInput = await screen.findByLabelText('Email');
+            await user.type(emailInput, 'draft-owner@example.com');
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            // Req 6: Clicking Pause sends ONLY persisted settings with pause: true (minBatterySOC: 15, not 55)
+            const pauseBtn = screen.getByRole('button', { name: 'Pause' });
+            await user.click(pauseBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledTimes(1);
+            });
+            expect(api.updateSettings).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    pause: true,
+                    minBatterySOC: 15,
+                }),
+                expect.any(String)
+            );
+            // Local drafts remain intact and dirty
+            expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(55);
+            expect(screen.getByLabelText('Email')).toHaveValue('draft-owner@example.com');
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            // Req 5: Saving NotificationModal reloads parentSettings with updated notifications without overwriting drafts
+            const updatedNotifications = {
+                users: {
+                    'user-1': {
+                        priceSpikes: true,
+                    },
+                },
+            };
+            (api.updateNotificationSettings as any).mockImplementation(async () => {
+                serverSettings = {
+                    ...serverSettings,
+                    notifications: updatedNotifications as any,
+                };
+            });
+            await user.click(screen.getByTestId('header-bell-btn'));
+            const modalSaveBtn = await screen.findByRole('button', { name: /Save Preferences/i });
+            await waitFor(() => {
+                expect(modalSaveBtn).not.toBeDisabled();
+            });
+            await user.click(modalSaveBtn);
+
+            await waitFor(() => {
+                expect(api.updateNotificationSettings).toHaveBeenCalledTimes(1);
+                expect(screen.queryByRole('button', { name: /Save Preferences/i })).not.toBeInTheDocument();
+            });
+            expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(55);
+            expect(screen.getByLabelText('Email')).toHaveValue('draft-owner@example.com');
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            // Fill password and save settings -> merged notifications and pause: true are preserved alongside draft edits
+            const passInput = screen.getByLabelText('Password');
+            await user.type(passInput, 'secret-pass');
+            await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenLastCalledWith(
+                    expect.objectContaining({
+                        minBatterySOC: 55,
+                        pause: true,
+                        notifications: updatedNotifications,
+                    }),
+                    expect.any(String),
+                    {
+                        franklin: {
+                            username: 'draft-owner@example.com',
+                            password: 'secret-pass',
+                        },
+                    }
+                );
+            });
+        });
+
+        it('keeps Battery open on Done with 24-hour coverage gap, reopens collapsed invalid sections on submit, scrolls to .error-message, and mirrors error in .unsaved-changes-bar', async () => {
+            const user = userEvent.setup();
+            const scrollSpy = vi.fn();
+            const origScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
+            window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+
+            try {
+                // Load with collapsed custom schedule containing a gap (00:00-12:00 only)
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    minBatterySOC: 25,
+                    minBatterySOCPeriods: [
+                        {
+                            hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 12, minuteEnd: 0 }],
+                            minBatterySOC: 25,
+                        },
+                    ],
+                });
+
+                await navigateToSettings();
+
+                // Collapsed Battery summary displays inline Invalid Schedule badge
+                expect(screen.getByTestId('battery-summary-error-badge')).toHaveTextContent('Invalid Schedule');
+
+                // Make form dirty so docked bar is rendered, while Battery remains collapsed
+                const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+                await user.clear(zipInput);
+                await user.type(zipInput, '60602');
+                const bar = screen.getByTestId('unsaved-changes-bar');
+
+                // Submit via Save Changes -> reopens Battery, scrolls to .error-message, and mirrors error in docked bar
+                scrollSpy.mockClear();
+                await user.click(within(bar).getByRole('button', { name: 'Save Changes' }));
+
+                expect(await screen.findByTestId('variable-reserve-section')).toBeInTheDocument();
+                expect(within(bar).getByTestId('unsaved-bar-error')).toHaveTextContent(
+                    /Reserve SOC periods must cover all 24 hours without gaps or overlaps/i
+                );
+                expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+
+                // Clicking Done in Battery while coverage is still invalid keeps Battery open
+                const batterySection = screen.getByTestId('battery-section');
+                await user.click(within(batterySection).getByRole('button', { name: 'Done' }));
+                expect(screen.getByTestId('variable-reserve-section')).toBeInTheDocument();
+            } finally {
+                window.HTMLElement.prototype.scrollIntoView = origScrollIntoView;
+            }
+        });
+
+        it('marks ChecklistBanner items complete only from persisted settings (requiring both utilityProvider and utilityRate) after saving', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: 'comed',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {},
+            });
+
+            await navigateToSettings();
+
+            const banner = await screen.findByTestId('checklist-banner');
+            const locationItem = within(banner).getByText('Set Location').closest('.checklist-item')!;
+            const utilityItem = within(banner).getByText('Choose Utility').closest('.checklist-item')!;
+            const essItem = within(banner).getByText('Connect Battery (ESS)').closest('.checklist-item')!;
+
+            // Initially all three are pending (utilityProvider without utilityRate is still pending)
+            expect(locationItem).toHaveClass('pending');
+            expect(utilityItem).toHaveClass('pending');
+            expect(essItem).toHaveClass('pending');
+
+            // Fill Location and Utility Rate locally WITHOUT saving -> checklist items must remain pending
+            const countrySelect = screen.getByRole('combobox', { name: /Country/i });
+            await user.click(countrySelect);
+            await user.click(await screen.findByRole('option', { name: /United States/i }));
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.type(zipInput, '60601');
+
+            const rateSelect = screen.getByRole('combobox', { name: /Rate\/Plan/i });
+            await user.click(rateSelect);
+            await user.click(await screen.findByRole('option', { name: /Hourly Pricing Program \(BESH\)/i }));
+
+            expect(locationItem).toHaveClass('pending');
+            expect(utilityItem).toHaveClass('pending');
+
+            // Save -> Location and Utility now turn checked, while ESS remains pending
+            await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalled();
+            });
+
+            await waitFor(() => {
+                expect(within(screen.getByTestId('checklist-banner')).getByText('Set Location').closest('.checklist-item')).toHaveClass('checked');
+                expect(within(screen.getByTestId('checklist-banner')).getByText('Choose Utility').closest('.checklist-item')).toHaveClass('checked');
+                expect(within(screen.getByTestId('checklist-banner')).getByText('Connect Battery (ESS)').closest('.checklist-item')).toHaveClass('pending');
+            });
         });
     });
 });
