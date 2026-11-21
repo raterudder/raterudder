@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { type SavingsStats } from '../api';
-import { formatCurrency } from '../utils/dashboardUtils';
+import { formatCurrency, normalizeCurrency } from '../utils/dashboardUtils';
 
 interface SavingsHeroProps {
     savings: SavingsStats | null;
@@ -57,9 +57,10 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
     };
 
     const activeMeta = getPeriodMeta(activeIdx);
-    const activeTotalSavings = activeStats.totalSavingsDollars ?? 0;
+    const activeTotalSavings = normalizeCurrency(activeStats.totalSavingsDollars ?? 0);
     const activeWithoutRRSavings = activeStats.solarAndBatterySavingsDollars ?? 0;
     const activeShowRR = (activeStats.rateRudderSavingsDollars ?? 0) >= 0.05;
+    const activeCredit = normalizeCurrency(activeStats.credit);
 
     const subcaptionParts: string[] = [];
     if (activeStats.estimated) subcaptionParts.push('Estimated.');
@@ -94,7 +95,7 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
                             {periods.map((periodStats, idx) => {
                                 if (idx === activeIdx) return null;
                                 const meta = getPeriodMeta(idx);
-                                const periodTotal = periodStats.totalSavingsDollars ?? 0;
+                                const periodTotal = normalizeCurrency(periodStats.totalSavingsDollars ?? 0);
                                 const periodWithoutRR = periodStats.solarAndBatterySavingsDollars ?? 0;
                                 const periodShowRR = (periodStats.rateRudderSavingsDollars ?? 0) >= 0.05;
                                 return (
@@ -158,8 +159,8 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-label">Total Credit</span>
-                                    <span className={`stat-value ${activeStats.credit > 0 ? 'positive' : activeStats.credit < 0 ? 'negative' : ''}`}>
-                                        {formatCurrency(activeStats.credit, false, currencySymbol)}
+                                    <span className={`stat-value ${activeCredit > 0 ? 'positive' : activeCredit < 0 ? 'negative' : ''}`}>
+                                        {formatCurrency(activeCredit, false, currencySymbol)}
                                     </span>
                                 </div>
                                 <div className="stat-card">

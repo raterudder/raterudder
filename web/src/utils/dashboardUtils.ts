@@ -64,9 +64,14 @@ export const getCurrencySymbol = (utilityProvider?: string | null): string => {
 
 export const formatPrice = (dollars: number, symbol: string = '$') => `${symbol} ${dollars.toFixed(3)}/kWh`;
 
+export const normalizeCurrency = (amount: number): number => {
+    return Math.abs(amount).toFixed(2) === '0.00' ? 0 : amount;
+};
+
 export const formatCurrency = (amount: number, forceSign: boolean = false, symbol: string = '$') => {
-    const sign = amount >= 0 ? (forceSign ? '+ ' : '') : '- ';
-    return `${sign}${symbol} ${Math.abs(amount).toFixed(2)}`;
+    const normalized = normalizeCurrency(amount);
+    const sign = normalized >= 0 ? (forceSign ? '+ ' : '') : '- ';
+    return `${sign}${symbol} ${Math.abs(normalized).toFixed(2)}`;
 };
 
 export const isZeroTime = (ts?: string): boolean => {
