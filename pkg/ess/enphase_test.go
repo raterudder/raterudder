@@ -4,16 +4,72 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/types"
 )
+
+type capturedEnphaseLog struct {
+	Level   slog.Level
+	Message string
+	Attrs   map[string]any
+}
+
+type enphaseLogRecorder struct {
+	mu      sync.Mutex
+	records []capturedEnphaseLog
+}
+
+func (r *enphaseLogRecorder) Enabled(_ context.Context, _ slog.Level) bool {
+	return true
+}
+
+func (r *enphaseLogRecorder) Handle(_ context.Context, rec slog.Record) error {
+	attrs := make(map[string]any)
+	rec.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	r.mu.Lock()
+	r.records = append(r.records, capturedEnphaseLog{
+		Level:   rec.Level,
+		Message: rec.Message,
+		Attrs:   attrs,
+	})
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *enphaseLogRecorder) WithAttrs(_ []slog.Attr) slog.Handler { return r }
+func (r *enphaseLogRecorder) WithGroup(_ string) slog.Handler      { return r }
+
+func (r *enphaseLogRecorder) filter(msg string, level slog.Level) []capturedEnphaseLog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []capturedEnphaseLog
+	for _, rec := range r.records {
+		if rec.Message == msg && rec.Level == level {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func (r *enphaseLogRecorder) reset() {
+	r.mu.Lock()
+	r.records = nil
+	r.mu.Unlock()
+}
 
 func TestEnphase(t *testing.T) {
 	t.Run("Authenticate successful login", func(t *testing.T) {
@@ -866,12 +922,184 @@ func TestEnphase(t *testing.T) {
 			BatteryGrid:    []float64{0, 0, 0, 0},
 			SOC:            []*float64{&soc98, &soc97, &soc99, &soc98, &soc100},
 		}
-		assert.False(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 0, time.UTC))
-		assert.False(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 1, time.UTC))
+		assert.False(t, checkCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 0, time.UTC))
+		assert.False(t, checkCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 1, time.UTC))
 		// Index 2 has production=1899 vs solarSum=1699 (diff=200 > 50)
-		assert.True(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 2, time.UTC))
+		assert.True(t, checkCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 2, time.UTC))
 		// Index 3 has netBatWH=-5242 with socDelta=-1 (99 -> 98)
-		assert.True(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 3, time.UTC))
+		assert.True(t, checkCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 3, time.UTC))
+	})
+
+	t.Run("Tolerates and clamps minor negative jitter within -50 Wh", func(t *testing.T) {
+		rec := &enphaseLogRecorder{}
+		ctx := log.With(context.Background(), slog.New(rec))
+
+		soc48 := 48.0
+		soc50 := 50.0
+		dayStart := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+		hour9Start := dayStart.Add(9 * time.Hour)
+
+		// Bucket 0 (09:00): minor negative jitter up to -50 Wh across directional channels with valid solar/grid flows.
+		// Bucket 1 (09:15): all directional home channels <= 0 with minor negative Consumption (-35 Wh) to exercise Consumption fallback clamping.
+		// Bucket 2 (09:30): multi-channel solar negative jitter (-40 Wh + -40 Wh = -80 Wh) within -50 Wh per channel where raw solarSum (520 Wh) would be > 50 Wh below Production (600 Wh) without clamping.
+		// Bucket 3 (09:45): multi-channel consumption & battery negative jitter (-40 Wh + -40 Wh = -80 Wh) where raw homeSum (620 Wh) would be > 50 Wh below Consumption (700 Wh) and raw netBatWH (1525 Wh) would exceed 1500 Wh with flat SOC without clamping.
+		// Bucket 4 (10:00): -51 Wh exceeds the -50 Wh tolerance and must still be flagged as corrupt with raw values logged.
+		jitterStat := enphaseTodayStats{
+			StartTime:      hour9Start.Unix(),
+			IntervalLength: 900,
+			Production:     []float64{500, -12, 600, -30, 0},
+			Consumption:    []float64{680, -35, 600, 700, -51},
+			SolarHome:      []float64{500, -10, 600, -40, 0},
+			SolarBattery:   []float64{-20, -5, -40, -35, 0},
+			SolarGrid:      []float64{-5, -2, -40, -10, 0},
+			GridHome:       []float64{200, -8, -15, 700, 0},
+			GridBattery:    []float64{-50, -15, -10, 1480, 0},
+			BatteryHome:    []float64{-20, -50, -25, -40, -51},
+			BatteryGrid:    []float64{-10, -4, -20, -40, 0},
+			SOC:            []*float64{&soc50, &soc50, &soc50, &soc50, &soc50},
+		}
+
+		assert.False(t, checkCorruptEnphaseInterval(ctx, jitterStat, 0, time.UTC))
+		assert.False(t, checkCorruptEnphaseInterval(ctx, jitterStat, 1, time.UTC))
+		assert.False(t, checkCorruptEnphaseInterval(ctx, jitterStat, 2, time.UTC))
+		assert.False(t, checkCorruptEnphaseInterval(ctx, jitterStat, 3, time.UTC))
+
+		// Multi-channel discharge jitter (-40 Wh + -40 Wh) with 960 Wh solar charge and -2% SOC delta:
+		// raw netBatWH would be 1040 Wh (> 1000 Wh with socDelta < -1), whereas clamped netBatWH is 960 Wh.
+		oppositeSOCJitter := enphaseTodayStats{
+			StartTime:      hour9Start.Unix(),
+			IntervalLength: 900,
+			Production:     []float64{0, 960},
+			SolarBattery:   []float64{0, 960},
+			BatteryHome:    []float64{0, -40},
+			BatteryGrid:    []float64{0, -40},
+			SOC:            []*float64{&soc50, &soc48},
+		}
+		assert.False(t, checkCorruptEnphaseInterval(ctx, oppositeSOCJitter, 1, time.UTC))
+		assert.Empty(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn))
+
+		assert.True(t, checkCorruptEnphaseInterval(ctx, jitterStat, 4, time.UTC))
+		warns := rec.filter("skipping corrupt enphase interval", slog.LevelWarn)
+		if assert.Len(t, warns, 1) {
+			assert.Equal(t, "negative_value", warns[0].Attrs["reason"])
+			assert.Equal(t, int64(4), warns[0].Attrs["intervalIndex"])
+			assert.Equal(t, -51.0, warns[0].Attrs["consumptionWH"])
+			assert.Equal(t, -51.0, warns[0].Attrs["batteryHomeWH"])
+		}
+
+		// parseDailyStats clamps negative values within -50 Wh to 0 kWh across buckets 0..3 and skips bucket 4 (-51 Wh)
+		rec.reset()
+		parsed := parseDailyStats(ctx, jitterStat, dayStart, time.UTC)
+		assert.Len(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn), 1)
+		if assert.Len(t, parsed.Hourly, 2) {
+			h0 := parsed.Hourly[0]
+			assert.InDelta(t, 1.1, h0.SolarKWH, 0.0001)
+			assert.InDelta(t, 1.1, h0.SolarToHomeKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.SolarToBatteryKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.SolarToGridKWH, 0.0001)
+			assert.InDelta(t, 2.0, h0.HomeKWH, 0.0001)
+			assert.InDelta(t, 2.38, h0.GridImportKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.GridExportKWH, 0.0001)
+			assert.InDelta(t, 1.48, h0.BatteryChargedKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.BatteryUsedKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.BatteryToHomeKWH, 0.0001)
+			assert.InDelta(t, 0.0, h0.BatteryToGridKWH, 0.0001)
+
+			// Hour 10 only had corrupt bucket 4 (-51 Wh), which was skipped
+			h1 := parsed.Hourly[1]
+			assert.InDelta(t, 0.0, h1.SolarKWH, 0.0001)
+			assert.InDelta(t, 0.0, h1.HomeKWH, 0.0001)
+		}
+
+		// Verify GetStatus accepts and clamps buckets 0..3 without warnings or stepping back
+		activeBuckets := 1
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(enphaseDataResult{
+					App:            enphaseApp{Timezone: "UTC"},
+					LastReportDate: hour9Start.Add(time.Duration(activeBuckets*15) * time.Minute).Unix(),
+				})
+			case "/pv/systems/123/today":
+				statCopy := jitterStat
+				statCopy.Production = jitterStat.Production[:activeBuckets]
+				statCopy.Consumption = jitterStat.Consumption[:activeBuckets]
+				statCopy.SolarHome = jitterStat.SolarHome[:activeBuckets]
+				statCopy.SolarBattery = jitterStat.SolarBattery[:activeBuckets]
+				statCopy.SolarGrid = jitterStat.SolarGrid[:activeBuckets]
+				statCopy.GridHome = jitterStat.GridHome[:activeBuckets]
+				statCopy.GridBattery = jitterStat.GridBattery[:activeBuckets]
+				statCopy.BatteryHome = jitterStat.BatteryHome[:activeBuckets]
+				statCopy.BatteryGrid = jitterStat.BatteryGrid[:activeBuckets]
+				statCopy.SOC = jitterStat.SOC[:activeBuckets]
+				json.NewEncoder(w).Encode(enphaseTodayResponse{
+					StartDate: "2026-10-02",
+					Stats:     []enphaseTodayStats{statCopy},
+					BatteryDetails: &struct {
+						AggregateSOC float64 `json:"aggregate_soc"`
+					}{AggregateSOC: 50},
+				})
+			case "/pv/settings/123/battery_status.json":
+				w.Write([]byte(`{"max_capacity": 10.0, "available_power": 3.84}`))
+			case "/app-api/123/grid_control_check.json":
+				w.Write([]byte(`{"gridOutageCheck": false}`))
+			case "/app-api/123/get_pel_details":
+				w.Write([]byte(`{"pel_type": "Not Configured", "export_limit": null}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+
+		rec.reset()
+		status0, err := e.GetStatus(ctx)
+		require.NoError(t, err)
+		// Bucket 0: prod=500Wh -> 2.0kW, solarHome=500Wh+gridHome=200Wh -> 2.8kW home, 0.8kW grid, 0.0kW battery (negatives clamped to 0)
+		assert.InDelta(t, 2.0, status0.SolarKW, 0.0001)
+		assert.InDelta(t, 2.8, status0.HomeKW, 0.0001)
+		assert.InDelta(t, 0.8, status0.GridKW, 0.0001)
+		assert.InDelta(t, 0.0, status0.BatteryKW, 0.0001)
+		assert.Empty(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn))
+
+		// Bucket 1: all negative within -50 Wh -> solarKW=0, batteryKW=0, gridKW=0, and Consumption=-35 Wh fallback clamps HomeKW to 0
+		activeBuckets = 2
+		e.dataExpiry = time.Time{}
+		e.todayCacheExpiry = time.Time{}
+		status1, err := e.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0, status1.SolarKW, 0.0001)
+		assert.InDelta(t, 0.0, status1.HomeKW, 0.0001)
+		assert.InDelta(t, 0.0, status1.GridKW, 0.0001)
+		assert.InDelta(t, 0.0, status1.BatteryKW, 0.0001)
+		assert.Empty(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn))
+
+		// Bucket 2: Production=600, SolarHome=600, SolarBattery=-40, SolarGrid=-40 -> accepted without stepping back to Bucket 1 (2.4kW solar/home)
+		activeBuckets = 3
+		e.dataExpiry = time.Time{}
+		e.todayCacheExpiry = time.Time{}
+		status2, err := e.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 2.4, status2.SolarKW, 0.0001)
+		assert.InDelta(t, 2.4, status2.HomeKW, 0.0001)
+		assert.InDelta(t, 0.0, status2.GridKW, 0.0001)
+		assert.InDelta(t, 0.0, status2.BatteryKW, 0.0001)
+		assert.Empty(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn))
+
+		// Bucket 3: Consumption=700, GridHome=700, SolarHome=-40, BatteryHome=-40, GridBattery=1480 -> accepted without stepping back (2.8kW home, -5.92kW battery, 8.72kW grid)
+		activeBuckets = 4
+		e.dataExpiry = time.Time{}
+		e.todayCacheExpiry = time.Time{}
+		status3, err := e.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0, status3.SolarKW, 0.0001)
+		assert.InDelta(t, 2.8, status3.HomeKW, 0.0001)
+		assert.InDelta(t, 8.72, status3.GridKW, 0.0001)
+		assert.InDelta(t, -5.92, status3.BatteryKW, 0.0001)
+		assert.Empty(t, rec.filter("skipping corrupt enphase interval", slog.LevelWarn))
 	})
 
 	t.Run("SetModes", func(t *testing.T) {
