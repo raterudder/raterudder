@@ -155,23 +155,7 @@ func (s *Server) buildAgentSummary(ctx context.Context, siteID string) (AgentSum
 		return AgentSummaryRes{}, errNoStatusAvailable
 	}
 
-	var loc *time.Location
-	if latestAction.SystemStatus.TimeLocation != "" {
-		if l, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
-			loc = l
-		}
-	}
-	if loc == nil && settings.Location != nil && settings.Location.TimeZone != "" {
-		if l, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
-			loc = l
-		}
-	}
-	if loc == nil && !latestAction.Timestamp.IsZero() && latestAction.Timestamp.Location() != nil {
-		loc = latestAction.Timestamp.Location()
-	}
-	if loc == nil {
-		loc = time.UTC
-	}
+	loc := resolveActionLocation(settings, latestAction)
 
 	latestAction.Timestamp = latestAction.Timestamp.In(loc)
 	latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
