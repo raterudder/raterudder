@@ -819,72 +819,224 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		t2 := time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation)
 		assert.Equal(t, 1.04895, amerenLossFactor(t2))
 
-		// Later in 2026
+		// Later in 2026 and 2027 -> 1.04895
 		t3 := time.Date(2026, time.December, 15, 12, 0, 0, 0, ctLocation)
 		assert.Equal(t, 1.04895, amerenLossFactor(t3))
+
+		t4 := time.Date(2027, time.August, 15, 12, 0, 0, 0, ctLocation)
+		assert.Equal(t, 1.04895, amerenLossFactor(t4))
 	})
 
-	t.Run("BGS-1 Flat Rates", func(t *testing.T) {
-		u := &genericTOU{}
-		err := u.ApplySettings(context.Background(), types.Settings{
+	nonSummer2026Riders := 0.00644 + 0.00470 + 0.0013567 + (0.04572+0.0013567)*(0.0365+0.0309)
+	summer2026Riders := 0.00644 + 0.00470 + 0.0013567 + (0.07811+0.0013567)*(0.0365+0.0309)
+	nonSummer2027Riders := 0.00644 + 0.00470 + 0.00126 + (0.04687+0.00126)*(0.0365+0.0135)
+	summer2027Riders := 0.00644 + 0.00470 + 0.00126 + (0.08009+0.00126)*(0.0365+0.0135)
+
+	assert.InDelta(t, 0.01567, nonSummer2026Riders, 1e-5)
+	assert.InDelta(t, 0.01785, summer2026Riders, 1e-5)
+	assert.InDelta(t, 0.01481, nonSummer2027Riders, 1e-5)
+	assert.InDelta(t, 0.01647, summer2027Riders, 1e-5)
+
+	t.Run("BGS-1 2026-2027 monthly supply, delivery riders, and export credits", func(t *testing.T) {
+		defaultSettings := types.Settings{
 			UtilityProvider: "ameren",
 			UtilityRate:     "ameren_bgs",
+		}
+		u := &genericTOU{}
+		require.NoError(t, u.ApplySettings(context.Background(), defaultSettings))
+
+		t.Run("Jan-May 2026 Non-Summer monthly BGS-1 and Rider TS", func(t *testing.T) {
+			expectedGridUse := 0.04572 + nonSummer2026Riders
+
+			pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.05684+0.02629, pJan.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pJan.GridUseDollarsPerKWH, 1e-6)
+
+			pFeb, err := u.priceForTime(time.Date(2026, time.February, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.05621+0.02629, pFeb.DollarsPerKWH, 1e-6)
+
+			pMar, err := u.priceForTime(time.Date(2026, time.March, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.05561+0.02629, pMar.DollarsPerKWH, 1e-6)
+
+			pApr, err := u.priceForTime(time.Date(2026, time.April, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.05260+0.02629, pApr.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pApr.GridUseDollarsPerKWH, 1e-6)
+
+			pMay, err := u.priceForTime(time.Date(2026, time.May, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.06279+0.02629, pMay.DollarsPerKWH, 1e-6)
 		})
-		require.NoError(t, err)
 
-		// 1. Summer BGS-1 (July 15, 2026)
-		// Supply: $0.08413
-		// Transmission (June 2026+): $0.02765
-		// Distribution Delivery (Summer 2026): $0.07811
-		// Total: 0.08413 + 0.02765 + 0.07811 = 0.18989
-		pSummer, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.08413, pSummer.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.02765+0.07811, pSummer.GridUseDollarsPerKWH, 1e-6)
+		t.Run("Jun-Sep 2026 Summer monthly BGS-1 and Rider TS", func(t *testing.T) {
+			expectedGridUse := 0.07811 + summer2026Riders
 
-		// 2. Non-Summer BGS-1 early 2026 (April 15, 2026)
-		// Supply: $0.07283
-		// Transmission: $0.02629
-		// Distribution Delivery (Non-summer 2026): $0.04572
-		pEarlyNonSummer, err := u.priceForTime(time.Date(2026, time.April, 15, 12, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.07283, pEarlyNonSummer.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.02629+0.04572, pEarlyNonSummer.GridUseDollarsPerKWH, 1e-6)
+			pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08506+0.02765, pJun.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pJun.GridUseDollarsPerKWH, 1e-6)
 
-		// 3. Non-Summer BGS-1 late 2026 (November 15, 2026)
-		// Supply: $0.07648 ((7.310 - 0.028 + 0.313 + 0.053) / 100)
-		// Transmission: $0.02765
-		// Distribution Delivery (Non-summer 2026): $0.04572
-		// Total: 0.07648 + 0.02765 + 0.04572 = 0.14985
-		pNonSummer, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.07648, pNonSummer.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.02765+0.04572, pNonSummer.GridUseDollarsPerKWH, 1e-6)
+			pJul, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08466+0.02765, pJul.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pJul.GridUseDollarsPerKWH, 1e-6)
+
+			pAug, err := u.priceForTime(time.Date(2026, time.August, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08417+0.02765, pAug.DollarsPerKWH, 1e-6)
+
+			pSep, err := u.priceForTime(time.Date(2026, time.September, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08361+0.02765, pSep.DollarsPerKWH, 1e-6)
+		})
+
+		t.Run("Oct-Dec 2026 and 2027 carry-forward BGS-1 and delivery transitions", func(t *testing.T) {
+			pOct, err := u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.07648+0.02765, pOct.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04572+nonSummer2026Riders, pOct.GridUseDollarsPerKWH, 1e-6)
+
+			pNov, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.07938+0.02765, pNov.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04572+nonSummer2026Riders, pNov.GridUseDollarsPerKWH, 1e-6)
+
+			pDec, err := u.priceForTime(time.Date(2026, time.December, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.07938+0.02765, pDec.DollarsPerKWH, 1e-6)
+
+			pSpring2027, err := u.priceForTime(time.Date(2027, time.March, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.07938+0.02765, pSpring2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04687+nonSummer2027Riders, pSpring2027.GridUseDollarsPerKWH, 1e-6)
+
+			pSummer2027, err := u.priceForTime(time.Date(2027, time.July, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08823+0.02765, pSummer2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.08009+summer2027Riders, pSummer2027.GridUseDollarsPerKWH, 1e-6)
+
+			pFall2027, err := u.priceForTime(time.Date(2027, time.November, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.07938+0.02765, pFall2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04687+nonSummer2027Riders, pFall2027.GridUseDollarsPerKWH, 1e-6)
+		})
+
+		t.Run("Rider NMOS vs Pre-2025 NetMeteringCredits export valuation on BGS-1", func(t *testing.T) {
+			pNov, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+
+			// Default Rider NMOS (NetMeteringCredits: false) credits supply + Rider TS, excluding delivery
+			assert.InDelta(t, 0.07938+0.02765+0.04572+nonSummer2026Riders, pNov.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.07938+0.02765, pNov.ExportRateDollars(defaultSettings, []types.Price{pNov}), 1e-6)
+
+			// Pre-2025 grandfathered full net metering (NetMeteringCredits: true) credits supply + transmission + delivery
+			fullNEMSettings := defaultSettings
+			fullNEMSettings.UtilityRateOptions.NetMeteringCredits = true
+			assert.InDelta(t, pNov.ImportRateDollars(), pNov.ExportRateDollars(fullNEMSettings, []types.Price{pNov}), 1e-6)
+		})
 	})
 
-	t.Run("PSP Transmission charge transitions", func(t *testing.T) {
-		opts := types.UtilityRateOptions{}
-		fees, err := getAmerenAdditionalFees(opts)
+	t.Run("PSP 2026-2027 Rider RTP, Rider TS, delivery riders, and export credits", func(t *testing.T) {
+		pspSettings := types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_psp",
+		}
+		s := &SiteFees{}
+		require.NoError(t, s.ApplySettings(context.Background(), pspSettings))
+
+		// SiteFees.GetPeriods must remain nil for ameren_psp because Rider TS and Rider RTP have empty Name
+		periods, err := s.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.Nil(t, periods)
+
+		fees, err := getAmerenAdditionalFees(types.UtilityRateOptions{})
 		require.NoError(t, err)
 
-		// Check transmission charge before and after June 1, 2026
-		// We can test this by applying fees on a dummy price
-		p1 := types.Price{
-			TSStart: time.Date(2026, time.May, 1, 12, 0, 0, 0, ctLocation),
-			TSEnd:   time.Date(2026, time.May, 1, 13, 0, 0, 0, ctLocation),
+		applyRaw := func(ts time.Time, rawDollarsPerKWH float64) types.Price {
+			p, err := types.ApplyUtilityFeesPeriods(types.Price{
+				Provider:      "ameren_psp",
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: rawDollarsPerKWH,
+			}, fees)
+			require.NoError(t, err)
+			return p
 		}
-		p1Applied, err := types.ApplyUtilityFeesPeriods(p1, fees)
-		require.NoError(t, err)
-		// May 2026 Transmission is $0.02629, Delivery is Non-summer $0.04572 -> GridUse = 0.02629 + 0.04572 = 0.07201
-		assert.InDelta(t, 0.02629+0.04572, p1Applied.GridUseDollarsPerKWH, 1e-6)
 
-		p2 := types.Price{
-			TSStart: time.Date(2026, time.June, 15, 12, 0, 0, 0, ctLocation),
-			TSEnd:   time.Date(2026, time.June, 15, 13, 0, 0, 0, ctLocation),
-		}
-		p2Applied, err := types.ApplyUtilityFeesPeriods(p2, fees)
-		require.NoError(t, err)
-		// June 2026 Transmission is $0.02765, Delivery is Summer $0.07811 -> GridUse = 0.02765 + 0.07811 = 0.10576
-		assert.InDelta(t, 0.02765+0.07811, p2Applied.GridUseDollarsPerKWH, 1e-6)
+		t.Run("Jan-May 2026 Rider RTP and Rider TS", func(t *testing.T) {
+			raw := 0.03000
+			expectedGridUse := 0.04572 + nonSummer2026Riders
+
+			pJan := applyRaw(time.Date(2026, time.January, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02629+0.00745, pJan.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pJan.GridUseDollarsPerKWH, 1e-6)
+
+			pFeb := applyRaw(time.Date(2026, time.February, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02629+0.00682, pFeb.DollarsPerKWH, 1e-6)
+
+			pMar := applyRaw(time.Date(2026, time.March, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02629+0.00622, pMar.DollarsPerKWH, 1e-6)
+
+			pApr := applyRaw(time.Date(2026, time.April, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02629+0.00321, pApr.DollarsPerKWH, 1e-6)
+
+			pMay := applyRaw(time.Date(2026, time.May, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02629+0.01340, pMay.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedGridUse, pMay.GridUseDollarsPerKWH, 1e-6)
+		})
+
+		t.Run("Jun-Nov 2026 and 2027 carry-forward Rider RTP and Rider TS", func(t *testing.T) {
+			raw := 0.04000
+
+			pJun := applyRaw(time.Date(2026, time.June, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.03056, pJun.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.07811+summer2026Riders, pJun.GridUseDollarsPerKWH, 1e-6)
+
+			pJul := applyRaw(time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.03016, pJul.DollarsPerKWH, 1e-6)
+
+			pAug := applyRaw(time.Date(2026, time.August, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.02967, pAug.DollarsPerKWH, 1e-6)
+
+			pSep := applyRaw(time.Date(2026, time.September, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.02911, pSep.DollarsPerKWH, 1e-6)
+
+			pOct := applyRaw(time.Date(2026, time.October, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.00591, pOct.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04572+nonSummer2026Riders, pOct.GridUseDollarsPerKWH, 1e-6)
+
+			pNov := applyRaw(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.00881, pNov.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04572+nonSummer2026Riders, pNov.GridUseDollarsPerKWH, 1e-6)
+
+			pSpring2027 := applyRaw(time.Date(2027, time.April, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.00881, pSpring2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04687+nonSummer2027Riders, pSpring2027.GridUseDollarsPerKWH, 1e-6)
+
+			pSummer2027 := applyRaw(time.Date(2027, time.July, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.03373, pSummer2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.08009+summer2027Riders, pSummer2027.GridUseDollarsPerKWH, 1e-6)
+
+			pFall2027 := applyRaw(time.Date(2027, time.November, 15, 12, 0, 0, 0, ctLocation), raw)
+			assert.InDelta(t, raw+0.02765+0.00881, pFall2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.04687+nonSummer2027Riders, pFall2027.GridUseDollarsPerKWH, 1e-6)
+		})
+
+		t.Run("Rider NMOS vs Pre-2025 NetMeteringCredits export valuation on PSP", func(t *testing.T) {
+			raw := 0.03500
+			pNov := applyRaw(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation), raw)
+
+			// Default Rider NMOS (NetMeteringCredits: false) credits LMP*loss + Rider TS + Rider RTP
+			assert.InDelta(t, raw+0.02765+0.00881+0.04572+nonSummer2026Riders, pNov.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, raw+0.02765+0.00881, pNov.ExportRateDollars(pspSettings, []types.Price{pNov}), 1e-6)
+
+			// Pre-2025 grandfathered full net metering (NetMeteringCredits: true) credits full retail
+			fullNEMSettings := pspSettings
+			fullNEMSettings.UtilityRateOptions.NetMeteringCredits = true
+			assert.InDelta(t, pNov.ImportRateDollars(), pNov.ExportRateDollars(fullNEMSettings, []types.Price{pNov}), 1e-6)
+		})
 	})
 }

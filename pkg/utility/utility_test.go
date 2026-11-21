@@ -632,8 +632,11 @@ func TestRatesCoverAllTime(t *testing.T) {
 								}
 							}
 							expectBase := 1
-							if rate.ID == "comed_besh" || rate.ID == "ameren_psp" {
+							if rate.ID == "comed_besh" {
 								expectBase = 0
+							} else if rate.ID == "ameren_psp" || rate.ID == "ameren_bgs" {
+								// Rider TS and Rider RTP (ameren_psp) or BGS-1 Supply (ameren_bgs) are GridAdditional: false per Rider NMOS.
+								expectBase = 2
 							}
 							isMatch := len(applicableNames) == expectBase
 							if rate.ID == "comed_bes" || rate.ID == "comed_besh" {
