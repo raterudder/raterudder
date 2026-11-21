@@ -128,7 +128,7 @@ func (t blockActionType) String() string {
 // and expandBlockAction places any charging or exporting into a single contiguous sub-window.
 type blockActionChoice struct {
 	actionType           blockActionType
-	targetSOC            float64 // Target ceiling SOC for blockActionCharge, or export floor SOC for blockActionExport
+	targetSOC            float64 // Target ceiling SOC for blockActionCharge, ending floor SOC for blockActionExport / blockActionDirectSolarExport, or discharge-to-Standby floor SOC for blockActionStandby
 	useSolarExportPrefix bool    // For blockActionExport: if true, run DirectSolarExport before the battery export tail
 }
 
@@ -1216,8 +1216,8 @@ func isBlockActionAllowed(
 				return false
 			}
 			// A hybrid DirectSolarExport -> Export block is only allowed if DirectSolarExport
-			// itself is allowed in this block.
-			choice := blockActionChoice{actionType: blockActionDirectSolarExport}
+			// itself is allowed in this block at the same target floor.
+			choice := blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: cand.targetSOC}
 			if !isBlockActionAllowed(blockIdx, block, choice, blocks, startState, vppEvents, knownPostHorizonRate, settings, currentStatus, timeline, lastAction) {
 				return false
 			}
@@ -1306,14 +1306,15 @@ func isBlockActionAllowed(
 				positiveNetSolarKWH += net
 			}
 		}
+		requiredFloorSOC := max(cand.targetSOC, block.minSOC)
 		if hasSignificantSolar {
 			maxReachableSOC := startState.soc + (positiveNetSolarKWH*math.Sqrt(effRT)/startState.capacityKWH)*100.0
-			if maxReachableSOC <= block.minSOC+solarExportReserveMarginPct {
+			if maxReachableSOC <= block.minSOC+solarExportReserveMarginPct || maxReachableSOC < requiredFloorSOC-socTargetTolerancePct {
 				return false
 			}
 			return true
 		}
-		if hasTrickleSolar && startState.soc > block.minSOC+solarExportReserveMarginPct {
+		if hasTrickleSolar && startState.soc > block.minSOC+solarExportReserveMarginPct && startState.soc >= requiredFloorSOC-socTargetTolerancePct {
 			return true
 		}
 		return false
@@ -1347,14 +1348,22 @@ func isBlockActionAllowed(
 
 		// Disallow holding in Standby on any block when no VPP event, no higher import rate
 		// (in downstream blocks or post-horizon slices), no export rate exceeding this block's
-		// minimum import rate, no Buy-All/Sell-All solar recharge avoidance, and no higher reserve floor lies ahead.
-		// Using block.minImportRate (without gating on block.isHighestPrice) handles <$0.10 TOU
-		// spreads (such as Eversource CT Rate 7) as well as merged dynamic-tariff blocks safely.
+		// minimum import rate, no Buy-All/Sell-All solar recharge avoidance, and no downstream
+		// reserve floor step-up where recharging later would cost at least as much as importing now
+		// (or grid charging is disabled) lies ahead. (A much cheaper downstream block's minSOC
+		// step-up, such as On-Peak $0.31 -> Off-Peak $0.10 with minSOC 5% -> 20%, must not allow
+		// Standby during On-Peak since recharging during the cheaper block is strictly cheaper even
+		// after RTE and wear.) Using block.minImportRate (without gating on block.isHighestPrice)
+		// handles <$0.10 TOU spreads (such as Eversource CT Rate 7) as well as merged dynamic-tariff
+		// blocks safely.
 		if !hasVPPAhead && !buyAllSolarAvoidance {
+			canGridRecharge := settings.GridChargeBatteries && !startState.chargingDisabled
 			hasReasonToHold := knownPostHorizonRate > block.minImportRate+priceEpsilonForEquality
 			for j := blockIdx + 1; j < len(blocks) && !hasReasonToHold; j++ {
+				stepUpJustifiesHold := blocks[j].minSOC > block.minSOC+socTargetTolerancePct &&
+					(!canGridRecharge || (blocks[j].maxImportRate+wear.gridChargePerKWH)/effRT >= block.minImportRate-priceEpsilonForEquality)
 				if blocks[j].maxImportRate > block.minImportRate+priceEpsilonForEquality ||
-					blocks[j].minSOC > block.minSOC+socTargetTolerancePct ||
+					stepUpJustifiesHold ||
 					(settings.GridExportBatteries && blocks[j].maxBatteryExportRate > block.minImportRate+priceEpsilonForEquality) ||
 					(settings.GridExportSolar && !blocks[j].buyAllSellAll && blocks[j].maxExportRate > block.minImportRate+priceEpsilonForEquality) {
 					hasReasonToHold = true
@@ -1637,34 +1646,49 @@ func validateCandidateTrajectory(
 	// (timeline[i].minSOC - reserveDeficitChargeTolerancePct), the plan must actively charge (BatteryModeChargeAny)
 	// in that interval unless:
 	//   (a) Step i is controlled by a hard override (EVChargingStandby, VPPActive, VPPPrep), or
-	//   (b) Step i is within the initial 1-period (chargeCompletionBufferDuration) deferral window at the
-	//       start of the horizon before charging begins, and the deficit is recovered (or charging starts)
-	//       within chargeCompletionBufferDuration.
+	//   (b) No grid charge has occurred yet (firstChargeIdx == -1 || i < firstChargeIdx) and either charging
+	//       begins within chargeCompletionBufferDuration of deficitStartIdx (respecting initialDeficitWait when
+	//       the deficit started at step 0) or solar recovers timeline[i].minSOC within 2*chargeCompletionBufferDuration
+	//       (1 additional 20-minute interval). Requiring i < firstChargeIdx ensures an earlier planned ChargeAny
+	//       cannot intentionally under-charge and exploit a future reserve-step-up grace window.
 	// This rejects plans that stop charging before reaching minSOC, while allowing plans that stay in
 	// continuous BatteryModeChargeAny when minSOC is physically unreachable within the window.
 	if len(timeline) > 0 && settings.GridChargeBatteries && !initialState.chargingDisabled {
+		deficitStartIdx := -1
 		for i := 0; i < len(timeline); i++ {
 			if states[i].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct ||
 				states[i+1].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct {
+				deficitStartIdx = -1
 				continue
 			}
 			if actions[i].batteryMode == types.BatteryModeChargeAny ||
 				actions[i].reason == types.ActionReasonEVChargingStandby ||
 				actions[i].reason == types.ActionReasonVPPActive ||
 				actions[i].reason == types.ActionReasonVPPPrep {
+				deficitStartIdx = -1
 				continue
 			}
+			if deficitStartIdx == -1 {
+				deficitStartIdx = i
+			}
 			if firstChargeIdx == -1 || i < firstChargeIdx {
+				waitOffset := time.Duration(0)
+				if deficitStartIdx == 0 {
+					waitOffset = initialDeficitWait
+				}
 				recoveredInBuffer := false
-				for k := i + 1; k < len(timeline); k++ {
-					if timeline[k].startTime.Sub(timeline[0].startTime)+initialDeficitWait > chargeCompletionBufferDuration+time.Minute {
-						break
-					}
-					if actions[k].batteryMode == types.BatteryModeChargeAny ||
-						(timeline[k].endTime.Sub(timeline[0].startTime)+initialDeficitWait <= chargeCompletionBufferDuration+time.Minute &&
-							states[k+1].soc >= timeline[k].minSOC-reserveDeficitChargeTolerancePct) {
-						recoveredInBuffer = true
-						break
+				if !(deficitStartIdx == 0 && waitOffset >= chargeCompletionBufferDuration) {
+					deficitStartTime := timeline[deficitStartIdx].startTime
+					for k := i + 1; k < len(timeline); k++ {
+						if timeline[k].startTime.Sub(deficitStartTime)+waitOffset > chargeCompletionBufferDuration+time.Minute {
+							break
+						}
+						if actions[k].batteryMode == types.BatteryModeChargeAny ||
+							(timeline[k].endTime.Sub(deficitStartTime)+waitOffset <= 2*chargeCompletionBufferDuration+time.Minute &&
+								states[k+1].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct) {
+							recoveredInBuffer = true
+							break
+						}
 					}
 				}
 				if recoveredInBuffer {
@@ -1779,7 +1803,11 @@ func estimatePairedBlockStartState(
 			stateB.soc = max(stateB.soc, pt[0].targetSOC)
 		}
 	case blockActionStandby:
-		stateB.soc = max(stateB.soc, stateA.soc)
+		socSaved := 0.0
+		if blocks[a].endIdx+1 < len(currentStates) {
+			socSaved = max(0.0, stateA.soc-currentStates[blocks[a].endIdx+1].soc)
+		}
+		stateB.soc = min(100.0, max(stateB.soc+socSaved, stateA.soc))
 	case blockActionLoad:
 		simSOCB := stateA.soc
 		for k := a; k < b; k++ {
@@ -1966,12 +1994,40 @@ func critiqueBlockPlan(
 		return out
 	}
 
+	// Precompute per-block solar presence once so dark blocks do not generate redundant
+	// blockActionDirectSolarExport candidates or paired trials.
+	blockHasSolar := make([]bool, len(blocks))
+	for b := range blocks {
+		for k := blocks[b].startIdx; k <= blocks[b].endIdx; k++ {
+			if timeline[k].solarKWH >= minSolarGenerationKW*timeline[k].durationHours {
+				blockHasSolar[b] = true
+				break
+			}
+		}
+	}
+
 	// predefine slices with large enough backing arrays
-	candidateTypes := make([]blockActionChoice, 0, 24)
+	candidateTypes := make([]blockActionChoice, 0, 48)
+	addCandidate := func(c blockActionChoice) {
+		for _, existing := range candidateTypes {
+			if sameBlockChoice(existing, c) {
+				return
+			}
+		}
+		candidateTypes = append(candidateTypes, c)
+	}
 	baseTrial := make([]blockActionChoice, len(currentChoices))
 	bestIterChoices := make([]blockActionChoice, len(currentChoices))
 	trialVariants := make([][]blockActionChoice, 0, 12)
-	pairedTrials := make([][2]blockActionChoice, 0, 96)
+	pairedTrials := make([][2]blockActionChoice, 0, 128)
+	addPairedTrial := func(pair [2]blockActionChoice) {
+		for _, existing := range pairedTrials {
+			if sameBlockChoice(existing[0], pair[0]) && sameBlockChoice(existing[1], pair[1]) {
+				return
+			}
+		}
+		pairedTrials = append(pairedTrials, pair)
+	}
 	// Iterative single-block & paired-block critique loop (up to 5 rounds).
 	maxCritiqueIters := 5
 	for iter := 0; iter < maxCritiqueIters; iter++ {
@@ -1983,44 +2039,49 @@ func critiqueBlockPlan(
 
 		for b := 0; b < len(blocks); b++ {
 			minSOC := blocks[b].minSOC
+			canDirectSolarExport := settings.ManageTOUSchedules && settings.GridExportSolar && !blocks[b].buyAllSellAll && blockHasSolar[b]
 			candidateTypes = candidateTypes[:0]
-			candidateTypes = append(candidateTypes,
-				blockActionChoice{actionType: blockActionLoad},
-				blockActionChoice{actionType: blockActionStandby},
-				blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: minSOC},
-				blockActionChoice{actionType: blockActionCharge, targetSOC: 100},
-				blockActionChoice{actionType: blockActionCharge, targetSOC: 75},
-				blockActionChoice{actionType: blockActionCharge, targetSOC: 50},
-				blockActionChoice{actionType: blockActionExport, targetSOC: minSOC, useSolarExportPrefix: false},
-				blockActionChoice{actionType: blockActionExport, targetSOC: minSOC, useSolarExportPrefix: true},
-			)
+			addCandidate(blockActionChoice{actionType: blockActionLoad})
+			addCandidate(blockActionChoice{actionType: blockActionStandby})
+			if canDirectSolarExport {
+				addCandidate(blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: minSOC})
+			}
+			addCandidate(blockActionChoice{actionType: blockActionCharge, targetSOC: 100})
+			addCandidate(blockActionChoice{actionType: blockActionCharge, targetSOC: 75})
+			addCandidate(blockActionChoice{actionType: blockActionCharge, targetSOC: 50})
+			addCandidate(blockActionChoice{actionType: blockActionExport, targetSOC: minSOC, useSolarExportPrefix: false})
+			addCandidate(blockActionChoice{actionType: blockActionExport, targetSOC: minSOC, useSolarExportPrefix: true})
 			if minSOC > 0 {
-				candidateTypes = append(candidateTypes, blockActionChoice{actionType: blockActionCharge, targetSOC: minSOC})
+				addCandidate(blockActionChoice{actionType: blockActionCharge, targetSOC: minSOC})
+			}
+			addExportFloorCandidates := func(floor float64) {
+				if canDirectSolarExport {
+					addCandidate(blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: floor})
+				}
+				addCandidate(blockActionChoice{actionType: blockActionExport, targetSOC: floor, useSolarExportPrefix: false})
+				addCandidate(blockActionChoice{actionType: blockActionExport, targetSOC: floor, useSolarExportPrefix: true})
 			}
 			// Always include a midpoint export floor (e.g. 55%-60% when minSOC is 10%-20%, or 75% when minSOC is 50%)
 			// even when minSOC is constant across the horizon, so Pass 1 can discover partial battery exports during
 			// mid-peak export spikes without draining the battery to minSOC before the peak concludes.
 			midExportFloor := math.Round(((minSOC+100.0)/2.0)/5.0) * 5.0
 			if midExportFloor > minSOC+5.0 && midExportFloor < 100.0-5.0 {
-				candidateTypes = append(candidateTypes,
-					blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: midExportFloor},
-					blockActionChoice{actionType: blockActionExport, targetSOC: midExportFloor, useSolarExportPrefix: false},
-					blockActionChoice{actionType: blockActionExport, targetSOC: midExportFloor, useSolarExportPrefix: true},
-				)
+				addExportFloorCandidates(midExportFloor)
 			}
-			// When a downstream block steps up minSOC (e.g. from 20% during peak to 80% post-peak) or an
+			// When a downstream block steps up minSOC (e.g. from 5% during peak to 20% or 85% post-peak) or an
 			// earlier block holds battery energy in Standby (setting minSOCSinceStandby > minSOC),
-			// validateCandidateTrajectory's ExportBelowFutureReserve / HoldThenCheaperExport checks reject
-			// BatteryModeExport candidates that drain below that elevated floor. Including coarse floors
-			// {20, 40, 60, 80} that are >5% away from minSOC and midExportFloor ensures Pass 1 can find a
-			// compliant BatteryModeExport floor. blockActionDirectSolarExport is omitted here because
-			// it runs in BatteryModeLoad (not subject to ExportBelowFutureReserve), already tests minSOC and
-			// midExportFloor above, and has its floor tuned across minSOC..100% in Pass 2.
+			// validateCandidateTrajectory's ExportBelowFutureReserve / HoldThenCheaperExport /
+			// UnrecoveredReserveDeficit checks can reject export candidates that drain all the way to minSOC.
+			// Including each downstream minSOC step-up (covering >80% reserves too), standbyFloor, and coarse
+			// floors {20, 40, 60, 80} ensures Pass 1 can discover a compliant delayed-start DirectSolarExport or
+			// BatteryModeExport floor that Pass 2 can then fine-tune across minSOC..100%.
 			hasHigherExportFloor := false
 			for j := b + 1; j < len(blocks); j++ {
 				if blocks[j].minSOC > minSOC+socTargetTolerancePct {
 					hasHigherExportFloor = true
-					break
+					if blocks[j].minSOC < 100.0-socTargetTolerancePct {
+						addExportFloorCandidates(blocks[j].minSOC)
+					}
 				}
 			}
 			for j := 0; j < b; j++ {
@@ -2029,10 +2090,7 @@ func critiqueBlockPlan(
 					if blocks[j].endIdx+1 < len(currentStates) {
 						standbyFloor := math.Ceil(currentStates[blocks[j].endIdx+1].soc)
 						if standbyFloor > minSOC+socTargetTolerancePct && standbyFloor < 100.0-socTargetTolerancePct {
-							candidateTypes = append(candidateTypes,
-								blockActionChoice{actionType: blockActionExport, targetSOC: standbyFloor, useSolarExportPrefix: false},
-								blockActionChoice{actionType: blockActionExport, targetSOC: standbyFloor, useSolarExportPrefix: true},
-							)
+							addExportFloorCandidates(standbyFloor)
 						}
 					}
 				}
@@ -2040,10 +2098,7 @@ func critiqueBlockPlan(
 			if hasHigherExportFloor {
 				for _, coarseFloor := range []float64{20, 40, 60, 80} {
 					if coarseFloor > minSOC+5.0 && math.Abs(coarseFloor-midExportFloor) > 5.0 {
-						candidateTypes = append(candidateTypes,
-							blockActionChoice{actionType: blockActionExport, targetSOC: coarseFloor, useSolarExportPrefix: false},
-							blockActionChoice{actionType: blockActionExport, targetSOC: coarseFloor, useSolarExportPrefix: true},
-						)
+						addExportFloorCandidates(coarseFloor)
 					}
 				}
 			}
@@ -2279,6 +2334,48 @@ func critiqueBlockPlan(
 						}
 					}
 				}
+				// Pair Charge(100%) or Standby at a with DirectSolarExport at b when block b has solar and
+				// profitable solar export (including midpoint, standby, exact downstream minSOC step-ups, and
+				// coarse floors so delayed-start solar export can be discovered alongside pre-charging/holding
+				// and fine-tuned in Pass 2).
+				canDirectSolarExportB := settings.ManageTOUSchedules && settings.GridExportSolar && !blocks[b].buyAllSellAll && blockHasSolar[b] &&
+					blocks[b].maxExportRate > blocks[a].minImportRate+priceEpsilonForEquality
+				if canDirectSolarExportB {
+					addDirectSolarExportPairs := func(floor float64) {
+						addPairedTrial([2]blockActionChoice{
+							{actionType: blockActionCharge, targetSOC: 100},
+							{actionType: blockActionDirectSolarExport, targetSOC: floor},
+						})
+						addPairedTrial([2]blockActionChoice{
+							{actionType: blockActionCharge, targetSOC: 50},
+							{actionType: blockActionDirectSolarExport, targetSOC: floor},
+						})
+						addPairedTrial([2]blockActionChoice{
+							{actionType: blockActionStandby},
+							{actionType: blockActionDirectSolarExport, targetSOC: floor},
+						})
+					}
+					addDirectSolarExportPairs(minSOCB)
+					if midExportFloorB > minSOCB+5.0 && midExportFloorB < 100.0-5.0 {
+						addDirectSolarExportPairs(midExportFloorB)
+					}
+					hasHigherDownstreamFloorB := false
+					for j := b + 1; j < len(blocks); j++ {
+						if blocks[j].minSOC > minSOCB+socTargetTolerancePct {
+							hasHigherDownstreamFloorB = true
+							if blocks[j].minSOC < 100.0-socTargetTolerancePct {
+								addDirectSolarExportPairs(blocks[j].minSOC)
+							}
+						}
+					}
+					if hasHigherDownstreamFloorB {
+						for _, coarseFloor := range []float64{20, 40, 60, 80} {
+							if coarseFloor > minSOCB+5.0 && math.Abs(coarseFloor-midExportFloorB) > 5.0 {
+								addDirectSolarExportPairs(coarseFloor)
+							}
+						}
+					}
+				}
 				// Try exporting down to the midpoint between minSOCB and 100% after charging or holding at a
 				// so a mid-peak export at b can preserve half the battery for later peak load. (Export at a +
 				// Charge at b does not need a midpoint trial here because block a already has its starting SOC
@@ -2310,6 +2407,12 @@ func critiqueBlockPlan(
 				}
 				standbyFloorA := math.Ceil(stateA.soc)
 				if standbyFloorA > minSOCB+socTargetTolerancePct && standbyFloorA < 100.0-socTargetTolerancePct {
+					if canDirectSolarExportB {
+						addPairedTrial([2]blockActionChoice{
+							{actionType: blockActionStandby},
+							{actionType: blockActionDirectSolarExport, targetSOC: standbyFloorA},
+						})
+					}
 					pairedTrials = append(pairedTrials,
 						[2]blockActionChoice{
 							{actionType: blockActionStandby},
@@ -2533,9 +2636,12 @@ func optimizeBlockTargets(
 	copy(choices, winningChoices)
 	trialChoices := make([]blockActionChoice, len(choices))
 
-	// 1. Identify active Charge and Export blocks in the winning Pass 1 plan.
+	// 1. Identify active Charge and Export (or DirectSolarExport) blocks in the winning Pass 1 plan.
+	// Prefer blockActionExport when both are present, falling back to blockActionDirectSolarExport so
+	// coupled Charge + DirectSolarExport plans also get joint 2D (C, E) refinement.
 	chargeBlockIdx := -1
 	exportBlockIdx := -1
+	directSolarExportBlockIdx := -1
 	for b := 0; b < len(blocks); b++ {
 		if choices[b].actionType == blockActionCharge && chargeBlockIdx == -1 {
 			chargeBlockIdx = b
@@ -2543,6 +2649,12 @@ func optimizeBlockTargets(
 		if choices[b].actionType == blockActionExport && exportBlockIdx == -1 {
 			exportBlockIdx = b
 		}
+		if choices[b].actionType == blockActionDirectSolarExport && directSolarExportBlockIdx == -1 {
+			directSolarExportBlockIdx = b
+		}
+	}
+	if exportBlockIdx == -1 {
+		exportBlockIdx = directSolarExportBlockIdx
 	}
 
 	// 2. Joint 2D search when the plan contains both a Charge block and an Export block.
@@ -2560,6 +2672,46 @@ func optimizeBlockTargets(
 		initialE := choices[exportBlockIdx].targetSOC
 		bestC := initialC
 		bestE := initialE
+		bestBlockMinSOC := initialE
+
+		computeExportBlockMinSOC := func(E float64, states []planState) float64 {
+			blockMinSOC := E
+			if len(states) > blocks[exportBlockIdx].endIdx+1 {
+				blockMinSOC = states[blocks[exportBlockIdx].startIdx].soc
+				for idx := blocks[exportBlockIdx].startIdx + 1; idx <= blocks[exportBlockIdx].endIdx+1; idx++ {
+					if states[idx].soc < blockMinSOC {
+						blockMinSOC = states[idx].soc
+					}
+				}
+			}
+			return blockMinSOC
+		}
+
+		isBetterJointPair := func(score, E float64, states []planState) (bool, float64) {
+			blockMinSOC := computeExportBlockMinSOC(E, states)
+			if score < bestScore-planScoreTieEpsilon {
+				return true, blockMinSOC
+			}
+			if math.Abs(score-bestScore) <= planScoreTieEpsilon {
+				dist := math.Abs(E - blockMinSOC)
+				bestDist := math.Abs(bestE - bestBlockMinSOC)
+				if dist < bestDist-socTargetTolerancePct || (math.Abs(dist-bestDist) <= socTargetTolerancePct && E > bestE) {
+					return true, blockMinSOC
+				}
+			}
+			return false, blockMinSOC
+		}
+
+		// Seed bestScore with Pass 1's winning (initialC, initialE) so non-10%-multiple floors
+		// (e.g. an 85% downstream reserve or standbyFloor) can never be overwritten by a worse
+		// coarse-grid candidate.
+		if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); initActs != nil {
+			if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
+				initScore, _, initStates, _ := scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				bestScore = initScore
+				bestBlockMinSOC = computeExportBlockMinSOC(initialE, initStates)
+			}
+		}
 
 		// Coarse 10% 2D grid
 		for _, C := range coarseSOCGrid(minC, maxC) {
@@ -2573,12 +2725,12 @@ func optimizeBlockTargets(
 				if !valid {
 					continue
 				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				// pick the best score or the tied score with the highest export
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+				score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				if better, blockMinSOC := isBetterJointPair(score, E, states); better {
 					bestScore = score
 					bestC = C
 					bestE = E
+					bestBlockMinSOC = blockMinSOC
 				}
 			}
 		}
@@ -2598,11 +2750,12 @@ func optimizeBlockTargets(
 				if !valid {
 					continue
 				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+				score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				if better, blockMinSOC := isBetterJointPair(score, E, states); better {
 					bestScore = score
 					bestC = C
 					bestE = E
+					bestBlockMinSOC = blockMinSOC
 				}
 			}
 		}
