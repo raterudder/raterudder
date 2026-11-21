@@ -544,22 +544,38 @@ func isImageFile(p string) bool {
 
 func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		hasTrailingSlash := strings.HasSuffix(r.URL.Path, "/")
+		rooted := path.Clean("/" + r.URL.Path)
+		cleanedPath := path.Clean(strings.TrimPrefix(rooted, "/"))
+		if !fs.ValidPath(cleanedPath) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if rooted != "/" && hasTrailingSlash {
+			r.URL.Path = rooted + "/"
+		} else {
+			r.URL.Path = rooted
+		}
+
+		isWellKnownPath := cleanedPath == ".well-known" || strings.HasPrefix(cleanedPath, ".well-known/")
 		isAssetsPath := cleanedPath == "assets" || strings.HasPrefix(cleanedPath, "assets/")
 		// Default to serving index.html for unknown paths (SPA)
-		if r.URL.Path != "/" {
+		if rooted != "/" {
 			// Check if the file exists in the filesystem
 			f, err := dir.Open(cleanedPath)
 			if err == nil {
 				stat, statErr := f.Stat()
 				f.Close()
-				if statErr == nil && stat.IsDir() && isAssetsPath {
+				if statErr == nil && stat.IsDir() && (isWellKnownPath || isAssetsPath) {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
+			} else if errors.Is(err, fs.ErrInvalid) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
 			} else if errors.Is(err, fs.ErrNotExist) {
 				// Don't fallback to index.html for .well-known or /assets/
-				if strings.HasPrefix(r.URL.Path, "/.well-known/") || isAssetsPath {
+				if isWellKnownPath || isAssetsPath {
 					// we don't write JSON here because we don't know what file type is expected
 					http.Error(w, "not found", http.StatusNotFound)
 					return

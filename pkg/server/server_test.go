@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +25,26 @@ import (
 
 func init() {
 	log.SetDefaultLogLevel(slog.LevelError)
+}
+
+type openRecorderFS struct {
+	fsys   fs.FS
+	onOpen func(name string)
+}
+
+func (r openRecorderFS) Open(name string) (fs.File, error) {
+	if r.onOpen != nil {
+		r.onOpen(name)
+	}
+	return r.fsys.Open(name)
+}
+
+type errorFS struct {
+	err error
+}
+
+func (e errorFS) Open(name string) (fs.File, error) {
+	return nil, e.err
 }
 
 func TestWebHandler(t *testing.T) {
@@ -302,6 +325,227 @@ func TestWebHandler(t *testing.T) {
 		if assert.Equal(t, http.StatusOK, resp.StatusCode) {
 			assert.Equal(t, "[]\n", w.Body.String())
 		}
+	})
+
+	t.Run("SubFS Normalized and Invalid Paths", func(t *testing.T) {
+		embeddedFS := fstest.MapFS{
+			"dist/index.html":                  {Data: []byte("<html>index</html>")},
+			"dist/assets/main.js":              {Data: []byte("console.log('hello');")},
+			"dist/.well-known/assetlinks.json": {Data: []byte("[]\n")},
+			"dist/docs/index.html":             {Data: []byte("<html>docs</html>")},
+		}
+		subFS, err := fs.Sub(embeddedFS, "dist")
+		require.NoError(t, err)
+
+		srv := &Server{
+			utilities:        mockUMap,
+			ess:              mockP,
+			storage:          mockS,
+			listenAddr:       ":8080",
+			controller:       controller.NewController(),
+			webCacheDuration: 5 * time.Minute,
+		}
+
+		newSubMux := func() *http.ServeMux {
+			mux := http.NewServeMux()
+			fileServer := http.FileServer(http.FS(subFS))
+			mux.Handle("/", srv.webHandler(subFS, fileServer))
+			return mux
+		}
+
+		newRecordedMux := func(fsys fs.FS) (*http.ServeMux, *[]string) {
+			var opened []string
+			wrapped := openRecorderFS{
+				fsys: fsys,
+				onOpen: func(name string) {
+					opened = append(opened, name)
+				},
+			}
+			mux := http.NewServeMux()
+			fileServer := http.FileServer(http.FS(subFS))
+			mux.Handle("/", srv.webHandler(wrapped, fileServer))
+			return mux, &opened
+		}
+
+		newRequestWithLogger := func(target string) (*http.Request, *bytes.Buffer) {
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req = req.WithContext(log.With(req.Context(), logger))
+			return req, &logBuf
+		}
+
+		t.Run("Encoded Leading Slash Unknown File Falls Back to Index", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2F.env.prod")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "<html>index</html>", w.Body.String())
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded Root Slash Serves Index Without Opening Slash", func(t *testing.T) {
+			mux, opened := newRecordedMux(subFS)
+			req, logBuf := newRequestWithLogger("/%2F")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "<html>index</html>", w.Body.String())
+			assert.Empty(t, *opened)
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("DotDot Root Serves Index Without Opening Slash", func(t *testing.T) {
+			mux, opened := newRecordedMux(subFS)
+			req, logBuf := newRequestWithLogger("/%2e%2e")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "<html>index</html>", w.Body.String())
+			assert.Empty(t, *opened)
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded DotDot Unknown File Falls Back to Index", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2e%2e/.env")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "<html>index</html>", w.Body.String())
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded Leading Slash WellKnown Missing Returns Not Found", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2F.well-known/missing")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.NotContains(t, w.Body.String(), "<html>index</html>")
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded Leading Slash WellKnown Directory Returns Not Found", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2F.well-known/")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded Leading Slash Existing WellKnown File Serves Content", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2F.well-known/assetlinks.json")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			if assert.Equal(t, http.StatusOK, resp.StatusCode) {
+				assert.Equal(t, "[]\n", w.Body.String())
+			}
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Encoded Leading Slash Assets Missing Returns Not Found", func(t *testing.T) {
+			mux := newSubMux()
+			req, logBuf := newRequestWithLogger("/%2Fassets/missing.js")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.NotContains(t, w.Body.String(), "<html>index</html>")
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Invalid UTF8 Path Returns Not Found Without Calling FileServer", func(t *testing.T) {
+			fileServerCalled := false
+			mux := http.NewServeMux()
+			mux.Handle("/", srv.webHandler(subFS, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fileServerCalled = true
+			})))
+
+			req, logBuf := newRequestWithLogger("/%ff")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.False(t, fileServerCalled)
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Filesystem ErrInvalid Returns Not Found Without Error Log", func(t *testing.T) {
+			errInvalidFS := errorFS{err: &fs.PathError{Op: "open", Path: "bad", Err: fs.ErrInvalid}}
+			mux, _ := newRecordedMux(errInvalidFS)
+			req, logBuf := newRequestWithLogger("/bad")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Empty(t, logBuf.String())
+		})
+
+		t.Run("Unexpected Filesystem Error Logs Error and Returns 500", func(t *testing.T) {
+			boomFS := errorFS{err: errors.New("disk read failure")}
+			mux, _ := newRecordedMux(boomFS)
+			req, logBuf := newRequestWithLogger("/boom")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+			assert.Empty(t, w.Header().Get("Cache-Control"))
+			assert.Contains(t, logBuf.String(), "failed to open file")
+		})
+
+		t.Run("Preserves Trailing Slash For Directory Redirects", func(t *testing.T) {
+			mux := newSubMux()
+
+			reqNoSlash, _ := newRequestWithLogger("/%2Fdocs")
+			wNoSlash := httptest.NewRecorder()
+			mux.ServeHTTP(wNoSlash, reqNoSlash)
+			assert.Equal(t, http.StatusMovedPermanently, wNoSlash.Result().StatusCode)
+			assert.Equal(t, "docs/", wNoSlash.Header().Get("Location"))
+
+			reqWithSlash, _ := newRequestWithLogger("/%2Fdocs/")
+			wWithSlash := httptest.NewRecorder()
+			mux.ServeHTTP(wWithSlash, reqWithSlash)
+			assert.Equal(t, http.StatusOK, wWithSlash.Result().StatusCode)
+			assert.Equal(t, "<html>docs</html>", wWithSlash.Body.String())
+		})
 	})
 
 	t.Run("Server Header", func(t *testing.T) {
