@@ -33,25 +33,29 @@ type energyHistoryBaseline struct {
 
 var energyHistoryBaselines = map[string]energyHistoryBaseline{
 	// site2 (America/Chicago): mid-summer central AC evenings (11.0..36.0°C) coexisting with 48A EVChargingStandby
-	"site2_mid-summer.json": {maeKWH: 1.131, underPredictKWH: 1474.8, overPredictKWH: 904.4},
+	"site2_mid-summer.json": {maeKWH: 1.114, underPredictKWH: 1447.0, overPredictKWH: 896.4},
 	// site2 (America/Chicago): autumn transition (-1.0..33.6°C), high-standby vacation, Friday laundry surges, 48A EVChargingStandby, and fall-back DST
-	"site2_oct-nov.json": {maeKWH: 0.672, underPredictKWH: 1063.2, overPredictKWH: 237.6},
+	"site2_oct-nov.json": {maeKWH: 0.675, underPredictKWH: 1071.9, overPredictKWH: 235.1},
 	// site3 (America/Chicago): 13 vacation days + post-vacation recovery across varying temps (13.5..30.8°C)
-	"site3_late-summer.json": {maeKWH: 0.961, underPredictKWH: 1488.4, overPredictKWH: 922.6},
+	"site3_late-summer.json": {maeKWH: 0.938, underPredictKWH: 1472.6, overPredictKWH: 878.9},
 	// site4 (America/New_York): November cold snaps (-0.6..30.0°C) with sharp morning electric auxiliary heating surges and daytime solar/AC transition
-	"site4_nov-cold.json": {maeKWH: 1.103, underPredictKWH: 204.6, overPredictKWH: 135.1},
+	"site4_nov-cold.json": {maeKWH: 1.101, underPredictKWH: 208.3, overPredictKWH: 130.9},
 	// site5 (America/New_York): configured EVChargingStandby, 4 vacation days, and 1.67x heavy weekends
-	"site5_late-summer.json": {maeKWH: 0.764, underPredictKWH: 1432.5, overPredictKWH: 483.9},
+	"site5_late-summer.json": {maeKWH: 0.758, underPredictKWH: 1431.6, overPredictKWH: 468.6},
 	// site5 (America/New_York): autumn cold snaps (-3.9..28.2°C, 96 hrs <= 3°C) with morning/overnight electric heating surges and EVChargingStandby
-	"site5_oct-nov.json": {maeKWH: 0.469, underPredictKWH: 500.0, overPredictKWH: 119.5},
+	"site5_oct-nov.json": {maeKWH: 0.469, underPredictKWH: 500.6, overPredictKWH: 118.7},
 	// site6 (America/Los_Angeles): steady coastal temperatures (13.8..26.9°C) and tight daily load distribution
-	"site6_late-summer.json": {maeKWH: 0.366, underPredictKWH: 490.8, overPredictKWH: 426.6},
+	"site6_late-summer.json": {maeKWH: 0.361, underPredictKWH: 496.5, overPredictKWH: 408.6},
 	// site11 (America/Chicago): wide late-summer temperature swings / heatwaves (13.7..31.0°C) driving large AC loads
-	"site11_late-summer.json": {maeKWH: 0.984, underPredictKWH: 1144.2, overPredictKWH: 1324.2},
+	"site11_late-summer.json": {maeKWH: 0.961, underPredictKWH: 1128.0, overPredictKWH: 1281.2},
 	// site12 (America/Los_Angeles): strong day-of-week / weekend load surges (1.71x weekend-to-weekday ratio) + unconfigured EV spikes
-	"site12_late-summer.json": {maeKWH: 0.688, underPredictKWH: 1554.1, overPredictKWH: 170.7},
+	"site12_late-summer.json": {maeKWH: 0.689, underPredictKWH: 1554.7, overPredictKWH: 173.7},
+	// site16 (America/New_York): sustained November cold-snap electric heating (0.3..31.0°C) coexisting with configured EVChargingStandby
+	"site16_nov-cold.json": {maeKWH: 0.558, underPredictKWH: 205.8, overPredictKWH: 162.8},
 	// site17 (America/Los_Angeles): mixed slow (5-7.7 kW multi-hour overnight) + fast Level 2 EV sessions with EVChargingStandby across warm autumn (11.5..38.0°C)
-	"site17_oct-nov.json": {maeKWH: 0.487, underPredictKWH: 569.0, overPredictKWH: 374.7},
+	"site17_oct-nov.json": {maeKWH: 0.487, underPredictKWH: 555.9, overPredictKWH: 387.5},
+	// site18 (America/Chicago): gas-heated home during November cold snaps (-3.4..29.1°C) with frequent >=5 kW overnight EV charging and EVChargingStandby
+	"site18_nov-cold.json": {maeKWH: 0.294, underPredictKWH: 124.1, overPredictKWH: 69.9},
 }
 
 type energyEvalMetrics struct {

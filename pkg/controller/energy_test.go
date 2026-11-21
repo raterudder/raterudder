@@ -2438,6 +2438,181 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			assert.InDelta(t, friModel[12].AvgHomeLoadKWH, friModel[11].AvgHomeLoadKWH, 1e-6, "hour 11 must not apply morning-only 0.33x down-weight on an Afternoon outlier")
 		}
 	})
+
+	t.Run("AfternoonToEveningThermalLag", func(t *testing.T) {
+		now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		// Build 21 days of history:
+		// - Even days: hot 33°C afternoons (13:00-17:00), cooling to 22°C in evening (19:00-23:00) with heavy thermal-lag AC load (3.5 kWh).
+		// - Odd days (including the most recent days): mild 22°C afternoons and identical 22°C evenings with low evening load (1.0 kWh).
+		for d := 21; d >= 1; d-- {
+			dt := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			isHotAfternoon := d%2 == 0
+			var wf []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				tempC := 20.0
+				loadKWH := 1.0
+				if h >= 13 && h <= 17 {
+					if isHotAfternoon {
+						tempC = 33.0
+						loadKWH = 4.0
+					} else {
+						tempC = 22.0
+						loadKWH = 1.0
+					}
+				} else if h >= 19 && h <= 23 {
+					// Identical 22°C evening temperature on both hot-afternoon and mild-afternoon days.
+					tempC = 22.0
+					if isHotAfternoon {
+						loadKWH = 3.5
+					} else {
+						loadKWH = 1.0
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+				wf = append(wf, types.HourlyWeather{
+					TSHourStart:  dt.Add(time.Duration(h) * time.Hour),
+					TemperatureC: tempC,
+				})
+			}
+			weather = append(weather, types.Weather{
+				TSDayStart:    dt,
+				ForecastHours: wf,
+			})
+		}
+
+		// Target day 1: hot 33°C afternoon cooling to 22°C in the evening.
+		today := now.Truncate(24 * time.Hour)
+		makeTodayWeather := func(aftTempC float64) []types.Weather {
+			out := make([]types.Weather, len(weather), len(weather)+1)
+			copy(out, weather)
+			var todayWF []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				tempC := 20.0
+				if h >= 13 && h <= 17 {
+					tempC = aftTempC
+				} else if h >= 19 && h <= 23 {
+					tempC = 22.0
+				}
+				todayWF = append(todayWF, types.HourlyWeather{
+					TSHourStart:  today.Add(time.Duration(h) * time.Hour),
+					TemperatureC: tempC,
+				})
+			}
+			return append(out, types.Weather{TSDayStart: today, ForecastHours: todayWF})
+		}
+
+		modelHotAft, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, makeTodayWeather(33.0), types.Settings{})
+		if assert.Len(t, modelHotAft, 24) {
+			assert.GreaterOrEqual(t, modelHotAft[20].AvgHomeLoadKWH, 2.8,
+				"22°C evening after a 33°C afternoon must weight hot-afternoon evenings heavily via thermal lag")
+		}
+
+		// Target day 2: mild 22°C afternoon followed by identical 22°C evening -> must stay near 1.0 kWh.
+		modelMildAft, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, makeTodayWeather(22.0), types.Settings{})
+		if assert.Len(t, modelMildAft, 24) {
+			assert.LessOrEqual(t, modelMildAft[20].AvgHomeLoadKWH, 1.4,
+				"22°C evening after a 22°C afternoon must not be inflated by hot-afternoon evenings")
+		}
+	})
+
+	t.Run("OptionGPreservesOngoingColdSnapSurgeWhenNoColdHistory", func(t *testing.T) {
+		now := time.Date(2026, 11, 20, 22, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		// 24 mild days (18°C, natural 1.0..1.8 kWh/hr variation) followed by a 3-day cold snap
+		// (8°C, 4°C, 0°C at 2.1 kWh/hr, spaced 4°C apart so every cold day has allDaysSimW < 1.5).
+		coldDayTemps := map[int]float64{3: 8.0, 2: 4.0, 1: 0.0}
+		for d := 27; d >= 1; d-- {
+			dt := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			tempC := 18.0
+			loadKWH := 1.0 + 0.2*float64(d%5)
+			if ct, ok := coldDayTemps[d]; ok {
+				tempC = ct
+				loadKWH = 2.1
+			}
+			var wf []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+				wf = append(wf, types.HourlyWeather{
+					TSHourStart:  dt.Add(time.Duration(h) * time.Hour),
+					TemperatureC: tempC,
+				})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dt, ForecastHours: wf})
+		}
+
+		today := now.Truncate(24 * time.Hour)
+		tomorrow := today.AddDate(0, 0, 1)
+		makeForecastWeather := func(todayTempC, tomorrowTempC float64) []types.Weather {
+			out := make([]types.Weather, len(weather), len(weather)+2)
+			copy(out, weather)
+			for _, pair := range []struct {
+				day   time.Time
+				tempC float64
+			}{{today, todayTempC}, {tomorrow, tomorrowTempC}} {
+				var wf []types.HourlyWeather
+				for h := 0; h < 24; h++ {
+					wf = append(wf, types.HourlyWeather{
+						TSHourStart:  pair.day.Add(time.Duration(h) * time.Hour),
+						TemperatureC: pair.tempC,
+					})
+				}
+				out = append(out, types.Weather{TSDayStart: pair.day, ForecastHours: wf})
+			}
+			return out
+		}
+
+		// Case 1 (22:00 on cold day, tomorrow stays cold at 2°C): upcoming 24h window is cold -> Option G preserves shift.
+		modelCold, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, makeForecastWeather(2.0, 2.0), types.Settings{})
+		// Case 2 (22:00 on cold day, tomorrow warms to mild 18°C): 22 of 24 upcoming hours are mild -> Option G suppresses shift.
+		modelMildTomorrow, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, makeForecastWeather(2.0, 18.0), types.Settings{})
+		if assert.Len(t, modelCold, 24) && assert.Len(t, modelMildTomorrow, 24) {
+			assert.Greater(t, modelCold[12].AvgHomeLoadKWH, 2.2,
+				"Option G must preserve upward shift during an ongoing unprecedented cold snap when allDaysSimW < 1.5")
+			assert.InDelta(t, 1.4, modelMildTomorrow[12].AvgHomeLoadKWH, 0.35,
+				"Option G must suppress past cold-snap diffs when the upcoming 24h forecast window has warmed back to mild")
+		}
+	})
+}
+
+func TestTempSimilarityDiffC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CoreDeadbandCompression", func(t *testing.T) {
+		t.Parallel()
+		// Inside core [15°C, 21°C], 15°C vs 21°C (6°C raw diff) is compressed by 0.25x -> 1.5°C.
+		assert.InDelta(t, 1.5, tempSimilarityDiffC(15.0, 21.0), 1e-6)
+	})
+
+	t.Run("SmoothBoundaryRampNoCliff", func(t *testing.T) {
+		t.Parallel()
+		// Verify smooth continuity across 14°C and 22°C (no sudden jump for a 0.01°C shift).
+		dAt14 := tempSimilarityDiffC(14.0, 22.0)
+		dBelow14 := tempSimilarityDiffC(13.99, 22.0)
+		assert.InDelta(t, dAt14, dBelow14, 0.1, "Boundary ramp must be continuous with no cliff at 14°C")
+		dAt22 := tempSimilarityDiffC(15.0, 22.0)
+		dAbove22 := tempSimilarityDiffC(15.0, 22.01)
+		assert.InDelta(t, dAt22, dAbove22, 0.1, "Boundary ramp must be continuous with no cliff at 22°C")
+	})
+
+	t.Run("FullSeparationOutsideDeadband", func(t *testing.T) {
+		t.Parallel()
+		// Outside [13°C, 23°C], full 1:1 separation is preserved so heating and cooling are never blurred into mild days.
+		assert.InDelta(t, 9.0, tempSimilarityDiffC(12.0, 21.0), 1e-6)
+		assert.InDelta(t, 10.0, tempSimilarityDiffC(15.0, 25.0), 1e-6)
+		assert.InDelta(t, 6.0, tempSimilarityDiffC(4.0, 10.0), 1e-6)
+		assert.InDelta(t, 6.0, tempSimilarityDiffC(26.0, 32.0), 1e-6)
+	})
 }
 
 func TestDetectLoadShift(t *testing.T) {
