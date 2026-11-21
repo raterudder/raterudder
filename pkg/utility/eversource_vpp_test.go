@@ -273,16 +273,39 @@ func TestBaseEversourceVPP(t *testing.T) {
 			assert.InDelta(t, -0.0402, prices[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
 
-		// Check July 1, 2026 On-Peak (Delivery 0.11111 - FMCC 0.00210 = 0.10901)
-		startJul := time.Date(2026, time.July, 1, 14, 0, 0, 0, etLocation)
-		endJul := time.Date(2026, time.July, 1, 15, 0, 0, 0, etLocation)
-		pricesJul, err := siteFees.GetConfirmedPrices(context.Background(), startJul, endJul)
+		// Check July 1, 2026 On-Peak (Delivery 0.15853 - FMCC 0.00210 = 0.15643)
+		startJulOn := time.Date(2026, time.July, 1, 14, 0, 0, 0, etLocation)
+		endJulOn := time.Date(2026, time.July, 1, 15, 0, 0, 0, etLocation)
+		pricesJulOn, err := siteFees.GetConfirmedPrices(context.Background(), startJulOn, endJulOn)
 		require.NoError(t, err)
-		if assert.Len(t, pricesJul, 1) {
-			// Base supply (0.16000) + Delivery&FMCC (0.10901) = 0.26901
-			assert.InDelta(t, 0.26901, pricesJul[0].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, -0.0402, pricesJul[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
+		if assert.Len(t, pricesJulOn, 1) {
+			// Base supply (0.16000) + On-Peak Delivery&FMCC (0.15643) = 0.31643
+			assert.InDelta(t, 0.31643, pricesJulOn[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0402, pricesJulOn[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
+			assert.Equal(t, "On-Peak", pricesJulOn[0].PeriodName)
 		}
+
+		// Check July 1, 2026 Off-Peak (Delivery 0.10125 - FMCC 0.00210 = 0.09915)
+		startJulOff := time.Date(2026, time.July, 1, 8, 0, 0, 0, etLocation)
+		endJulOff := time.Date(2026, time.July, 1, 9, 0, 0, 0, etLocation)
+		pricesJulOff, err := siteFees.GetConfirmedPrices(context.Background(), startJulOff, endJulOff)
+		require.NoError(t, err)
+		if assert.Len(t, pricesJulOff, 1) {
+			// Base supply (0.08500) + Off-Peak Delivery&FMCC (0.09915) = 0.18415
+			assert.InDelta(t, 0.18415, pricesJulOff[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0402, pricesJulOff[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", pricesJulOff[0].PeriodName)
+		}
+
+		// Verify SiteFees.GetPeriods exposes named On-Peak and Off-Peak TOU periods
+		periods, err := siteFees.GetPeriods(context.Background())
+		require.NoError(t, err)
+		periodNames := make(map[string]bool)
+		for _, p := range periods {
+			periodNames[p.Name] = true
+		}
+		assert.True(t, periodNames["On-Peak"])
+		assert.True(t, periodNames["Off-Peak"])
 
 		// Check with 2025 application year (adjustment -$0.0050/kWh)
 		siteFees2025 := &SiteFees{
