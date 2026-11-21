@@ -3,10 +3,178 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/raterudder/raterudder/pkg/log"
 )
+
+var automatedUserAgentTokens = []string{
+	"headlesschrome",
+	"headless",
+	"phantomjs",
+	"playwright",
+	"puppeteer",
+	"selenium",
+	"webdriver",
+	"cypress",
+	"lighthouse",
+	"pagespeed",
+	"googlebot",
+	"adsbot",
+	"google-inspectiontool",
+	"googleother",
+	"mediapartners-google",
+	"apis-google",
+	"bingbot",
+	"duckduckbot",
+	"baiduspider",
+	"yandexbot",
+	"applebot",
+	"semrushbot",
+	"ahrefsbot",
+	"mj12bot",
+	"dotbot",
+	"petalbot",
+	"bytespider",
+	"gptbot",
+	"claudebot",
+	"ccbot",
+	"amazonbot",
+	"facebookexternalhit",
+	"twitterbot",
+	"linkedinbot",
+	"slackbot",
+	"discordbot",
+	"telegrambot",
+	"crawler",
+	"curl/",
+	"wget/",
+	"python-requests",
+	"python-httpx",
+	"go-http-client",
+}
+
+var browserExtensionSchemes = []string{
+	"chrome-extension",
+	"moz-extension",
+	"safari-extension",
+	"safari-web-extension",
+	"ms-browser-extension",
+	"opera-extension",
+	"extension",
+	"webkit-masked-url",
+}
+
+func normalizeReportHost(rawHost string) string {
+	h := strings.TrimSpace(rawHost)
+	if h == "" {
+		return ""
+	}
+	if splitHost, _, err := net.SplitHostPort(h); err == nil {
+		h = splitHost
+	} else {
+		h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+	}
+	return strings.ToLower(strings.TrimSuffix(h, "."))
+}
+
+func requestReportHost(r *http.Request) string {
+	if h := normalizeReportHost(r.Host); h != "" {
+		return h
+	}
+	if r.URL != nil {
+		return normalizeReportHost(r.URL.Host)
+	}
+	return ""
+}
+
+func isSameOriginReportURL(rawURL, reqHost string) bool {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "//") {
+		u, err := url.Parse(trimmed)
+		return err == nil && u.Scheme == "" && u.Host == ""
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "blob:") {
+		trimmed = strings.TrimSpace(trimmed[len("blob:"):])
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	return reqHost != "" && normalizeReportHost(u.Host) == reqHost
+}
+
+func isAutomatedUserAgent(ua string) bool {
+	lower := strings.ToLower(strings.TrimSpace(ua))
+	if lower == "" {
+		return false
+	}
+	for _, token := range automatedUserAgentTokens {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBrowserExtensionValue(val string) bool {
+	lower := strings.ToLower(strings.TrimSpace(val))
+	if lower == "" {
+		return false
+	}
+	for _, scheme := range browserExtensionSchemes {
+		if lower == scheme || strings.HasPrefix(lower, scheme+":") {
+			return true
+		}
+	}
+	return false
+}
+
+func isThirdPartyMediaBlock(body CSPViolationReportBody, reqHost string) bool {
+	directive := strings.ToLower(strings.TrimSpace(body.EffectiveDirective))
+	if directive != "media-src" && !strings.HasPrefix(directive, "media-src ") {
+		return false
+	}
+	blocked := strings.TrimSpace(body.BlockedURL)
+	if blocked == "" {
+		return false
+	}
+	lowerBlocked := strings.ToLower(blocked)
+	switch lowerBlocked {
+	case "self", "inline", "eval", "wasm-eval", "none", "data", "blob":
+		return false
+	}
+	if strings.HasPrefix(lowerBlocked, "data:") {
+		return false
+	}
+	return !isSameOriginReportURL(blocked, reqHost)
+}
+
+func shouldIgnoreCSPViolation(reportURL string, body CSPViolationReportBody, reqHost string) bool {
+	if reportURL == "" && strings.TrimSpace(body.DocumentURL) == "" {
+		return true
+	}
+	if body.DocumentURL != "" && !isSameOriginReportURL(body.DocumentURL, reqHost) {
+		return true
+	}
+	if isBrowserExtensionValue(body.SourceFile) || isBrowserExtensionValue(body.BlockedURL) {
+		return true
+	}
+	if isThirdPartyMediaBlock(body, reqHost) {
+		return true
+	}
+	return false
+}
 
 type CSPViolationReportBody struct {
 	BlockedURL         string `json:"blockedURL"`
@@ -63,20 +231,40 @@ func (s *Server) handleReportBrowser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isAutomatedUserAgent(r.UserAgent()) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Prevent DoS by limiting the number of reports processed per request
 	if len(reports) > 10 {
 		log.Ctx(ctx).WarnContext(ctx, "too many browser reports in single request", slog.Int("count", len(reports)))
 		reports = reports[:10]
 	}
 
+	reqHost := requestReportHost(r)
+
 	for _, report := range reports {
+		if isAutomatedUserAgent(report.UserAgent) || isBrowserExtensionValue(report.URL) {
+			continue
+		}
+		if report.URL != "" && !isSameOriginReportURL(report.URL, reqHost) {
+			continue
+		}
+		if report.Type != "csp-violation" && report.URL == "" {
+			continue
+		}
+
 		if report.Type == "csp-violation" {
 			var body CSPViolationReportBody
 			if err := json.Unmarshal(report.Body, &body); err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to decode csp violation report body", slog.Any("error", err))
 				continue
 			}
-			log.Ctx(ctx).ErrorContext(ctx, "CSP Violation",
+			if shouldIgnoreCSPViolation(report.URL, body, reqHost) {
+				continue
+			}
+			log.Ctx(ctx).WarnContext(ctx, "CSP Violation",
 				slog.String("type", report.Type),
 				slog.String("url", report.URL),
 				slog.String("user_agent", report.UserAgent),
@@ -98,7 +286,10 @@ func (s *Server) handleReportBrowser(w http.ResponseWriter, r *http.Request) {
 				log.Ctx(ctx).WarnContext(ctx, "failed to decode intervention report body", slog.Any("error", err))
 				continue
 			}
-			log.Ctx(ctx).ErrorContext(ctx, "Browser Intervention",
+			if isBrowserExtensionValue(body.SourceFile) {
+				continue
+			}
+			log.Ctx(ctx).WarnContext(ctx, "Browser Intervention",
 				slog.String("type", report.Type),
 				slog.String("url", report.URL),
 				slog.String("user_agent", report.UserAgent),
