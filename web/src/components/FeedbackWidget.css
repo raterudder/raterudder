@@ -11,9 +11,24 @@
 
 .feedback-widget-container {
     position: fixed;
-    bottom: 24px;
+    bottom: calc(24px + var(--unsaved-bar-offset, 0px));
     right: 24px;
     z-index: 1000;
+    transition: bottom 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+body:has(.unsaved-changes-bar) .feedback-widget-container {
+    bottom: calc(16px + var(--unsaved-bar-offset, 72px));
+}
+
+@media (max-width: 640px) {
+    .feedback-widget-container {
+        right: 16px;
+    }
+
+    body:has(.unsaved-changes-bar) .feedback-widget-container {
+        bottom: calc(16px + var(--unsaved-bar-offset, 118px));
+    }
 }
 
 .feedback-fab {

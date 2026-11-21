@@ -1073,13 +1073,15 @@ const Settings = ({
     settings: parentSettings,
     onSettingsSaved,
     onShowTutorial,
-    sites = []
+    sites = [],
+    beforeLeaveRef
 }: {
     siteID?: string,
     settings: SettingsType | null,
     onSettingsSaved?: () => Promise<void>,
     onShowTutorial?: () => void,
-    sites?: UserSite[]
+    sites?: UserSite[],
+    beforeLeaveRef?: React.MutableRefObject<(() => boolean) | null>
 }) => {
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
@@ -1322,7 +1324,12 @@ const Settings = ({
         return copy;
     };
 
+    const COVERAGE_ERROR_MESSAGE = "⚠️ Reserve SOC periods must cover all 24 hours without gaps or overlaps.";
+
     const updateMinBatterySOCPeriods = (newPeriods: MinBatterySOCPeriod[] | undefined) => {
+        if (!newPeriods || newPeriods.length === 0 || !validate24HourCoverage(newPeriods)) {
+            setError(prev => (prev === COVERAGE_ERROR_MESSAGE ? null : prev));
+        }
         setSettings(prev => {
             if (!prev) return prev;
             if (!newPeriods || newPeriods.length === 0) {
@@ -1367,7 +1374,7 @@ const Settings = ({
         const uncovered = counts.some(c => c === 0);
         const overlapping = counts.some(c => c > 1);
         if (uncovered || overlapping) {
-            return "⚠️ Reserve SOC periods must cover all 24 hours without gaps or overlaps.";
+            return COVERAGE_ERROR_MESSAGE;
         }
         return null;
     };
@@ -1375,13 +1382,21 @@ const Settings = ({
     const handleTogglePause = async () => {
         if (!settings) return;
         const newPause = !settings.pause;
-        const nextSettings = normalizeMinBatterySOC({ ...settings, pause: newPause });
-        setSettings(nextSettings);
+        let persistedBase: SettingsType = settings;
+        if (originalSettingsRef.current) {
+            try {
+                persistedBase = JSON.parse(originalSettingsRef.current) as SettingsType;
+            } catch {
+                persistedBase = settings;
+            }
+        }
+        const persistedPayload = normalizeMinBatterySOC({ ...persistedBase, pause: newPause });
+        setSettings(prev => prev ? ({ ...prev, pause: newPause }) : null);
         try {
             setIsSaving(true);
             setError(null);
-            await updateSettings(nextSettings, siteID);
-            originalSettingsRef.current = JSON.stringify(nextSettings);
+            await updateSettings(persistedPayload, siteID);
+            originalSettingsRef.current = JSON.stringify(persistedPayload);
             setSuccessMessage(newPause ? 'Automation paused' : 'Automation resumed');
             if (onSettingsSaved) {
                 await onSettingsSaved();
@@ -1397,7 +1412,19 @@ const Settings = ({
 
     const [essCredentials, setEssCredentials] = useState<Record<string, string>>({});
     const [oauthStatus, setOauthStatus] = useState<'idle' | 'popup_open' | 'success'>('idle');
+    const [errorScrollTick, setErrorScrollTick] = useState(0);
     const savingRef = useRef(false);
+    const deletingRef = useRef(false);
+    const restoringHistoryRef = useRef(false);
+    const skipNextHistoryGuardRef = useRef(false);
+    const initializedSiteRef = useRef<{ initialized: boolean; siteID?: string }>({ initialized: false, siteID: undefined });
+    const lastConfirmedLocationRef = useRef({
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+    });
+    const submitErrorRef = useRef<HTMLDivElement | null>(null);
+    const unsavedBarRef = useRef<HTMLDivElement | null>(null);
     const originalSettingsRef = useRef<string | null>(null);
     const oauthTimerRef = useRef<any>(null);
     const oauthListenerRef = useRef<((event: MessageEvent) => void) | null>(null);
@@ -1482,6 +1509,7 @@ const Settings = ({
 
     const handleConfirmDelete = async () => {
         if (!siteID) return;
+        deletingRef.current = true;
         setIsDeleting(true);
         setDeleteError(null);
         try {
@@ -1500,6 +1528,7 @@ const Settings = ({
                 window.location.href = '/dashboard';
             }
         } catch (err: any) {
+            deletingRef.current = false;
             console.error("Deletion failed", err);
             setDeleteError(err.message || "An error occurred during deletion");
             setIsDeleting(false);
@@ -1626,27 +1655,12 @@ const Settings = ({
         }
     };
 
-    useEffect(() => {
-        if (parentSettings) {
-            const initial = normalizeMinBatterySOC({
-                ...parentSettings,
-                gridChargeBatteries: parentSettings.gridChargeBatteries ?? true,
-                gridExportSolar: parentSettings.gridExportSolar ?? false,
-                gridExportBatteries: parentSettings.gridExportBatteries ?? false
-            });
-            setSettings(initial);
-            setMinArbitrageInput(initial.minArbitrageDifferenceDollarsPerKWH ? String(initial.minArbitrageDifferenceDollarsPerKWH) : '');
-            setMinBatteryExportInput(initial.minBatteryExportDifferenceDollarsPerKWH ? String(initial.minBatteryExportDifferenceDollarsPerKWH) : '');
-            setLocalEssAuthStatus(parentSettings.essAuthStatus);
-            originalSettingsRef.current = JSON.stringify(initial);
-            if (parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]) {
-                setEditESS(true);
-                setIsESSDirty(true);
-            }
-        }
-    }, [parentSettings]);
+    const hasEssCredentialsDraft = Object.values(essCredentials).some(
+        val => val !== undefined && val !== null && val !== ''
+    );
+    const hasSavedCredentialsDraft = Object.values(savedCredentialsProviders).some(Boolean);
 
-    const isDirty = Boolean(
+    const hasSettingsDiff = Boolean(
         settings &&
         originalSettingsRef.current &&
         (() => {
@@ -1658,25 +1672,152 @@ const Settings = ({
         })()
     );
 
+    const isDirty = Boolean(
+        settings &&
+        originalSettingsRef.current &&
+        (hasSettingsDiff || isESSDirty || hasEssCredentialsDraft || hasSavedCredentialsDraft)
+    );
+
+    const isDirtyRef = useRef(isDirty);
+    isDirtyRef.current = isDirty;
+    const isUtilityDirtyRef = useRef(isUtilityDirty);
+    isUtilityDirtyRef.current = isUtilityDirty;
+    const isInWizardRef = useRef(isInWizard);
+    isInWizardRef.current = isInWizard;
+
+    useEffect(() => {
+        if (!parentSettings) return;
+
+        const initial = normalizeMinBatterySOC({
+            ...parentSettings,
+            gridChargeBatteries: parentSettings.gridChargeBatteries ?? true,
+            gridExportSolar: parentSettings.gridExportSolar ?? false,
+            gridExportBatteries: parentSettings.gridExportBatteries ?? false
+        });
+
+        const isFirstLoadOrSiteSwitch =
+            !initializedSiteRef.current.initialized ||
+            initializedSiteRef.current.siteID !== siteID;
+
+        if (isFirstLoadOrSiteSwitch) {
+            const wasPreviouslyInitialized = initializedSiteRef.current.initialized;
+            initializedSiteRef.current = { initialized: true, siteID };
+            setSettings(initial);
+            setMinArbitrageInput(initial.minArbitrageDifferenceDollarsPerKWH ? String(initial.minArbitrageDifferenceDollarsPerKWH) : '');
+            setMinBatteryExportInput(initial.minBatteryExportDifferenceDollarsPerKWH ? String(initial.minBatteryExportDifferenceDollarsPerKWH) : '');
+            setLocalEssAuthStatus(parentSettings.essAuthStatus);
+            originalSettingsRef.current = JSON.stringify(initial);
+            if (wasPreviouslyInitialized) {
+                setEssCredentials({});
+                setOauthStatus('idle');
+                setIsESSDirty(false);
+                setIsUtilityDirty(false);
+                setEditUtility(false);
+                setEditBattery(false);
+                setBatteryError(null);
+                setError(null);
+                setIsInWizard(null);
+            }
+            setEditESS(Boolean(parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]));
+            return;
+        }
+
+        if (!savingRef.current && !isInWizardRef.current && (isDirtyRef.current || isUtilityDirtyRef.current)) {
+            if (originalSettingsRef.current) {
+                try {
+                    const orig = JSON.parse(originalSettingsRef.current) as SettingsType;
+                    const mergedOrig = normalizeMinBatterySOC({
+                        ...orig,
+                        notifications: parentSettings.notifications,
+                        essAuthStatus: parentSettings.essAuthStatus,
+                        features: parentSettings.features,
+                        pause: parentSettings.pause ?? orig.pause,
+                    });
+                    originalSettingsRef.current = JSON.stringify(mergedOrig);
+                } catch {
+                    // Keep existing originalSettingsRef on parse error
+                }
+            }
+            setSettings(prev => prev ? ({
+                ...prev,
+                notifications: parentSettings.notifications,
+                essAuthStatus: parentSettings.essAuthStatus,
+                features: parentSettings.features,
+                pause: parentSettings.pause ?? prev.pause,
+            }) : initial);
+            setLocalEssAuthStatus(parentSettings.essAuthStatus);
+            return;
+        }
+
+        setSettings(initial);
+        setMinArbitrageInput(initial.minArbitrageDifferenceDollarsPerKWH ? String(initial.minArbitrageDifferenceDollarsPerKWH) : '');
+        setMinBatteryExportInput(initial.minBatteryExportDifferenceDollarsPerKWH ? String(initial.minBatteryExportDifferenceDollarsPerKWH) : '');
+        setLocalEssAuthStatus(parentSettings.essAuthStatus);
+        originalSettingsRef.current = JSON.stringify(initial);
+        if (parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]) {
+            setEditESS(true);
+        }
+    }, [parentSettings, siteID]);
+
+    useEffect(() => {
+        if (!beforeLeaveRef) return;
+        if (!isDirty || isInWizard) {
+            beforeLeaveRef.current = null;
+            return;
+        }
+        beforeLeaveRef.current = () => {
+            if (savingRef.current || deletingRef.current || restoringHistoryRef.current) {
+                return true;
+            }
+            const confirmed = window.confirm('You have unsaved changes. Are you sure you want to leave?');
+            if (confirmed) {
+                skipNextHistoryGuardRef.current = true;
+                queueMicrotask(() => {
+                    skipNextHistoryGuardRef.current = false;
+                });
+            }
+            return confirmed;
+        };
+        return () => {
+            beforeLeaveRef.current = null;
+        };
+    }, [beforeLeaveRef, isDirty, isInWizard]);
+
     useEffect(() => {
         const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-            if (isDirty && !savingRef.current) {
+            if (isDirty && !savingRef.current && !deletingRef.current) {
                 e.preventDefault();
                 e.returnValue = '';
             }
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
 
-        if (!isDirty) {
+        lastConfirmedLocationRef.current = {
+            pathname: window.location.pathname,
+            search: window.location.search,
+            hash: window.location.hash,
+        };
+
+        if (!isDirty || isInWizard) {
             return () => window.removeEventListener('beforeunload', handleBeforeUnload);
         }
 
         const confirmLeave = (targetUrl?: string | URL | null) => {
-            if (savingRef.current) return true;
+            if (savingRef.current || deletingRef.current || restoringHistoryRef.current) return true;
+            if (skipNextHistoryGuardRef.current) {
+                skipNextHistoryGuardRef.current = false;
+                return true;
+            }
             if (targetUrl != null) {
                 try {
                     const url = new URL(targetUrl.toString(), window.location.origin);
-                    if (url.pathname === window.location.pathname) {
+                    const currentViewSite = new URLSearchParams(window.location.search).get('viewSite') ?? '';
+                    const nextViewSite = url.searchParams.get('viewSite') ?? '';
+                    if (
+                        url.origin === window.location.origin &&
+                        url.pathname === window.location.pathname &&
+                        nextViewSite === currentViewSite
+                    ) {
                         return true;
                     }
                 } catch {
@@ -1693,24 +1834,136 @@ const Settings = ({
             if (!confirmLeave(args[2])) {
                 return;
             }
-            return originalPushState.apply(this, args);
+            const result = originalPushState.apply(this, args);
+            lastConfirmedLocationRef.current = {
+                pathname: window.location.pathname,
+                search: window.location.search,
+                hash: window.location.hash,
+            };
+            return result;
         };
 
         window.history.replaceState = function (...args: Parameters<History['replaceState']>) {
             if (!confirmLeave(args[2])) {
                 return;
             }
-            return originalReplaceState.apply(this, args);
+            const result = originalReplaceState.apply(this, args);
+            lastConfirmedLocationRef.current = {
+                pathname: window.location.pathname,
+                search: window.location.search,
+                hash: window.location.hash,
+            };
+            return result;
         };
+
+        const handlePopState = (e: PopStateEvent) => {
+            if (savingRef.current || deletingRef.current || restoringHistoryRef.current) {
+                lastConfirmedLocationRef.current = {
+                    pathname: window.location.pathname,
+                    search: window.location.search,
+                    hash: window.location.hash,
+                };
+                return;
+            }
+
+            const last = lastConfirmedLocationRef.current;
+            const currentPathname = window.location.pathname;
+            const currentSearch = window.location.search;
+            const currentHash = window.location.hash;
+            const lastViewSite = new URLSearchParams(last.search).get('viewSite') ?? '';
+            const currentViewSite = new URLSearchParams(currentSearch).get('viewSite') ?? '';
+
+            const isInPageQueryOrHashChange =
+                currentPathname === last.pathname &&
+                currentViewSite === lastViewSite &&
+                (currentSearch !== last.search || currentHash !== last.hash);
+
+            if (isInPageQueryOrHashChange) {
+                lastConfirmedLocationRef.current = {
+                    pathname: currentPathname,
+                    search: currentSearch,
+                    hash: currentHash,
+                };
+                return;
+            }
+
+            const confirmed = window.confirm('You have unsaved changes. Are you sure you want to leave?');
+            if (confirmed) {
+                lastConfirmedLocationRef.current = {
+                    pathname: currentPathname,
+                    search: currentSearch,
+                    hash: currentHash,
+                };
+                return;
+            }
+
+            e.stopImmediatePropagation();
+            const restoreUrl = `${last.pathname}${last.search}${last.hash}`;
+            restoringHistoryRef.current = true;
+            try {
+                originalPushState.call(window.history, null, '', restoreUrl);
+            } finally {
+                restoringHistoryRef.current = false;
+            }
+        };
+
+        window.addEventListener('popstate', handlePopState, true);
 
         return () => {
             window.removeEventListener('beforeunload', handleBeforeUnload);
+            window.removeEventListener('popstate', handlePopState, true);
             window.history.pushState = originalPushState;
             window.history.replaceState = originalReplaceState;
         };
-    }, [isDirty]);
+    }, [isDirty, isInWizard]);
+
+    useEffect(() => {
+        if (!error || errorScrollTick === 0) return;
+        const errorEl =
+            submitErrorRef.current ??
+            document.querySelector('.submit-section .error-message') ??
+            document.querySelector('.error-message');
+        if (errorEl && typeof errorEl.scrollIntoView === 'function') {
+            errorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [error, errorScrollTick]);
+
+    const showUnsavedBar = Boolean(isDirty && !isInWizard && !showGridSettingsModal);
+
+    useEffect(() => {
+        const rootEl = document.documentElement;
+        if (!showUnsavedBar || !unsavedBarRef.current) {
+            rootEl.style.removeProperty('--unsaved-bar-offset');
+            return;
+        }
+        const barEl = unsavedBarRef.current;
+        const updateOffset = () => {
+            const height = Math.ceil(barEl.getBoundingClientRect().height);
+            if (height > 0) {
+                rootEl.style.setProperty('--unsaved-bar-offset', `${height}px`);
+            }
+        };
+        updateOffset();
+        let observer: ResizeObserver | null = null;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateOffset);
+            observer.observe(barEl);
+        }
+        return () => {
+            observer?.disconnect();
+            rootEl.style.removeProperty('--unsaved-bar-offset');
+        };
+    }, [showUnsavedBar, error]);
 
     const handleDiscard = () => {
+        if (oauthTimerRef.current) {
+            clearInterval(oauthTimerRef.current);
+            oauthTimerRef.current = null;
+        }
+        if (oauthListenerRef.current) {
+            window.removeEventListener('message', oauthListenerRef.current);
+            oauthListenerRef.current = null;
+        }
         if (originalSettingsRef.current) {
             const restored: SettingsType = JSON.parse(originalSettingsRef.current);
             setSettings(restored);
@@ -1722,6 +1975,9 @@ const Settings = ({
             setIsUtilityDirty(false);
             setIsESSDirty(false);
             setEditESS(Boolean(restored.ess && !restored.hasCredentials?.[restored.ess]));
+            setEditBattery(false);
+            setEditUtility(false);
+            setBatteryError(null);
             setSavedCredentialsProviders({});
             setReconnectRequiredProviders({});
             setStageMessage(null);
@@ -1865,8 +2121,8 @@ const Settings = ({
                     return;
                 }
                 // TODO: we should probably have the backend define better errors
+                setEditESS(true);
                 if (cred.field === 'authCode') {
-                    setEditESS(true);
                     throw new Error('Login to connect your energy system.');
                 }
                 throw new Error(`The ${cred.name} field is required.`);
@@ -1899,7 +2155,12 @@ const Settings = ({
         if (settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0) {
             const coverageError = validate24HourCoverage(settings.minBatterySOCPeriods);
             if (coverageError) {
+                setEditBattery(true);
+                if (settings.minBatterySOCPeriods.some(p => !p.utilityPeriodName)) {
+                    setScheduleMode('custom');
+                }
                 setError(coverageError);
+                setErrorScrollTick(prev => prev + 1);
                 return;
             }
         }
@@ -2020,7 +2281,17 @@ const Settings = ({
                 setEditESS(true);
             } else {
                 setError(formatESSRateLimitError(errMsg));
+                if (attemptedESSAuth || /credential|energy system|ess|oauth/i.test(errMsg)) {
+                    setEditESS(true);
+                } else if (/reserve|minbatterysoc|battery soc/i.test(errMsg)) {
+                    setEditBattery(true);
+                } else if (/utility|tariff|rate plan/i.test(errMsg)) {
+                    setEditUtility(true);
+                } else if (/arbitrage|battery export|solar trend|bell curve|net metering|optimization profile|home load/i.test(errMsg)) {
+                    setShowAdvanced(true);
+                }
             }
+            setErrorScrollTick(prev => prev + 1);
             if (attemptedESSAuth) {
                 setStageMessage(null);
             }
@@ -2358,7 +2629,6 @@ const Settings = ({
         : 0;
 
     const initialSettingsObj: SettingsType | null = (() => {
-        if (parentSettings) return parentSettings;
         if (originalSettingsRef.current) {
             try {
                 return JSON.parse(originalSettingsRef.current);
@@ -2366,12 +2636,21 @@ const Settings = ({
                 return null;
             }
         }
-        return settings;
+        return parentSettings;
     })();
 
-    const isLocationConfigured = !!(initialSettingsObj?.countryCode && initialSettingsObj?.postalCode) || !!(settings?.countryCode && settings?.postalCode);
-    const isUtilityConfigured = !!(initialSettingsObj?.utilityProvider && initialSettingsObj?.utilityProvider !== "") || !!(settings?.utilityProvider && settings?.utilityProvider !== "");
-    const isESSConfigured = !!(initialSettingsObj?.ess && initialSettingsObj.ess !== "" && initialSettingsObj.hasCredentials?.[initialSettingsObj.ess]) || !!(settings?.ess && settings.ess !== "" && settings?.hasCredentials?.[settings.ess]);
+    const isLocationConfigured = Boolean(initialSettingsObj?.countryCode && initialSettingsObj?.postalCode);
+    const isUtilityConfigured = Boolean(
+        initialSettingsObj?.utilityProvider &&
+        initialSettingsObj.utilityProvider !== "" &&
+        initialSettingsObj?.utilityRate &&
+        initialSettingsObj.utilityRate !== ""
+    );
+    const isESSConfigured = Boolean(
+        initialSettingsObj?.ess &&
+        initialSettingsObj.ess !== "" &&
+        initialSettingsObj.hasCredentials?.[initialSettingsObj.ess]
+    );
 
     const showWizard = !!(settings && isInWizard && !forceFullSettings);
     const showChecklist = !!(settings && !showWizard && (!isUtilityConfigured || !isESSConfigured) && !forceFullSettings);
@@ -2644,7 +2923,7 @@ const Settings = ({
     }
 
     return (
-        <div className="content-container settings-container">
+        <div className={`content-container settings-container${isDirty && !isInWizard ? ' has-unsaved-bar' : ''}`}>
             {showChecklist && (
                 <div className="checklist-banner font-sans" data-testid="checklist-banner">
                     <h4>Getting Started Checklist</h4>
@@ -2707,16 +2986,26 @@ const Settings = ({
                     </div>
 
                     {!editBattery && settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0 ? (
-                        <button type="button" className="configured-summary" onClick={() => setEditBattery(true)} aria-label="Edit Battery settings">
-                            <div className="summary-info">
-                                <span className="summary-label">Variable Reserve Schedule ({scheduleMode === 'named' ? 'Rate Periods' : 'Custom Hours'})</span>
-                                <span className="summary-sublabel">
-                                    {settings.minBatterySOCPeriods.map(p =>
-                                        p.utilityPeriodName ? `${p.utilityPeriodName}: ${p.minBatterySOC}%` : `${p.hours?.[0]?.hourStart ?? 0}:00-${p.hours?.[0]?.hourEnd ?? 24}:00: ${p.minBatterySOC}%`
-                                    ).join(' | ')}
-                                </span>
-                            </div>
-                        </button>
+                        (() => {
+                            const collapsedCoverageError = validate24HourCoverage(settings.minBatterySOCPeriods);
+                            return (
+                                <button type="button" className="configured-summary" onClick={() => setEditBattery(true)} aria-label="Edit Battery settings">
+                                    <div className="summary-info">
+                                        <span className="summary-label">Variable Reserve Schedule ({scheduleMode === 'named' ? 'Rate Periods' : 'Custom Hours'})</span>
+                                        <span className="summary-sublabel">
+                                            {settings.minBatterySOCPeriods.map(p =>
+                                                p.utilityPeriodName ? `${p.utilityPeriodName}: ${p.minBatterySOC}%` : `${p.hours?.[0]?.hourStart ?? 0}:00-${p.hours?.[0]?.hourEnd ?? 24}:00: ${p.minBatterySOC}%`
+                                            ).join(' | ')}
+                                        </span>
+                                    </div>
+                                    {collapsedCoverageError && (
+                                        <div className="summary-status error" data-testid="battery-summary-error-badge">
+                                            Invalid Schedule
+                                        </div>
+                                    )}
+                                </button>
+                            );
+                        })()
                     ) : (
                         <div className="form-grid compact-grid" data-testid="variable-reserve-section">
                             {batteryError && (
@@ -2951,7 +3240,16 @@ const Settings = ({
                                     <button
                                         type="button"
                                         className="text-button cancel-button"
-                                        onClick={() => setEditBattery(false)}
+                                        onClick={() => {
+                                            if (settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0) {
+                                                const coverageErr = validate24HourCoverage(settings.minBatterySOCPeriods);
+                                                if (coverageErr) {
+                                                    setError(coverageErr);
+                                                    return;
+                                                }
+                                            }
+                                            setEditBattery(false);
+                                        }}
                                     >
                                         Done
                                     </button>
@@ -3520,7 +3818,7 @@ const Settings = ({
                 )}
 
                 <div className="submit-section">
-                    {error && <div className="error-message">{error}</div>}
+                    {error && <div ref={submitErrorRef} className="error-message">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
                     {!(editESS && maxStage > currentStage) && (
                         <button type="submit" className="save-button" disabled={isSaving}>
@@ -3806,11 +4104,22 @@ const Settings = ({
             </div>
 
             {isDirty && !isInWizard && (
-                <div className="unsaved-changes-bar" data-testid="unsaved-changes-bar">
+                <div
+                    ref={unsavedBarRef}
+                    className={`unsaved-changes-bar${error ? ' has-error' : ''}`}
+                    data-testid="unsaved-changes-bar"
+                >
                     <div className="unsaved-changes-content">
-                        <div className="unsaved-changes-text">
-                            <span className="unsaved-dot" aria-hidden="true" />
-                            <span>You have unsaved changes</span>
+                        <div className="unsaved-changes-status">
+                            <div className="unsaved-changes-text">
+                                <span className="unsaved-dot" aria-hidden="true" />
+                                <span>You have unsaved changes</span>
+                            </div>
+                            {error && (
+                                <div className="unsaved-changes-error" role="alert" data-testid="unsaved-bar-error">
+                                    {error}
+                                </div>
+                            )}
                         </div>
                         <div className="unsaved-changes-actions">
                             <button
