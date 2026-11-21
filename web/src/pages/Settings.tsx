@@ -45,6 +45,12 @@ const countries = [
     { label: 'South Africa', value: 'ZA' }
 ];
 
+// Use Balanced profile degradation defaults for low-margin warnings rather than
+// adding per-profile complexity for a 1-cent difference.
+// Keep roughly aligned with Settings.GetOptimizationParams in pkg/types/settings.go.
+const minArbitrageWarningDollarsPerKWH = 0.02;
+const minBatteryExportWarningDollarsPerKWH = 0.03;
+
 interface LocationFormProps {
     settings: SettingsType;
     onChange: <K extends keyof SettingsType>(field: K, value: SettingsType[K]) => void;
@@ -2755,7 +2761,7 @@ const Settings = ({
                                         {scheduleMode === 'named' ? (
                                             <HelpButton
                                                 title="Rate Period Reserve Schedule"
-                                                description="Configures specific minimum battery reserve percentages for each utility rate period (e.g. On-Peak, Off-Peak). RateRudder ensures your battery holds higher reserves during expensive peak hours while allowing lower reserves during cheap off-peak hours for maximum savings."
+                                                description="Configures specific minimum battery reserve percentages for each utility rate period (e.g. On-Peak, Off-Peak). Setting a lower reserve floor during expensive On-Peak periods allows the battery to discharge and offset high rates, while a higher floor during cheaper Off-Peak periods preserves backup capacity."
                                             />
                                         ) : (
                                             <HelpButton
@@ -3203,9 +3209,9 @@ const Settings = ({
                                             <>
                                                 <p>Controls the risk profile, reserve safety buffers, and solar forecasting assumptions used by the planning algorithm:</p>
                                                 <ul>
-                                                    <li><strong>Aggressive:</strong> Maximizes financial savings with tighter buffers and minimal solar derating.</li>
-                                                    <li><strong>Balanced:</strong> Recommended optimizations balancing financial savings with safety margins.</li>
-                                                    <li><strong>Conservative:</strong> Holds higher energy reserves and applies wider buffers to protect against usage spikes or overcast weather.</li>
+                                                    <li><strong>Aggressive:</strong> Maximizes financial savings with tighter planning buffers, minimal solar derating, and lower profit hurdles.</li>
+                                                    <li><strong>Balanced:</strong> Recommended default balancing financial savings with moderate safety buffers and solar derating.</li>
+                                                    <li><strong>Conservative:</strong> Adds planning safety buffers, stronger overcast solar derating, and higher profit hurdles to protect against usage spikes or cloudy weather, while still discharging down to your configured minimum reserve to cover home load.</li>
                                                 </ul>
                                             </>
                                         }
@@ -3253,7 +3259,7 @@ const Settings = ({
                                 )}
                                 {settings.optimizationProfile === 'conservative' && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
-                                        Warning: A conservative profile will reduce your financial savings by holding more energy in reserve.
+                                        Warning: A conservative profile uses wider planning buffers and higher profit hurdles, which may reduce financial savings.
                                     </div>
                                 )}
                             </Field.Root>
@@ -3286,9 +3292,9 @@ const Settings = ({
                                     }}
                                 />
                                 <Field.Description>Required profit margin to trigger immediate charging to later use/export at higher prices. Leave blank to use the Optimization Profile default.</Field.Description>
-                                {(settings.minArbitrageDifferenceDollarsPerKWH ?? 0) > 0 && settings.minArbitrageDifferenceDollarsPerKWH < 0.03 && (
+                                {(settings.minArbitrageDifferenceDollarsPerKWH ?? 0) > 0 && settings.minArbitrageDifferenceDollarsPerKWH < minArbitrageWarningDollarsPerKWH && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-arbitrage-warning">
-                                        Warning: Setting this below $0.03/kWh may not cover battery degradation, making grid charging unprofitable.
+                                        Warning: Setting a very low arbitrage margin may not cover battery degradation, making grid charging unprofitable.
                                     </div>
                                 )}
                             </Field.Root>
@@ -3322,9 +3328,9 @@ const Settings = ({
                                         }}
                                     />
                                     <Field.Description>Minimum profit spread required to export battery energy directly to the grid. Leave blank to use the Optimization Profile default.</Field.Description>
-                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) > 0 && (settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) < 0.04 && (
+                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) > 0 && (settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) < minBatteryExportWarningDollarsPerKWH && (
                                         <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-battery-export-warning">
-                                            Warning: Setting this below $0.04/kWh may not cover battery degradation, making battery exports unprofitable.
+                                            Warning: Setting a very low export margin may not cover battery degradation, making battery exports unprofitable.
                                         </div>
                                     )}
                                 </Field.Root>
