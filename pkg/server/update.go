@@ -181,7 +181,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			siteCtx, cancel := context.WithTimeout(gCtx, 60*time.Second)
+			siteCtx, cancel := context.WithTimeout(gCtx, 90*time.Second)
 			defer cancel()
 
 			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))
@@ -650,7 +650,7 @@ func (s *Server) performSiteUpdate(
 }
 
 func (s *Server) insertAction(ctx context.Context, siteID string, action types.Action) error {
-	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	return s.storage.InsertAction(insertCtx, siteID, action)
 }

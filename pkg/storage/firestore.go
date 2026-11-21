@@ -30,7 +30,9 @@ import (
 
 const (
 	defaultFirestoreTimeout = 15 * time.Second
+	defaultAttemptTimeout   = 8 * time.Second
 	defaultPingTimeout      = 5 * time.Second
+	defaultGRPCPoolSize     = 2
 )
 
 // withDefaultTimeout ensures the context has a deadline so Firestore's GAPIC client
@@ -95,11 +97,12 @@ func (f *FirestoreProvider) Init(ctx context.Context) error {
 		database = firestore.DefaultDatabaseID
 	}
 	keepaliveParams := keepalive.ClientParameters{
-		Time:    30 * time.Second,
-		Timeout: 10 * time.Second,
+		Time:    15 * time.Second,
+		Timeout: 5 * time.Second,
 	}
 	client, err := firestore.NewClientWithDatabase(ctx, projectID, database,
 		option.WithGRPCDialOption(grpc.WithKeepaliveParams(keepaliveParams)),
+		option.WithGRPCConnectionPool(defaultGRPCPoolSize),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create firestore client (project=%s, database=%s): %w", projectID, database, err)
@@ -165,8 +168,17 @@ func isOptimisticRetryableErr(err error) bool {
 	return c == codes.AlreadyExists || c == codes.FailedPrecondition || c == codes.Aborted
 }
 
+func isAttemptTimeout(parentCtx, attemptCtx context.Context, err error) bool {
+	if err == nil || parentCtx.Err() != nil {
+		return false
+	}
+	return attemptCtx.Err() == context.DeadlineExceeded ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		status.Code(err) == codes.DeadlineExceeded
+}
+
 // getDocWithRetry retrieves a document snapshot from docRef, retrying on transient errors
-// such as codes.Unavailable caused by idle TCP connection resets.
+// such as codes.Unavailable caused by idle TCP connection resets or per-attempt timeouts.
 func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firestore.DocumentRef) (*firestore.DocumentSnapshot, error) {
 	ctx, cancel := withDefaultTimeout(ctx)
 	defer cancel()
@@ -175,14 +187,17 @@ func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firesto
 	backoff := 50 * time.Millisecond
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		doc, err := docRef.Get(ctx)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
+		doc, err := docRef.Get(attemptCtx)
+		attemptTimedOut := isAttemptTimeout(ctx, attemptCtx, err)
+		attemptCancel()
 		if err == nil {
 			return doc, nil
 		}
 		if status.Code(err) == codes.NotFound {
 			return nil, err
 		}
-		if isRetryableFirestoreErr(err) && attempt < maxAttempts-1 {
+		if (isRetryableFirestoreErr(err) || attemptTimedOut) && attempt < maxAttempts-1 {
 			log.Ctx(ctx).WarnContext(ctx, "firestore read failed with retryable error, retrying",
 				slog.String("path", docRef.Path),
 				slog.Int("attempt", attempt+1),
@@ -243,18 +258,21 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 			return nil, nil
 		}
 
+		writeCtx, writeCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
 		var wr *firestore.WriteResult
 		if doc == nil {
-			wr, err = docRef.Create(ctx, data)
+			wr, err = docRef.Create(writeCtx, data)
 		} else {
-			wr, err = docRef.Update(ctx, mapToFirestoreUpdates(data), firestore.LastUpdateTime(doc.UpdateTime))
+			wr, err = docRef.Update(writeCtx, mapToFirestoreUpdates(data), firestore.LastUpdateTime(doc.UpdateTime))
 		}
+		writeTimedOut := isAttemptTimeout(ctx, writeCtx, err)
+		writeCancel()
 		if err == nil {
 			return wr, nil
 		}
 
 		lastErr = err
-		if isOptimisticRetryableErr(err) && attempt < maxRetries-1 {
+		if (isOptimisticRetryableErr(err) || writeTimedOut) && attempt < maxRetries-1 {
 			log.Ctx(ctx).WarnContext(ctx, "firestore optimistic write conflict or transient error, retrying",
 				slog.String("path", docRef.Path),
 				slog.Int("attempt", attempt+1),

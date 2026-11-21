@@ -3435,26 +3435,30 @@ func TestInsertAction(t *testing.T) {
 		mockS := &mockStorage{}
 		var capturedErr error
 		var hasDeadline bool
-		var deadlineAfterNow bool
+		var capturedDeadline time.Time
 
 		mockS.On("InsertAction", mock.Anything, "site1", mock.Anything).Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
 			capturedErr = ctx.Err()
 			d, ok := ctx.Deadline()
 			hasDeadline = ok
-			deadlineAfterNow = d.After(time.Now())
+			capturedDeadline = d
 		}).Return(nil)
 
 		srv := &Server{storage: mockS}
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
+		before := time.Now()
 		err := srv.insertAction(canceledCtx, "site1", types.Action{Description: "test action"})
 		require.NoError(t, err)
 
 		assert.NoError(t, capturedErr)
-		assert.True(t, hasDeadline)
-		assert.True(t, deadlineAfterNow)
+		if assert.True(t, hasDeadline) {
+			remaining := capturedDeadline.Sub(before)
+			assert.GreaterOrEqual(t, remaining, 25*time.Second)
+			assert.Less(t, remaining, 35*time.Second)
+		}
 	})
 }
 

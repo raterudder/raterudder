@@ -2380,3 +2380,56 @@ func TestWithDefaultTimeout(t *testing.T) {
 		assert.True(t, deadline.Equal(expected))
 	})
 }
+
+func TestIsAttemptTimeout(t *testing.T) {
+	t.Run("NilError", func(t *testing.T) {
+		parentCtx := context.Background()
+		attemptCtx, cancel := context.WithTimeout(parentCtx, time.Second)
+		defer cancel()
+
+		assert.False(t, isAttemptTimeout(parentCtx, attemptCtx, nil))
+	})
+
+	t.Run("AttemptContextTimedOut", func(t *testing.T) {
+		parentCtx := context.Background()
+		attemptCtx, cancel := context.WithDeadline(parentCtx, time.Now().Add(-time.Second))
+		defer cancel()
+
+		assert.True(t, isAttemptTimeout(parentCtx, attemptCtx, context.DeadlineExceeded))
+	})
+
+	t.Run("ServerDeadlineExceededRPC", func(t *testing.T) {
+		parentCtx := context.Background()
+		attemptCtx, cancel := context.WithTimeout(parentCtx, time.Second)
+		defer cancel()
+
+		err := status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+		assert.True(t, isAttemptTimeout(parentCtx, attemptCtx, err))
+	})
+
+	t.Run("ParentContextExpired", func(t *testing.T) {
+		parentCtx, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer parentCancel()
+		attemptCtx, attemptCancel := context.WithTimeout(parentCtx, time.Second)
+		defer attemptCancel()
+
+		assert.False(t, isAttemptTimeout(parentCtx, attemptCtx, context.DeadlineExceeded))
+	})
+
+	t.Run("ParentContextCanceled", func(t *testing.T) {
+		parentCtx, parentCancel := context.WithCancel(context.Background())
+		parentCancel()
+		attemptCtx, attemptCancel := context.WithTimeout(parentCtx, time.Second)
+		defer attemptCancel()
+
+		assert.False(t, isAttemptTimeout(parentCtx, attemptCtx, context.DeadlineExceeded))
+	})
+
+	t.Run("NonDeadlineError", func(t *testing.T) {
+		parentCtx := context.Background()
+		attemptCtx, cancel := context.WithTimeout(parentCtx, time.Second)
+		defer cancel()
+
+		assert.False(t, isAttemptTimeout(parentCtx, attemptCtx, status.Error(codes.NotFound, "not found")))
+	})
+}
