@@ -73,7 +73,7 @@ func TestRockyMountainPowerRates(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Utah Residential Service flat rate with 1:1 Net Metering Schedule 135", func(t *testing.T) {

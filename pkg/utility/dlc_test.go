@@ -48,7 +48,7 @@ func TestDLCRates(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 
 		t.Run("Q1 2026 Jan-Mar", func(t *testing.T) {
 			p, err := u.priceForTime(time.Date(2026, time.February, 15, 14, 0, 0, 0, etLocation))

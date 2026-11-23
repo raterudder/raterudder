@@ -75,16 +75,80 @@ func TestSiteFees(t *testing.T) {
 		s := &SiteFees{}
 		periods := []types.UtilityFeesPeriod{
 			{
+				TimePeriod: types.TimePeriod{
+					Name:          "Custom Peak",
+					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+					DaysOfTheWeek: []time.Weekday{time.Monday},
+					SpecificDates: []string{"2026-07-04"},
+				},
 				Description:   "Custom Fee",
 				DollarsPerKWH: 0.05,
 			},
 		}
 		settings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+			},
 			UtilityFeesPeriods: periods,
 		}
 		err := s.ApplySettings(ctx, settings)
 		require.NoError(t, err)
 		assert.Equal(t, periods, s.periods)
+		assert.Equal(t, "comed_besh", s.Name())
+		assert.Equal(t, settings.UtilityRateOptions, s.options)
+
+		// Mutating caller slice or nested slices must not mutate SiteFees periods
+		periods[0].DollarsPerKWH = 0.99
+		periods[0].Hours[0].HourStart = 10
+		periods[0].DaysOfTheWeek[0] = time.Friday
+		periods[0].SpecificDates[0] = "2026-12-25"
+		assert.Equal(t, 0.05, s.periods[0].DollarsPerKWH)
+		assert.Equal(t, 16, s.periods[0].Hours[0].HourStart)
+		assert.Equal(t, time.Monday, s.periods[0].DaysOfTheWeek[0])
+		assert.Equal(t, "2026-07-04", s.periods[0].SpecificDates[0])
+	})
+
+	t.Run("settingsMatch compares rate name and options", func(t *testing.T) {
+		s := &SiteFees{}
+		baseSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+				VariableDeliveryRate: false,
+			},
+		}
+		require.NoError(t, s.ApplySettings(ctx, baseSettings))
+		assert.True(t, s.settingsMatch(baseSettings))
+
+		diffOptions := baseSettings
+		diffOptions.UtilityRateOptions.VariableDeliveryRate = true
+		assert.False(t, s.settingsMatch(diffOptions))
+
+		diffRate := baseSettings
+		diffRate.UtilityRate = "comed_bes"
+		assert.False(t, s.settingsMatch(diffRate))
+	})
+
+	t.Run("GetPeriods excludes unnamed and separate generation or grid additional periods", func(t *testing.T) {
+		s := &SiteFees{
+			periods: []types.UtilityFeesPeriod{
+				{TimePeriod: types.TimePeriod{Name: "On-Peak"}, DollarsPerKWH: 0.20},
+				{TimePeriod: types.TimePeriod{Name: "Off-Peak"}, DollarsPerKWH: 0.10},
+				{DollarsPerKWH: 0.08},
+				{TimePeriod: types.TimePeriod{Name: "Solar Export"}, DollarsPerKWH: 0.05, SeparateGenerationCredit: true},
+				{TimePeriod: types.TimePeriod{Name: "Battery Export"}, DollarsPerKWH: 0.06, SeparateBatteryGenerationCredit: true},
+				{TimePeriod: types.TimePeriod{Name: "Grid Fee"}, DollarsPerKWH: 0.02, GridAdditional: true},
+			},
+		}
+		periods, err := s.GetPeriods(ctx)
+		require.NoError(t, err)
+		if assert.Len(t, periods, 2) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+			assert.Equal(t, "Off-Peak", periods[1].Name)
+		}
 	})
 
 	t.Run("applyFees logic", func(t *testing.T) {

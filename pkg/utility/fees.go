@@ -2,6 +2,7 @@ package utility
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,17 +16,21 @@ type SiteFees struct {
 	siteID  string
 	periods []types.UtilityFeesPeriod
 	name    string
+	options types.UtilityRateOptions
 	vppInfo types.UtilityVPPInfo
 }
 
 // Name returns the name of the utility rate
 func (s *SiteFees) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.name
 }
 
 func (s *SiteFees) settingsMatch(settings types.Settings) bool {
 	s.mu.Lock()
 	name := s.name
+	options := s.options
 	s.mu.Unlock()
 
 	if settings.UtilityRate != "" && name != settings.UtilityRate {
@@ -34,7 +39,17 @@ func (s *SiteFees) settingsMatch(settings types.Settings) bool {
 	if sm, ok := s.base.(settingsMatcher); ok {
 		return sm.settingsMatch(settings)
 	}
-	return true
+	return options == settings.UtilityRateOptions
+}
+
+func cloneUtilityFeesPeriods(in []types.UtilityFeesPeriod) []types.UtilityFeesPeriod {
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].Hours = slices.Clone(out[i].Hours)
+		out[i].DaysOfTheWeek = slices.Clone(out[i].DaysOfTheWeek)
+		out[i].SpecificDates = slices.Clone(out[i].SpecificDates)
+	}
+	return out
 }
 
 // ApplySettings implements the Utility interface
@@ -47,8 +62,9 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 		return err
 	}
 
+	var periods []types.UtilityFeesPeriod
 	if settings.UtilityFeesPeriods != nil {
-		s.periods = settings.UtilityFeesPeriods
+		periods = cloneUtilityFeesPeriods(settings.UtilityFeesPeriods)
 	} else {
 		// if they don't have any additional fees periods, we will need to find the
 		// default for their utility provider
@@ -56,9 +72,11 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 		if err != nil {
 			return err
 		}
-		s.periods = fees
-		s.name = settings.UtilityRate
+		periods = fees
 	}
+	s.periods = periods
+	s.name = settings.UtilityRate
+	s.options = settings.UtilityRateOptions
 	s.vppInfo = vppInfo
 
 	return nil
@@ -78,7 +96,7 @@ func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
 
 	var res []types.TimePeriod
 	for _, p := range s.periods {
-		if !p.SeparateGenerationCredit && !p.GridAdditional && p.Name != "" {
+		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional && p.Name != "" {
 			res = append(res, p.TimePeriod)
 		}
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -37,21 +38,38 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 	}
 
 	effectiveSettings := settings.Settings
+	query := r.URL.Query()
 
-	if qProvider := r.URL.Query().Get("utilityProvider"); qProvider != "" {
-		effectiveSettings.UtilityProvider = qProvider
-	}
-	if qRate := r.URL.Query().Get("utilityRate"); qRate != "" {
-		effectiveSettings.UtilityRate = qRate
-	}
-	if qRateOpts := r.URL.Query().Get("utilityRateOptions"); qRateOpts != "" {
-		var opts types.UtilityRateOptions
-		if err := json.Unmarshal([]byte(qRateOpts), &opts); err == nil {
-			effectiveSettings.UtilityRateOptions = opts
+	if query.Has("utilityProvider") {
+		qProvider := query.Get("utilityProvider")
+		if qProvider != effectiveSettings.UtilityProvider {
+			effectiveSettings.UtilityProvider = qProvider
+			effectiveSettings.UtilityRate = ""
+			effectiveSettings.UtilityRateOptions = types.UtilityRateOptions{}
+			effectiveSettings.UtilityFeesPeriods = nil
 		}
 	}
+	if query.Has("utilityRate") {
+		qRate := query.Get("utilityRate")
+		if qRate != effectiveSettings.UtilityRate {
+			effectiveSettings.UtilityRate = qRate
+			effectiveSettings.UtilityRateOptions = types.UtilityRateOptions{}
+			effectiveSettings.UtilityFeesPeriods = nil
+		}
+	}
+	if query.Has("utilityRateOptions") {
+		var opts types.UtilityRateOptions
+		if qRateOpts := query.Get("utilityRateOptions"); qRateOpts != "" {
+			if err := json.Unmarshal([]byte(qRateOpts), &opts); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "invalid utility rate options", slog.Any("error", err))
+				writeJSONError(w, fmt.Sprintf("invalid utility rate options: %v", err), http.StatusBadRequest)
+				return
+			}
+		}
+		effectiveSettings.UtilityRateOptions = opts
+	}
 
-	if effectiveSettings.UtilityProvider == "" {
+	if effectiveSettings.UtilityProvider == "" || (effectiveSettings.UtilityRate == "" && effectiveSettings.UtilityFeesPeriods == nil) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(nil); err != nil {
 			panic(http.ErrAbortHandler)
@@ -59,10 +77,15 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := s.utilities.Site(ctx, siteID, effectiveSettings)
+	u, err := s.utilities.PreviewSite(ctx, effectiveSettings)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get utility provider", slog.Any("error", err))
-		writeJSONError(w, "failed to get utility provider", http.StatusInternalServerError)
+		log.Ctx(ctx).WarnContext(ctx,
+			"invalid utility provider settings",
+			slog.String("utilityProvider", effectiveSettings.UtilityProvider),
+			slog.String("utilityRate", effectiveSettings.UtilityRate),
+			slog.Any("error", err),
+		)
+		writeJSONError(w, fmt.Sprintf("invalid utility provider settings: %v", err), http.StatusBadRequest)
 		return
 	}
 

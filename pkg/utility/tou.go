@@ -83,7 +83,7 @@ func (t *genericTOU) GetPeriods(ctx context.Context) ([]types.TimePeriod, error)
 
 	var res []types.TimePeriod
 	for _, p := range t.periods {
-		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional {
+		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional && p.Name != "" {
 			res = append(res, p.TimePeriod)
 		}
 	}

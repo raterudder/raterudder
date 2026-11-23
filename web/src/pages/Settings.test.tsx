@@ -3466,6 +3466,82 @@ describe('App & Settings', () => {
                 );
             });
         });
+
+        it('passes unsaved utility selections to fetchUtilityPeriods and clears periods when rate is empty', async () => {
+            const user = userEvent.setup();
+            (api.fetchUtilities as any).mockResolvedValue([
+                {
+                    id: 'comed',
+                    name: 'Commonwealth Edison (ComEd)',
+                    rates: [{ id: 'comed_besh', name: 'Hourly Pricing Program' }],
+                },
+                {
+                    id: 'pg_e',
+                    name: 'Pacific Gas & Electric (PG&E)',
+                    rates: [
+                        { id: 'pg_e_e_1', name: 'E-1 Flat' },
+                        { id: 'pg_e_e_tou_c', name: 'E-TOU-C' },
+                    ],
+                },
+            ]);
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                utilityProvider: 'pg_e',
+                utilityRate: 'pg_e_e_tou_c',
+                utilityRateOptions: {},
+            });
+            (api.fetchUtilityPeriods as any).mockImplementation(
+                (_siteID?: string, provider?: string, rate?: string) => {
+                    if (provider === 'pg_e' && rate === 'pg_e_e_tou_c') {
+                        return Promise.resolve([
+                            { name: 'On-Peak' },
+                            { name: 'Off-Peak' },
+                        ]);
+                    }
+                    return Promise.resolve([]);
+                }
+            );
+
+            await navigateToSettings();
+
+            // Wait for initial periods load
+            await waitFor(() => {
+                expect(api.fetchUtilityPeriods).toHaveBeenCalledWith('site1', 'pg_e', 'pg_e_e_tou_c', {});
+            });
+
+            // Switch to ComEd, then back to PG&E (which has multiple rates, so utilityRate becomes '')
+            await user.click(screen.getByRole('button', { name: 'Change Utility Service' }));
+            await user.click(await screen.findByRole('combobox', { name: /Utility Provider/i }));
+            await user.click(await screen.findByRole('option', { name: /ComEd/i }));
+
+            await user.click(await screen.findByRole('combobox', { name: /Utility Provider/i }));
+            await user.click(await screen.findByRole('option', { name: /Pacific Gas & Electric/i }));
+
+            (api.fetchUtilityPeriods as any).mockClear();
+
+            // Clicking Advanced with unsaved provider='pg_e' and empty rate='' passes unsaved selections and opens Custom Mode without Rates Mode
+            const advancedBtn = await screen.findByRole('button', { name: /^Advanced$/i });
+            await user.click(advancedBtn);
+
+            await waitFor(() => {
+                expect(api.fetchUtilityPeriods).toHaveBeenCalledWith('site1', 'pg_e', '', {});
+                expect(screen.getByText('From:')).toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: /^Rates Mode$/i })).not.toBeInTheDocument();
+            });
+
+            // Selecting E-TOU-C fetches periods for unsaved rate and reveals Rates Mode button
+            await user.click(await screen.findByRole('combobox', { name: /Rate\/Plan/i }));
+            await user.click(await screen.findByRole('option', { name: 'E-TOU-C' }));
+
+            const ratesModeBtn = await screen.findByRole('button', { name: /^Rates Mode$/i });
+            await user.click(ratesModeBtn);
+
+            await waitFor(() => {
+                expect(screen.getByLabelText(/On-Peak Reserve %/i)).toBeInTheDocument();
+                expect(screen.getByLabelText(/Off-Peak Reserve %/i)).toBeInTheDocument();
+            });
+        });
     });
 
     describe('EV Charging Battery Protection', () => {

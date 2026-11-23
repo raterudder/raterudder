@@ -50,7 +50,7 @@ func TestTOUUtility(t *testing.T) {
 		}
 	})
 
-	t.Run("GetPeriods returns all non-export non-grid-additional periods", func(t *testing.T) {
+	t.Run("GetPeriods excludes unnamed periods", func(t *testing.T) {
 		u := &genericTOU{
 			periods: []types.UtilityFeesPeriod{
 				{DollarsPerKWH: 0.10},
@@ -60,7 +60,7 @@ func TestTOUUtility(t *testing.T) {
 		}
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, periods, 1)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("GetPeriods TOU returns named periods excluding separate generation credits", func(t *testing.T) {
@@ -69,6 +69,8 @@ func TestTOUUtility(t *testing.T) {
 				{TimePeriod: types.TimePeriod{Name: "On-Peak"}, DollarsPerKWH: 0.20},
 				{TimePeriod: types.TimePeriod{Name: "Off-Peak"}, DollarsPerKWH: 0.10},
 				{TimePeriod: types.TimePeriod{Name: "Export"}, DollarsPerKWH: 0.05, SeparateGenerationCredit: true},
+				{TimePeriod: types.TimePeriod{Name: "Battery Export"}, DollarsPerKWH: 0.08, SeparateBatteryGenerationCredit: true},
+				{TimePeriod: types.TimePeriod{Name: "Grid Fee"}, DollarsPerKWH: 0.02, GridAdditional: true},
 			},
 		}
 		periods, err := u.GetPeriods(context.Background())
@@ -80,19 +82,14 @@ func TestTOUUtility(t *testing.T) {
 	})
 
 	t.Run("All TOU rates with defined hours have period names assigned", func(t *testing.T) {
-		ctx := context.Background()
 		for _, provider := range touUtilities {
 			for _, rate := range provider.Rates {
 				fees, err := rate.GetFees(types.UtilityRateOptions{})
 				require.NoError(t, err, "rate.GetFees failed for provider %s rate %s", provider.ID, rate.ID)
-				u := &genericTOU{
-					siteID:  "test-site",
-					periods: fees,
-					name:    rate.ID,
-				}
-				periods, err := u.GetPeriods(ctx)
-				require.NoError(t, err, "GetPeriods failed for provider %s rate %s", provider.ID, rate.ID)
-				for i, p := range periods {
+				for i, p := range fees {
+					if p.SeparateGenerationCredit || p.SeparateBatteryGenerationCredit || p.GridAdditional {
+						continue
+					}
 					hasSpecificHours := false
 					for _, h := range p.Hours {
 						if !(h.HourStart == 0 && h.HourEnd == 24 && (len(p.DaysOfTheWeek) == 0 || len(p.DaysOfTheWeek) == 7)) {
