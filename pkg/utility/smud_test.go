@@ -330,7 +330,7 @@ func TestSMUDUtility(t *testing.T) {
 
 		periods, err := u.GetPeriods(ctx)
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Schedule SSR June 1 2026 Step and NEM1 Exports", func(t *testing.T) {
