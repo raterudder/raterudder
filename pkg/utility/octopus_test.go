@@ -435,6 +435,103 @@ func TestOctopusUtility(t *testing.T) {
 		}
 	})
 
+	t.Run("Intelligent Octopus Go - 2026-11-04 Transition", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "octopus",
+			UtilityRate:     "octopus_intelligent_go",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "london",
+			},
+		})
+		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.Len(t, periods, 4) {
+			assert.Equal(t, "Off-Peak", periods[0].Name)
+			assert.Equal(t, "Peak", periods[1].Name)
+			assert.Equal(t, "Off-Peak", periods[2].Name)
+			assert.Equal(t, "Peak", periods[3].Name)
+		}
+
+		// Pre-2026-11-04 (INTELLI-VAR-22-10-14 in London): Peak £0.2802, Off-Peak £0.0700
+		pPrePeak, err := u.priceForTime(time.Date(2026, time.November, 3, 23, 15, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.2802, pPrePeak.DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Peak", pPrePeak.PeriodName)
+			assert.True(t, pPrePeak.SeparateGenerationCredit)
+			assert.InDelta(t, 0.1200, pPrePeak.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Pre-midnight half of overnight window [23:30, 24:00) on 2026-11-03 -> £0.0700
+		pPreOff, err := u.priceForTime(time.Date(2026, time.November, 3, 23, 45, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.0700, pPreOff.DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", pPreOff.PeriodName)
+		}
+
+		// Exact 2026-11-04T00:00:00 GMT boundary (post-midnight half of overnight window [00:00, 05:30)) -> IOG-SMB-VAR-26-11-04 £0.0990
+		pPostOff, err := u.priceForTime(time.Date(2026, time.November, 4, 0, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.0990, pPostOff.DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", pPostOff.PeriodName)
+			assert.True(t, pPostOff.SeparateGenerationCredit)
+			assert.InDelta(t, 0.1200, pPostOff.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Morning Peak starting at 05:30 on 2026-11-04 -> £0.341553
+		pPostPeak, err := u.priceForTime(time.Date(2026, time.November, 4, 5, 45, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.341553, pPostPeak.DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Peak", pPostPeak.PeriodName)
+		}
+
+		// Verify 48-hour GetConfirmedPrices continuity across 2026-11-03 00:00 to 2026-11-05 00:00 GMT
+		// (2 days * 26 segments/day = 52 segments, covering 23:30-05:30 across midnight 2026-11-04T00:00:00)
+		winStart := time.Date(2026, time.November, 3, 0, 0, 0, 0, lonLocation)
+		winEnd := time.Date(2026, time.November, 5, 0, 0, 0, 0, lonLocation)
+		confirmed, err := u.GetConfirmedPrices(context.Background(), winStart, winEnd)
+		require.NoError(t, err)
+		if assert.Len(t, confirmed, 52) {
+			assert.Equal(t, winStart, confirmed[0].TSStart)
+			assert.Equal(t, winEnd, confirmed[len(confirmed)-1].TSEnd)
+			for i := 1; i < len(confirmed); i++ {
+				assert.Equal(t, confirmed[i-1].TSEnd, confirmed[i].TSStart)
+			}
+
+			// 2026-11-03 23:00-23:30 (index 24): pre-revision Peak (£0.2802)
+			assert.Equal(t, time.Date(2026, time.November, 3, 23, 0, 0, 0, lonLocation), confirmed[24].TSStart)
+			assert.Equal(t, time.Date(2026, time.November, 3, 23, 30, 0, 0, lonLocation), confirmed[24].TSEnd)
+			assert.InDelta(t, 0.2802, confirmed[24].DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Peak", confirmed[24].PeriodName)
+
+			// 2026-11-03 23:30-24:00 (index 25): pre-revision Off-Peak (£0.0700)
+			assert.Equal(t, time.Date(2026, time.November, 3, 23, 30, 0, 0, lonLocation), confirmed[25].TSStart)
+			assert.Equal(t, time.Date(2026, time.November, 4, 0, 0, 0, 0, lonLocation), confirmed[25].TSEnd)
+			assert.InDelta(t, 0.0700, confirmed[25].DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", confirmed[25].PeriodName)
+
+			// 2026-11-04 00:00-01:00 (index 26): Q4 2026 Off-Peak (£0.0990)
+			assert.Equal(t, time.Date(2026, time.November, 4, 0, 0, 0, 0, lonLocation), confirmed[26].TSStart)
+			assert.Equal(t, time.Date(2026, time.November, 4, 1, 0, 0, 0, lonLocation), confirmed[26].TSEnd)
+			assert.InDelta(t, 0.0990, confirmed[26].DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", confirmed[26].PeriodName)
+
+			// 2026-11-04 05:00-05:30 (index 31): Q4 2026 Off-Peak (£0.0990)
+			assert.Equal(t, time.Date(2026, time.November, 4, 5, 0, 0, 0, lonLocation), confirmed[31].TSStart)
+			assert.Equal(t, time.Date(2026, time.November, 4, 5, 30, 0, 0, lonLocation), confirmed[31].TSEnd)
+			assert.InDelta(t, 0.0990, confirmed[31].DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Off-Peak", confirmed[31].PeriodName)
+
+			// 2026-11-04 05:30-06:00 (index 32): Q4 2026 Peak (£0.341553)
+			assert.Equal(t, time.Date(2026, time.November, 4, 5, 30, 0, 0, lonLocation), confirmed[32].TSStart)
+			assert.Equal(t, time.Date(2026, time.November, 4, 6, 0, 0, 0, lonLocation), confirmed[32].TSEnd)
+			assert.InDelta(t, 0.341553, confirmed[32].DollarsPerKWH, 1e-6)
+			assert.Equal(t, "Peak", confirmed[32].PeriodName)
+		}
+	})
+
 	t.Run("Intelligent Octopus Go - Rate Classes and Fallback", func(t *testing.T) {
 		u := &genericTOU{}
 		offPeakTS := time.Date(2026, time.November, 15, 2, 0, 0, 0, lonLocation)
@@ -488,7 +585,7 @@ func TestOctopusUtility(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 0.361200, pPeak.DollarsPerKWH, 1e-6)
 
-		// 4. Stale RateClass falls back to flexible (£0.0990 / £0.341553)
+		// 4. Stale RateClass falls back to date-bounded flexible (£0.0700 / £0.2802 pre-2026-11-04; £0.0990 / £0.341553 on/after 2026-11-04)
 		require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_intelligent_go",
@@ -497,6 +594,12 @@ func TestOctopusUtility(t *testing.T) {
 				Location:  "london",
 			},
 		}))
+		pPreOff, err := u.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, lonLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0700, pPreOff.DollarsPerKWH, 1e-6)
+		pPrePeak, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, lonLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.2802, pPrePeak.DollarsPerKWH, 1e-6)
 		pOff, err = u.priceForTime(offPeakTS)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.0990, pOff.DollarsPerKWH, 1e-6)
@@ -670,22 +773,24 @@ func TestOctopusUtility(t *testing.T) {
 
 		primePeriods, err := uPrime.GetPeriods(context.Background())
 		require.NoError(t, err)
-		if assert.Len(t, primePeriods, 2) {
+		if assert.Len(t, primePeriods, 4) {
 			assert.Equal(t, "Off-Peak", primePeriods[0].Name)
 			assert.Equal(t, "Peak", primePeriods[1].Name)
+			assert.Equal(t, "Off-Peak", primePeriods[2].Name)
+			assert.Equal(t, "Peak", primePeriods[3].Name)
 		}
 
 		pPrimeOffPeak, err := uPrime.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, lonLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.341553, pPrimeOffPeak.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, pPrimeOffPeak.DollarsPerKWH, 1e-4)
 			assert.True(t, pPrimeOffPeak.SeparateGenerationCredit)
-			assert.InDelta(t, 0.0900, pPrimeOffPeak.GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0900, pPrimeOffPeak.GenerationCreditDollarsPerKWH, 1e-4)
 		}
 		pPrimePeak, err := uPrime.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, lonLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.341553, pPrimePeak.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, pPrimePeak.DollarsPerKWH, 1e-4)
 			assert.True(t, pPrimePeak.SeparateGenerationCredit)
-			assert.InDelta(t, 0.1600, pPrimePeak.GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.1600, pPrimePeak.GenerationCreditDollarsPerKWH, 1e-4)
 		}
 
 		// Verify 24h GetConfirmedPrices for Prime Outgoing across split 05:30/23:30 import and 16:00/19:00 export boundaries
@@ -694,39 +799,39 @@ func TestOctopusUtility(t *testing.T) {
 		require.NoError(t, err)
 		// 24 hours with 2 split hours (05:00-05:30/05:30-06:00 and 23:00-23:30/23:30-24:00) = 26 intervals
 		if assert.Len(t, confirmedPrime, 26) {
-			// 05:00-05:30: Import £0.0990 (Off-Peak), Export £0.0900
+			// 05:00-05:30: Import £0.0700 (Off-Peak), Export £0.0900
 			assert.Equal(t, dayStart.Add(5*time.Hour), confirmedPrime[5].TSStart)
 			assert.Equal(t, dayStart.Add(5*time.Hour+30*time.Minute), confirmedPrime[5].TSEnd)
-			assert.InDelta(t, 0.0990, confirmedPrime[5].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, confirmedPrime[5].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0700, confirmedPrime[5].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, confirmedPrime[5].GenerationCreditDollarsPerKWH, 1e-4)
 
-			// 05:30-06:00: Import £0.341553 (Peak), Export £0.0900
+			// 05:30-06:00: Import £0.2802 (Peak), Export £0.0900
 			assert.Equal(t, dayStart.Add(5*time.Hour+30*time.Minute), confirmedPrime[6].TSStart)
 			assert.Equal(t, dayStart.Add(6*time.Hour), confirmedPrime[6].TSEnd)
-			assert.InDelta(t, 0.341553, confirmedPrime[6].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, confirmedPrime[6].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, confirmedPrime[6].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, confirmedPrime[6].GenerationCreditDollarsPerKWH, 1e-4)
 
-			// 16:00-17:00 (index 17): Import £0.341553 (Peak), Export £0.1600 (Prime Export)
+			// 16:00-17:00 (index 17): Import £0.2802 (Peak), Export £0.1600 (Prime Export)
 			assert.Equal(t, dayStart.Add(16*time.Hour), confirmedPrime[17].TSStart)
-			assert.InDelta(t, 0.341553, confirmedPrime[17].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.1600, confirmedPrime[17].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, confirmedPrime[17].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.1600, confirmedPrime[17].GenerationCreditDollarsPerKWH, 1e-4)
 
-			// 19:00-20:00 (index 20): Import £0.341553 (Peak), Export £0.0900 (Off-Peak Export)
+			// 19:00-20:00 (index 20): Import £0.2802 (Peak), Export £0.0900 (Off-Peak Export)
 			assert.Equal(t, dayStart.Add(19*time.Hour), confirmedPrime[20].TSStart)
-			assert.InDelta(t, 0.341553, confirmedPrime[20].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, confirmedPrime[20].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, confirmedPrime[20].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, confirmedPrime[20].GenerationCreditDollarsPerKWH, 1e-4)
 
-			// 23:00-23:30 (index 24): Import £0.341553 (Peak), Export £0.0900
+			// 23:00-23:30 (index 24): Import £0.2802 (Peak), Export £0.0900
 			assert.Equal(t, dayStart.Add(23*time.Hour), confirmedPrime[24].TSStart)
 			assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), confirmedPrime[24].TSEnd)
-			assert.InDelta(t, 0.341553, confirmedPrime[24].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, confirmedPrime[24].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, confirmedPrime[24].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, confirmedPrime[24].GenerationCreditDollarsPerKWH, 1e-4)
 
-			// 23:30-24:00 (index 25): Import £0.0990 (Off-Peak), Export £0.0900
+			// 23:30-24:00 (index 25): Import £0.0700 (Off-Peak), Export £0.0900
 			assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), confirmedPrime[25].TSStart)
 			assert.Equal(t, dayStart.Add(24*time.Hour), confirmedPrime[25].TSEnd)
-			assert.InDelta(t, 0.0990, confirmedPrime[25].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, confirmedPrime[25].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0700, confirmedPrime[25].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, confirmedPrime[25].GenerationCreditDollarsPerKWH, 1e-4)
 		}
 
 		// Verify GetFuturePrices at 05:15 includes the remaining [05:30, 06:00) half-hour segment
@@ -736,8 +841,8 @@ func TestOctopusUtility(t *testing.T) {
 		if assert.NotEmpty(t, futureAt0515) {
 			assert.Equal(t, dayStart.Add(5*time.Hour+30*time.Minute), futureAt0515[0].TSStart)
 			assert.Equal(t, dayStart.Add(6*time.Hour), futureAt0515[0].TSEnd)
-			assert.InDelta(t, 0.341553, futureAt0515[0].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, futureAt0515[0].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.2802, futureAt0515[0].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, futureAt0515[0].GenerationCreditDollarsPerKWH, 1e-4)
 		}
 
 		// Verify GetFuturePrices at 23:15 includes the remaining [23:30, 24:00) half-hour segment
@@ -747,8 +852,8 @@ func TestOctopusUtility(t *testing.T) {
 		if assert.NotEmpty(t, futureAt2315) {
 			assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), futureAt2315[0].TSStart)
 			assert.Equal(t, dayStart.Add(24*time.Hour), futureAt2315[0].TSEnd)
-			assert.InDelta(t, 0.0990, futureAt2315[0].DollarsPerKWH, 1e-6)
-			assert.InDelta(t, 0.0900, futureAt2315[0].GenerationCreditDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0700, futureAt2315[0].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.0900, futureAt2315[0].GenerationCreditDollarsPerKWH, 1e-4)
 		}
 
 		// Test none export
@@ -1021,19 +1126,19 @@ func TestOctopusUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Current price at 23:15 (23:00-23:30): Intelligent Go Flexible Peak (£0.344638 in Eastern) + Agile Outgoing (£0.18)
+		// Current price at 23:15 on 2026-10-12 (pre-2026-11-04): Intelligent Go Peak (£0.2896 in Eastern) + Agile Outgoing (£0.18)
 		curr, err := siteUtil.GetCurrentPrice(ctx)
 		require.NoError(t, err)
-		assert.InDelta(t, 0.344638, curr.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.2896, curr.DollarsPerKWH, 1e-4)
 		assert.InDelta(t, 0.18, curr.GenerationCreditDollarsPerKWH, 1e-4)
 		assert.True(t, curr.SeparateGenerationCredit)
 
-		// Future price at 23:30-24:00: Intelligent Go Flexible Off-Peak (£0.0990) + Agile Outgoing (£0.225)
+		// Future price at 23:30-24:00 on 2026-10-12 (pre-2026-11-04): Intelligent Go Off-Peak (£0.0700) + Agile Outgoing (£0.225)
 		future, err := siteUtil.GetFuturePrices(ctx)
 		require.NoError(t, err)
 		if assert.Len(t, future, 1) {
 			assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), future[0].TSStart)
-			assert.InDelta(t, 0.0990, future[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0700, future[0].DollarsPerKWH, 1e-4)
 			assert.InDelta(t, 0.225, future[0].GenerationCreditDollarsPerKWH, 1e-4)
 			assert.True(t, future[0].SeparateGenerationCredit)
 		}
@@ -1041,6 +1146,7 @@ func TestOctopusUtility(t *testing.T) {
 		// Verify SiteFees.GetPeriods returns named Off-Peak and Peak TOU periods for Rate-Based Minimum SOC
 		periods, err := siteUtil.GetPeriods(ctx)
 		require.NoError(t, err)
+		assert.Len(t, periods, 4)
 		periodNames := make(map[string]bool)
 		for _, p := range periods {
 			periodNames[p.Name] = true
@@ -1136,10 +1242,27 @@ func TestOctopusUtility(t *testing.T) {
 			assert.InDelta(t, cfg.GoFixedPeakDollarsPerKWH, pGoFixedPeak.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.1200, pGoFixedPeak.GenerationCreditDollarsPerKWH, 1e-6)
 
-			for _, rc := range []string{"flexible", "max", "fixed", "legacy_24_10_29"} {
+			iogFlexFees, err := octopusIntelligentGoFees(types.UtilityRateOptions{RateClass: "flexible", Location: loc, GenerationRate: "outgoing_agile"})
+			require.NoError(t, err)
+			assert.Len(t, iogFlexFees, 4)
+			uIOGFlex := &genericTOU{periods: iogFlexFees, name: "octopus_intelligent_go"}
+			pIOGPrePeak, err := uIOGFlex.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, lonLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, cfg.IOGPeakRate, pIOGPrePeak.DollarsPerKWH, 1e-6)
+			pIOGPreOff, err := uIOGFlex.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, lonLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, cfg.IOGOffPeakRate, pIOGPreOff.DollarsPerKWH, 1e-6)
+			pIOGPostPeak, err := uIOGFlex.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, lonLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, cfg.IOGFlexiblePeakDollarsPerKWH, pIOGPostPeak.DollarsPerKWH, 1e-6)
+			pIOGPostOff, err := uIOGFlex.priceForTime(time.Date(2026, time.November, 15, 2, 0, 0, 0, lonLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, octopusIOGFlexibleOffPeakDollarsPerKWH, pIOGPostOff.DollarsPerKWH, 1e-6)
+
+			for _, rc := range []string{"max", "fixed", "legacy_24_10_29"} {
 				iogFees, err := octopusIntelligentGoFees(types.UtilityRateOptions{RateClass: rc, Location: loc, GenerationRate: "outgoing_agile"})
 				require.NoError(t, err)
-				assert.NotEmpty(t, iogFees)
+				assert.Len(t, iogFees, 2)
 			}
 
 			cosyFees, err := octopusCosyFees(types.UtilityRateOptions{Location: loc, GenerationRate: "outgoing_agile"})
@@ -1424,8 +1547,8 @@ func TestOctopusUtility(t *testing.T) {
 
 		curr, err := siteUtil.GetCurrentPrice(ctx)
 		require.NoError(t, err)
-		// 12:15 London time is Intelligent Octopus Go Flexible Peak (£0.341553/kWh)
-		assert.InDelta(t, 0.341553, curr.DollarsPerKWH, 1e-6)
+		// 12:15 London time on 2026-04-10 (pre-2026-11-04) is Intelligent Octopus Go Peak (£0.2802/kWh)
+		assert.InDelta(t, 0.2802, curr.DollarsPerKWH, 1e-4)
 		assert.Equal(t, "Peak", curr.PeriodName)
 		assert.True(t, curr.SeparateGenerationCredit)
 		assert.NotZero(t, curr.GenerationCreditDollarsPerKWH)

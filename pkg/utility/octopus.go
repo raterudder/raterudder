@@ -28,14 +28,14 @@ import (
 //   - https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/ & https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/ (Octopus Flux Import & Export, revised eff. 2026-10-19)
 //   - https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/ & https://api.octopus.energy/v1/graphql/ (Intelligent Octopus Flux Import & INTELLI-FLUX-EXPORT-23-07-14 1:1 parity)
 //   - https://api.octopus.energy/v1/products/GO-VAR-22-10-14/ & https://api.octopus.energy/v1/products/GO-FIX-12M-26-10-30/ (Octopus Go Flexible & 12M Fixed)
-//   - https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-11-04/, https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-10-29/, https://api.octopus.energy/v1/products/IOG-SMB-FIX-12M-26-11-11/, & https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/ (Intelligent Octopus Go Flexible, Max, 12M Fixed, & Legacy Oct 2024)
+//   - https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-11-04/, https://api.octopus.energy/v1/products/IOG-SMB-VAR-26-10-29/, https://api.octopus.energy/v1/products/IOG-SMB-FIX-12M-26-11-11/, https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/, & https://api.octopus.energy/v1/products/INTELLI-VAR-22-10-14/ (Intelligent Octopus Go Flexible, Max, 12M Fixed, Legacy Oct 2024, & pre-2026-11-04 historical)
 //   - https://api.octopus.energy/v1/products/COSY-22-12-08/ & https://api.octopus.energy/v1/products/COSY-FIX-12M-26-10-30/ (Cosy Octopus Flexible & 12M Fixed)
 //   - https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/, https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/, & https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/ (Outgoing Octopus 12p/15p, Prime Outgoing, & live Agile Outgoing)
-// - Effective Window: 2026-10-01 through until superseded (Octopus Flux revised 2026-10-19; Outgoing Octopus 12p effective 2026-03-01; IOG variants effective Oct/Nov 2026)
+// - Effective Window: 2026-10-01 through until superseded (Octopus Flux revised 2026-10-19; Outgoing Octopus 12p effective 2026-03-01; IOG flexible revised 2026-11-04 & variants effective Oct/Nov 2026)
 // - Revision Cadence: Quarterly (Jan 1, Apr 1, Jul 1, Oct 1 Ofgem Price Cap) & Half-Hourly (Live Agile Outgoing REST API)
 // - Next Audit Due: 2027-01-05 (Check Q1 2027 Ofgem price cap revisions effective Jan 1, 2027 across GSP regions _A through _P)
 // - Last Verified: 2026-11-21
-// - Modeling Notes: Unit rates are stored in GBP/kWh (£/kWh in DollarsPerKWH fields) inclusive of 5% UK domestic VAT; daily standing charges (p/day) are excluded from volumetric periods; pre-2026-10-19 Octopus Flux rates are preserved for historical continuity; Intelligent Octopus Flux models 1:1 import and SeparateGenerationCredit export parity (16:00-19:00 Peak, 00:00-16:00 and 19:00-24:00 Standard); Outgoing export defaults to 12p/kWh (OUTGOING-VAR-24-10-26) while retaining 15p/kWh fixed, Prime Outgoing (16p/9p), live Agile Outgoing, and No Export options.
+// - Modeling Notes: Unit rates are stored in GBP/kWh (£/kWh in DollarsPerKWH fields) inclusive of 5% UK domestic VAT; daily standing charges (p/day) are excluded from volumetric periods; pre-2026-10-19 Octopus Flux and pre-2026-11-04 Intelligent Octopus Go (INTELLI-VAR-22-10-14) rates are preserved for historical continuity; Intelligent Octopus Flux models 1:1 import and SeparateGenerationCredit export parity (16:00-19:00 Peak, 00:00-16:00 and 19:00-24:00 Standard); Outgoing export defaults to 12p/kWh (OUTGOING-VAR-24-10-26) while retaining 15p/kWh fixed, Prime Outgoing (16p/9p), live Agile Outgoing, and No Export options.
 //
 // Octopus Energy REST API Reference:
 // Base URL: https://api.octopus.energy/v1/products/
@@ -90,6 +90,10 @@ type octopusRateConfig struct {
 	GoOffPeakRate            float64
 	GoFixedPeakDollarsPerKWH float64
 
+	// Pre-2026-11-04 Intelligent Octopus Go rates (INTELLI-VAR-22-10-14) preserved for historical continuity.
+	IOGPeakRate    float64
+	IOGOffPeakRate float64
+
 	// Intelligent Octopus Go Q4 2026 regional day/peak rates (£/kWh inc. 5% VAT).
 	IOGFlexiblePeakDollarsPerKWH float64 // IOG-SMB-VAR-26-11-04
 	IOGMaxPeakDollarsPerKWH      float64 // IOG-SMB-VAR-26-10-29
@@ -128,6 +132,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3471,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.383917,
+		IOGPeakRate:                      0.2896,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.344638,
 		IOGMaxPeakDollarsPerKWH:          0.386245,
 		IOGFixedPeakDollarsPerKWH:        0.405800,
@@ -158,6 +164,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3303,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.362868,
+		IOGPeakRate:                      0.2777,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.325278,
 		IOGMaxPeakDollarsPerKWH:          0.364417,
 		IOGFixedPeakDollarsPerKWH:        0.381785,
@@ -188,6 +196,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3453,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.383123,
+		IOGPeakRate:                      0.2802,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.341553,
 		IOGMaxPeakDollarsPerKWH:          0.382729,
 		IOGFixedPeakDollarsPerKWH:        0.404354,
@@ -218,6 +228,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3575,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.403378,
+		IOGPeakRate:                      0.3017,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.363146,
 		IOGMaxPeakDollarsPerKWH:          0.407225,
 		IOGFixedPeakDollarsPerKWH:        0.427067,
@@ -248,6 +260,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3333,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.367501,
+		IOGPeakRate:                      0.2785,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.330171,
 		IOGMaxPeakDollarsPerKWH:          0.369753,
 		IOGFixedPeakDollarsPerKWH:        0.386704,
@@ -278,6 +292,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3332,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.366442,
+		IOGPeakRate:                      0.2769,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.328789,
 		IOGMaxPeakDollarsPerKWH:          0.368540,
 		IOGFixedPeakDollarsPerKWH:        0.386270,
@@ -308,6 +324,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3425,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.384711,
+		IOGPeakRate:                      0.2957,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.341340,
 		IOGMaxPeakDollarsPerKWH:          0.382607,
 		IOGFixedPeakDollarsPerKWH:        0.406090,
@@ -338,6 +356,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3481,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.375445,
+		IOGPeakRate:                      0.2879,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.336022,
 		IOGMaxPeakDollarsPerKWH:          0.376786,
 		IOGFixedPeakDollarsPerKWH:        0.396252,
@@ -368,6 +388,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3490,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.386300,
+		IOGPeakRate:                      0.2937,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.347403,
 		IOGMaxPeakDollarsPerKWH:          0.389520,
 		IOGFixedPeakDollarsPerKWH:        0.407537,
@@ -398,6 +420,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3451,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.382726,
+		IOGPeakRate:                      0.2919,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.341234,
 		IOGMaxPeakDollarsPerKWH:          0.382729,
 		IOGFixedPeakDollarsPerKWH:        0.403920,
@@ -428,6 +452,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3470,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.382858,
+		IOGPeakRate:                      0.2917,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.339957,
 		IOGMaxPeakDollarsPerKWH:          0.381273,
 		IOGFixedPeakDollarsPerKWH:        0.404064,
@@ -458,6 +484,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3306,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.369355,
+		IOGPeakRate:                      0.2748,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.333362,
 		IOGMaxPeakDollarsPerKWH:          0.373270,
 		IOGFixedPeakDollarsPerKWH:        0.389163,
@@ -488,6 +516,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3345,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.378092,
+		IOGPeakRate:                      0.2722,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.342829,
 		IOGMaxPeakDollarsPerKWH:          0.384184,
 		IOGFixedPeakDollarsPerKWH:        0.398567,
@@ -518,6 +548,8 @@ var octopusRates = map[string]octopusRateConfig{
 		GoPeakRate:                       0.3445,
 		GoOffPeakRate:                    0.0940,
 		GoFixedPeakDollarsPerKWH:         0.379284,
+		IOGPeakRate:                      0.2868,
+		IOGOffPeakRate:                   0.0700,
 		IOGFlexiblePeakDollarsPerKWH:     0.330278,
 		IOGMaxPeakDollarsPerKWH:          0.370723,
 		IOGFixedPeakDollarsPerKWH:        0.401026,
@@ -855,31 +887,18 @@ func octopusGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 	return periods, nil
 }
 
-func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-	_, cfg, err := normalizeOctopusLocation(options.Location)
-	if err != nil {
-		return nil, err
-	}
-
-	offPeakDollarsPerKWH := octopusIOGFlexibleOffPeakDollarsPerKWH
-	peakDollarsPerKWH := cfg.IOGFlexiblePeakDollarsPerKWH
-	switch options.RateClass {
-	case "max":
-		offPeakDollarsPerKWH = octopusIOGMaxOffPeakDollarsPerKWH
-		peakDollarsPerKWH = cfg.IOGMaxPeakDollarsPerKWH
-	case "fixed":
-		offPeakDollarsPerKWH = octopusIOGFixedOffPeakDollarsPerKWH
-		peakDollarsPerKWH = cfg.IOGFixedPeakDollarsPerKWH
-	case "legacy_24_10_29":
-		offPeakDollarsPerKWH = octopusIOGLegacyOffPeakDollarsPerKWH
-		peakDollarsPerKWH = cfg.IOGLegacyPeakDollarsPerKWH
-	}
-
-	periods := []types.UtilityFeesPeriod{
+func appendOctopusIntelligentGoWindow(
+	periods []types.UtilityFeesPeriod,
+	start, end time.Time,
+	offPeakDollarsPerKWH, peakDollarsPerKWH float64,
+) []types.UtilityFeesPeriod {
+	return append(periods,
 		// 1. Overnight Off-Peak: 23:30 – 05:30 (6 hours)
-		{
+		types.UtilityFeesPeriod{
 			TimePeriod: types.TimePeriod{
 				Name:        "Off-Peak",
+				Start:       start,
+				End:         end,
 				LocationPtr: lonLocation,
 				Hours: []types.UtilityHourPeriod{
 					{HourStart: 23, MinuteStart: 30, HourEnd: 24},
@@ -890,9 +909,11 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 			Description:   "Intelligent Octopus Go Off-Peak Rate",
 		},
 		// 2. Day Peak: 05:30 – 23:30 (18 hours)
-		{
+		types.UtilityFeesPeriod{
 			TimePeriod: types.TimePeriod{
 				Name:        "Peak",
+				Start:       start,
+				End:         end,
 				LocationPtr: lonLocation,
 				Hours: []types.UtilityHourPeriod{
 					{HourStart: 5, MinuteStart: 30, HourEnd: 23, MinuteEnd: 30},
@@ -901,6 +922,61 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 			DollarsPerKWH: peakDollarsPerKWH,
 			Description:   "Intelligent Octopus Go Day Rate",
 		},
+	)
+}
+
+func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	_, cfg, err := normalizeOctopusLocation(options.Location)
+	if err != nil {
+		return nil, err
+	}
+
+	var periods []types.UtilityFeesPeriod
+	switch options.RateClass {
+	case "max":
+		periods = appendOctopusIntelligentGoWindow(
+			periods,
+			time.Time{},
+			time.Time{},
+			octopusIOGMaxOffPeakDollarsPerKWH,
+			cfg.IOGMaxPeakDollarsPerKWH,
+		)
+	case "fixed":
+		periods = appendOctopusIntelligentGoWindow(
+			periods,
+			time.Time{},
+			time.Time{},
+			octopusIOGFixedOffPeakDollarsPerKWH,
+			cfg.IOGFixedPeakDollarsPerKWH,
+		)
+	case "legacy_24_10_29":
+		periods = appendOctopusIntelligentGoWindow(
+			periods,
+			time.Time{},
+			time.Time{},
+			octopusIOGLegacyOffPeakDollarsPerKWH,
+			cfg.IOGLegacyPeakDollarsPerKWH,
+		)
+	default:
+		// Default flexible (including empty or unrecognized/stale RateClass fallback):
+		// preserve pre-2026-11-04 INTELLI-VAR-22-10-14 historical rates and transition
+		// to IOG-SMB-VAR-26-11-04 at 2026-11-04T00:00:00 Europe/London.
+		iogRevisionStart := time.Date(2026, time.November, 4, 0, 0, 0, 0, lonLocation)
+		periods = make([]types.UtilityFeesPeriod, 0, 6)
+		periods = appendOctopusIntelligentGoWindow(
+			periods,
+			time.Time{},
+			iogRevisionStart,
+			cfg.IOGOffPeakRate,
+			cfg.IOGPeakRate,
+		)
+		periods = appendOctopusIntelligentGoWindow(
+			periods,
+			iogRevisionStart,
+			time.Time{},
+			octopusIOGFlexibleOffPeakDollarsPerKWH,
+			cfg.IOGFlexiblePeakDollarsPerKWH,
+		)
 	}
 
 	periods = append(periods, octopusExportPeriods(options)...)
