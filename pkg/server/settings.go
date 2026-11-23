@@ -23,13 +23,38 @@ import (
 
 var errESSRateLimited = errors.New("ESS rate limited")
 
-const maxInteractiveESSBackoff = 15 * time.Minute
+const (
+	maxInteractiveESSBackoff = 15 * time.Minute
+	essFailurePauseThreshold = 40
+)
+
+func getInteractiveESSBackoff(failures int) time.Duration {
+	if failures <= 1 {
+		return 0
+	}
+	shift := min(failures-2, 10)
+	backoff := time.Duration(30*(1<<shift)) * time.Second
+	return min(backoff, maxInteractiveESSBackoff)
+}
+
+func nextESSFailureCount(prev int, err error) int {
+	if errors.Is(err, ess.ErrAccountLocked) {
+		return max(prev+1, essFailurePauseThreshold)
+	}
+	if errors.Is(err, ess.ErrUnauthorized) {
+		if prev == 0 {
+			return 1
+		}
+		return max(prev+1, essFailurePauseThreshold)
+	}
+	return prev + 1
+}
 
 func checkInteractiveESSRateLimit(authStatus *types.ESSAuthStatus, now time.Time) time.Duration {
 	if authStatus.ConsecutiveUserFailures == 0 {
 		return 0
 	}
-	backoff := min(getESSBackoff(authStatus.ConsecutiveUserFailures), maxInteractiveESSBackoff)
+	backoff := getInteractiveESSBackoff(authStatus.ConsecutiveUserFailures)
 	resetWindow := max(2*backoff, maxInteractiveESSBackoff)
 	elapsed := now.Sub(authStatus.LastUserAttempt)
 	if !authStatus.LastUserAttempt.IsZero() && elapsed > resetWindow {
@@ -140,7 +165,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 	newCreds, updated, err := essSystem.Authenticate(ctx, creds)
 	now := s.now().UTC()
 	if err != nil {
-		settings.ESSAuthStatus.ConsecutiveFailures++
+		settings.ESSAuthStatus.ConsecutiveFailures = nextESSFailureCount(settings.ESSAuthStatus.ConsecutiveFailures, err)
 		settings.ESSAuthStatus.LastAttempt = now
 		if updated {
 			log.Ctx(ctx).DebugContext(ctx, "credentials updated by ess system before error")
@@ -630,13 +655,21 @@ func (s *Server) revertManagedTOUModeOnPause(ctx context.Context, siteID string,
 	}
 	essSystem, settings, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS system to revert managed TOU mode on pause", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) || errors.Is(err, errESSRateLimited) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get ESS system to revert managed TOU mode on pause", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS system to revert managed TOU mode on pause", slog.Any("error", err))
+		}
 		return
 	}
 
 	status, err := essSystem.GetStatus(ctx)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS status to revert managed TOU mode on pause", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get ESS status to revert managed TOU mode on pause", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS status to revert managed TOU mode on pause", slog.Any("error", err))
+		}
 		return
 	}
 
@@ -648,7 +681,11 @@ func (s *Server) revertManagedTOUModeOnPause(ctx context.Context, siteID string,
 	if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
 		MinimumSOC: minSOC,
 	}, settings); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption on pause", slog.Any("error", err))
+		if errors.Is(err, ess.ErrUnauthorized) || errors.Is(err, errESSRateLimited) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to set modes back to self-consumption on pause", slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption on pause", slog.Any("error", err))
+		}
 	}
 }
 
@@ -656,7 +693,7 @@ func getESSBackoff(failures int) time.Duration {
 	if failures <= 1 {
 		return 0
 	}
-	if failures >= 40 {
+	if failures >= essFailurePauseThreshold {
 		return 365 * 24 * time.Hour // stop trying
 	}
 	if failures >= 22 {
@@ -668,20 +705,10 @@ func getESSBackoff(failures int) time.Duration {
 	if failures >= 10 {
 		return time.Hour
 	}
-
-	// Failures = 2 -> 30s
-	// Failures = 3 -> 60s
-	// Failures = 4 -> 120s
-	// Failures = 5 -> 240s
-	if failures > 7 {
-		failures = 7 // max 15 minutes, prevent integer overflow
+	if failures >= 5 {
+		return 45 * time.Minute
 	}
-	seconds := 30 * (1 << (failures - 2))
-	if seconds > 900 {
-		seconds = 900 // max 15 minutes
-	}
-
-	return time.Duration(seconds) * time.Second
+	return 30 * time.Minute
 }
 
 func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,9 @@ var ErrNeedsNextStage = errors.New("authentication needs next stage")
 // ErrUnauthorized is returned when the request is unauthorized or has missing scopes.
 var ErrUnauthorized = errors.New("unauthorized")
 
+// ErrAccountLocked is returned when the provider reports the account or password is already locked.
+var ErrAccountLocked = errors.New("account locked")
+
 // System defines the interface for interacting with an Energy Storage System (like FranklinWH).
 type System interface {
 	// Name returns the name of the system.

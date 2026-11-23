@@ -612,7 +612,7 @@ const ESSForm = ({
         if (consecutiveFailures >= 40) {
             return (
                 <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
-                    ⚠️ <strong>Battery authentication is paused after {consecutiveFailures} failed attempts.</strong> To prevent your battery manufacturer from locking out your account, RateRudder stopped retrying automatically. {actionPrompt} to resume automation.
+                    ⚠️ <strong>Battery authentication is paused.</strong> To prevent your battery manufacturer from locking out your account, RateRudder stopped retrying automatically. {actionPrompt} to resume automation.
                 </div>
             );
         }
@@ -620,6 +620,16 @@ const ESSForm = ({
             return (
                 <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
                     ⚠️ <strong>Battery authentication has failed {consecutiveFailures} times in a row.</strong> RateRudder is spacing out background retries so your battery manufacturer account does not get locked out. {actionPrompt}.
+                </div>
+            );
+        }
+        if (consecutiveSetFailures >= 40) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
+                    ⚠️ <strong>Applying battery mode changes is paused.</strong>{' '}
+                    {settings.ess === 'tesla'
+                        ? `RateRudder stopped retrying mode updates due to missing command permissions. ${actionPrompt} and make sure all permissions (including Energy Commands) are checked.`
+                        : 'RateRudder stopped retrying mode updates automatically. Please check your battery manufacturer app to make sure your account can change battery settings, or re-authenticate below to resume automation.'}
                 </div>
             );
         }
