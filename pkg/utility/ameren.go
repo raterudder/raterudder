@@ -1,5 +1,18 @@
 package utility
 
+// Tariff Audit Metadata
+// - Provider(s): ameren (Ameren Illinois)
+// - Official Sources:
+//   - https://www.ameren.com/bill/rates/residential (Ameren Residential Electric Rates Portal)
+//   - https://plugin.illinois.gov/understanding-the-price-to-compare/price-to-compare-ameren-illinois.html (ICC PlugIn Illinois Price to Compare)
+//   - https://docs.misoenergy.org/marketreports (MISO Day-Ahead Ex-Post LMP AMIL.BGS6)
+//   - Ill. C. C. No. 1 - Electric Service: Rate PBR-R / Rate DS-1 (6th Rev. Sheet 8.011, Docket No. 25-0083) & PBR-R AAF (3.65%); Rider RBA (3.09% 2026, 1.35% 2027); Rider EE ($0.00644/kWh); Rider REA ($0.00470/kWh); Rider TS (Jan 2026 $0.02629/kWh, Jun 2026 $0.02765/kWh); Rider NMOS (Supply + Transmission Net Metering); Rider BGS & Rider RTP 115th-125th Informational Sheets (Jan-Nov 2026, Nov 2026 PEA +0.262c/kWh); Distribution Loss Factors (1.05009 through May 2026, 1.04895 Jun 2026 - May 2027)
+// - Effective Window: 2026-01-01 through 2027-12-31 (monthly BGS-1 & RTP-1 supply schedules verified through 2026-11-30 with Nov 2026 PEA +0.262c/kWh carried forward through 2027-12-31; loss factor 1.04895 & Rider TS $0.02765/kWh effective 2026-06-01 through 2027-05-31 carried forward; Rate DS-1 & Rider RBA filed through 2027-12-31)
+// - Revision Cadence: Monthly (Rider BGS-1 & Rider RTP-1 Informational Sheets / PEA) & Annual (Jan 1 Rate DS-1, PBR-R AAF, Rider RBA, Rider EE, EDT; Jun 1 BGS-1/RTP-1 procurement, Rider TS, Rider REA, Distribution Loss Factors)
+// - Next Audit Due: 2026-12-05 (Check December 2026 126th Informational Sheet for BGS-1 and RTP-1 PEA update)
+// - Last Verified: 2026-11-21
+// - Modeling Notes: Models Rate DS-1 Tier 1 (0-800 kWh/mo non-summer, flat summer) distribution + mandatory volumetric riders (Rider EE, Rider REA, Illinois EDT, and PBR-R AAF + Rider RBA applied to Rate DS-1 + EDT) as GridAdditional: true; sets GridAdditional: false on Rider TS, Rider RTP-1 (Supplier Charge + Rider PER + PEA), and BGS-1 supply per Rider NMOS (supply + transmission export credit by default, or full retail credit when Pre-2025 NetMeteringCredits is enabled); keeps raw MISO LMP * amerenLossFactor in baseAmerenSmart for database cache compatibility; excludes fixed monthly Customer/Meter/Facilities charges and sub-threshold de minimis riders (MAP-R, EDITA, EDR, USS, CSESC, EEA, ASEC+MSC, CEAC, ETAC, and new Rider EUA splits).
+
 import (
 	"context"
 	"encoding/csv"
@@ -417,32 +430,54 @@ func amerenUtilityInfo() types.UtilityProviderInfo {
 	}
 }
 
-func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-	// Rider PSP says the delivery fees are "Residential - Rate DS-1"
-	// RATE PBR-R defines Rate DS-1.
-	// Summer = June 1 – September 30.  Non-summer = remainder of the year.
+const (
+	// Rider TS (Transmission Service Charge) - GridAdditional: false per Rider NMOS
+	amerenILTSJanMay2026DollarsPerKWH = 0.02629
+	amerenILTSJun2026DollarsPerKWH    = 0.02765
+
+	// Rate DS-1 (Rate PBR-R) Tier 1 (0-800 kWh/mo non-summer, flat summer) Distribution Delivery Charge
+	amerenILDS1NonSummer2026DollarsPerKWH = 0.04572
+	amerenILDS1Summer2026DollarsPerKWH    = 0.07811
+	amerenILDS1NonSummer2027DollarsPerKWH = 0.04687
+	amerenILDS1Summer2027DollarsPerKWH    = 0.08009
+
+	// Mandatory Illinois Delivery Riders (GridAdditional: true)
+	amerenILRiderEEDollarsPerKWH  = 0.00644   // Rider EE - Energy Efficiency Programs
+	amerenILRiderREADollarsPerKWH = 0.00470   // Rider REA - Renewable Energy Adjustment
+	amerenILEDT2026DollarsPerKWH  = 0.0012567 // Illinois Electricity Distribution Tax (2026)
+	amerenILEDT2027DollarsPerKWH  = 0.00126   // Illinois Electricity Distribution Tax (2027)
+	amerenILPBRRAAFFactor         = 0.0365    // Rate PBR-R Annual Adjustment Factor (3.65%)
+	amerenILRiderRBA2026Factor    = 0.0309    // Rider RBA Revenue Balancing Adjustment (2026: 3.09%)
+	amerenILRiderRBA2027Factor    = 0.0135    // Rider RBA Revenue Balancing Adjustment (2027: 1.35%)
+)
+
+// getAmerenDeliveryFees returns the shared Ameren Illinois transmission (Rider TS)
+// and residential distribution delivery (Rate DS-1 + mandatory volumetric riders)
+// fee periods used by both Power Smart Pricing (ameren_psp) and BGS-1 (ameren_bgs).
+func getAmerenDeliveryFees() []types.UtilityFeesPeriod {
+	// Rider PSP and Rider BGS residential delivery fees follow Rate DS-1 (defined in Rate PBR-R).
+	// Summer = June 1 – September 30. Non-summer = remainder of the year.
 	//
-	// NOTE: The DS-1 non-summer distribution delivery charge is officially TIERED
-	// but because we calculate fees at an hourly level without knowing monthly
-	// cumulative consumption, we apply the first-tier rate as a
-	// conservative estimate. This slightly overstates costs for customers
-	// with monthly usage above 800 kWh. The summer rate is flat.
+	// NOTE: The DS-1 non-summer distribution delivery charge is officially TIERED,
+	// so we apply the Tier 1 (<= 800 kWh/month) rate as a conservative hourly estimate.
+	// The summer rate is flat.
 	//
-	// The Ameren Illinois Transmission Service Charge is a separate per-kWh
-	// charge included in the all-in price-to-compare. As of January 2026 it is
-	// 2.629¢/kWh and applies regardless of season or time-of-day.
+	// Under Rider NMOS (post-2025 net metering), excess solar/distributed exports are
+	// credited for supply and transmission (Rider TS), while delivery charges remain
+	// non-creditable unless Pre-2025 Full Net Metering (NetMeteringCredits) is enabled.
+	// Sub-threshold de minimis riders (< 1% / < $0.0025/kWh: MAP-R, EDITA, EDR, USS,
+	// CSESC, EEA, ASEC+MSC, CEAC, ETAC, and new Rider EUA splits) are excluded.
 	return []types.UtilityFeesPeriod{
-		// ── Transmission Service Charge ──────────────────────────────────
-		// Applies all hours, both summer and non-summer.
+		// ── Rider TS: Transmission Service Charge (GridAdditional: false per Rider NMOS) ──
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.02629,
-			GridAdditional: true,
-			Description:    "Ameren IL Transmission Service Charge (Jan-May 2026)",
+			DollarsPerKWH:  amerenILTSJanMay2026DollarsPerKWH,
+			GridAdditional: false,
+			Description:    "Ameren IL Rider TS Transmission Service Charge (Jan-May 2026)",
 		},
 		{
 			TimePeriod: types.TimePeriod{
@@ -450,19 +485,19 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.02765,
-			GridAdditional: true,
-			Description:    "Ameren IL Transmission Service Charge (June 2026 - Dec 2027)",
+			DollarsPerKWH:  amerenILTSJun2026DollarsPerKWH,
+			GridAdditional: false,
+			Description:    "Ameren IL Rider TS Transmission Service Charge (Jun 2026 - Dec 2027)",
 		},
 
-		// ── 2026 Distribution Delivery Charge ────────────────────────────────
+		// ── 2026 Rate DS-1 Distribution Delivery Charge ──────────────────────
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.04572, // first-tier non-summer rate; see tiering note above
+			DollarsPerKWH:  amerenILDS1NonSummer2026DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2026)",
 		},
@@ -472,7 +507,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.07811,
+			DollarsPerKWH:  amerenILDS1Summer2026DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Summer 2026)",
 		},
@@ -482,19 +517,19 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.04572, // first-tier non-summer rate
+			DollarsPerKWH:  amerenILDS1NonSummer2026DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2026)",
 		},
 
-		// ── 2027 Distribution Delivery Charge ────────────────────────────────
+		// ── 2027 Rate DS-1 Distribution Delivery Charge ──────────────────────
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.04687, // first-tier non-summer rate
+			DollarsPerKWH:  amerenILDS1NonSummer2027DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2027)",
 		},
@@ -504,7 +539,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 				End:         time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.08009,
+			DollarsPerKWH:  amerenILDS1Summer2027DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Summer 2027)",
 		},
@@ -514,86 +549,390 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.04687, // first-tier non-summer rate
+			DollarsPerKWH:  amerenILDS1NonSummer2027DollarsPerKWH,
 			GridAdditional: true,
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2027-Q4)",
 		},
-	}, nil
-}
 
-func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-	// First get the delivery and transmission fees
-	additional, err := getAmerenAdditionalFees(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	// Ameren Illinois BGS-1 supply charges are filed with the ICC (e.g. Informational ERM filings at https://icc.illinois.gov/ and https://www.ameren.com/illinois/rates)
-	// Effective June 2026 through May 2027
-	// Summer: June 1 - Sept 30. Non-Summer: Oct 1 - May 31.
-	bgsSupply := []types.UtilityFeesPeriod{
-		// Summer 2026 Supply Charge
+		// ── Mandatory Delivery Riders (Rider EE, Rider REA, EDT, PBR-R AAF & Rider RBA) ──
 		{
 			TimePeriod: types.TimePeriod{
-				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: (8.200 - 0.095 + .308) / 100,
-			Description:   "Ameren IL BGS-1 Summer Retail Purchased Electricity Charge",
+			DollarsPerKWH:  amerenILRiderEEDollarsPerKWH,
+			GridAdditional: true,
+			Description:    "Ameren IL Rider EE Energy Efficiency Programs",
 		},
-		// Non-Summer 2026 (Jan - May) Supply Charge
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  amerenILRiderREADollarsPerKWH,
+			GridAdditional: true,
+			Description:    "Ameren IL Rider REA Renewable Energy Adjustment",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  amerenILEDT2026DollarsPerKWH,
+			GridAdditional: true,
+			Description:    "Ameren IL Electricity Distribution Tax (2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  amerenILEDT2027DollarsPerKWH,
+			GridAdditional: true,
+			Description:    "Ameren IL Electricity Distribution Tax (2027)",
+		},
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 0.07283,
-			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+			DollarsPerKWH:  (amerenILDS1NonSummer2026DollarsPerKWH + amerenILEDT2026DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2026Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Non-summer 2026)",
 		},
-		// Non-Summer 2026 (Oct - Dec) Supply Charge
-		// BGS-1 Secondary (0-800 kWh): 7.310 ¢/kWh, PEA: -0.028 ¢/kWh, Rider PER: +0.313 ¢/kWh, Rider EUA: +0.053 ¢/kWh
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  (amerenILDS1Summer2026DollarsPerKWH + amerenILEDT2026DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2026Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Summer 2026)",
+		},
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
-			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+			DollarsPerKWH:  (amerenILDS1NonSummer2026DollarsPerKWH + amerenILEDT2026DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2026Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Non-summer 2026-Q4)",
 		},
-		// Summer 2027 Supply Charge
-		{
-			TimePeriod: types.TimePeriod{
-				Start:       time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH: (8.200 - 0.095 + .308) / 100,
-			Description:   "Ameren IL BGS-1 Summer Retail Purchased Electricity Charge",
-		},
-		// Non-Summer 2027 (Jan - May) Supply Charge
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
-			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+			DollarsPerKWH:  (amerenILDS1NonSummer2027DollarsPerKWH + amerenILEDT2027DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2027Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Non-summer 2027)",
 		},
-		// Non-Summer 2027 (Oct - Dec) Supply Charge
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  (amerenILDS1Summer2027DollarsPerKWH + amerenILEDT2027DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2027Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Summer 2027)",
+		},
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
-			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+			DollarsPerKWH:  (amerenILDS1NonSummer2027DollarsPerKWH + amerenILEDT2027DollarsPerKWH) * (amerenILPBRRAAFFactor + amerenILRiderRBA2027Factor),
+			GridAdditional: true,
+			Description:    "Ameren IL Rate PBR-R AAF & Rider RBA (Non-summer 2027-Q4)",
+		},
+	}
+}
+
+func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	delivery := getAmerenDeliveryFees()
+
+	// Rider RTP (RTP-1 Supplier Charge + Rider PER + monthly PEA) from the 115th-125th
+	// Informational Sheets Supplemental to Sheet Nos. 23-23.012 and 25-25.014 of Ill. C. C. No. 1.
+	// Modeled with GridAdditional: false (and empty Name so SiteFees.GetPeriods remains nil)
+	// so Rider NMOS credits full supply + Rider RTP + Rider TS on exports.
+	// November 2026 PEA (+0.262¢/kWh) is carried forward through 2028-01-01 until superseded.
+	rtpSupply := []types.UtilityFeesPeriod{
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00745,
+			Description:   "Ameren IL Rider RTP Supply Charge (Jan 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00682,
+			Description:   "Ameren IL Rider RTP Supply Charge (Feb 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00622,
+			Description:   "Ameren IL Rider RTP Supply Charge (Mar 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00321,
+			Description:   "Ameren IL Rider RTP Supply Charge (Apr 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.01340,
+			Description:   "Ameren IL Rider RTP Supply Charge (May 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.03056,
+			Description:   "Ameren IL Rider RTP Supply Charge (Jun 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.03016,
+			Description:   "Ameren IL Rider RTP Supply Charge (Jul 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.September, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.02967,
+			Description:   "Ameren IL Rider RTP Supply Charge (Aug 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.September, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.02911,
+			Description:   "Ameren IL Rider RTP Supply Charge (Sep 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00591,
+			Description:   "Ameren IL Rider RTP Supply Charge (Oct 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00881,
+			Description:   "Ameren IL Rider RTP Supply Charge (Nov 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00881,
+			Description:   "Ameren IL Rider RTP Supply Charge (Dec 2026 - May 2027)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.03373,
+			Description:   "Ameren IL Rider RTP Supply Charge (Summer 2027)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.00881,
+			Description:   "Ameren IL Rider RTP Supply Charge (Non-summer 2027-Q4)",
 		},
 	}
 
-	return append(additional, bgsSupply...), nil
+	return append(delivery, rtpSupply...), nil
+}
+
+func getAmerenBGSFees(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	delivery := getAmerenDeliveryFees()
+
+	// Ameren Illinois BGS-1 supply charges (Retail Purchased Electricity + Rider PER +Rider EUA + monthly PEA)
+	// per 115th-125th Informational Sheets and ICC PlugIn Illinois Price to Compare.
+	// Tier 1 non-summer (0-800 kWh/month) and flat summer rates modeled as GridAdditional: false.
+	// November 2026 PEA (+0.262¢/kWh) is carried forward through 2028-01-01 until superseded.
+	bgsSupply := []types.UtilityFeesPeriod{
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.05684,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Jan 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.05621,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Feb 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.05561,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Mar 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.05260,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Apr 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.06279,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (May 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.08506,
+			Description:   "Ameren IL BGS-1 Summer Supply Charge (Jun 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.08466,
+			Description:   "Ameren IL BGS-1 Summer Supply Charge (Jul 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.September, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.08417,
+			Description:   "Ameren IL BGS-1 Summer Supply Charge (Aug 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.September, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.08361,
+			Description:   "Ameren IL BGS-1 Summer Supply Charge (Sep 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.07648,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Oct 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.07938,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Nov 2026)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.07938,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Dec 2026 - May 2027)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.08823,
+			Description:   "Ameren IL BGS-1 Summer Supply Charge (Summer 2027)",
+		},
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH: 0.07938,
+			Description:   "Ameren IL BGS-1 Non-Summer Supply Charge (Non-summer 2027-Q4)",
+		},
+	}
+
+	return append(delivery, bgsSupply...), nil
 }
