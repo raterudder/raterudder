@@ -89,3 +89,77 @@ jobs:
 
       - name: Run Web Tests
         run: npx vitest run
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Verify web build output
+        run: |
+          for file in \
+            dist/index.html \
+            dist/sw.js \
+            dist/how-it-works.html \
+            dist/getting-started.html \
+            dist/utilities.html \
+            dist/changelog.html \
+            dist/privacy.html \
+            dist/terms.html; do
+            if [ ! -s "$file" ]; then
+              echo "Missing or empty expected build output: web/$file"
+              exit 1
+            fi
+          done
+          if [ -e dist/stats.html ]; then
+            echo "Unexpected bundle analyzer output found in production build: web/dist/stats.html"
+            exit 1
+          fi
+
+      - name: Upload web build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  build-go:
+    name: Build Go Binaries
+    runs-on: ubuntu-latest
+    needs: [test-web]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Prepare web/dist directory
+        run: rm -rf web/dist
+
+      - name: Download web build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Verify embedded web assets
+        run: |
+          test -s web/dist/index.html
+          test -s web/dist/sw.js
+          test ! -e web/dist/stats.html
+
+      - name: Build raterudder server binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o "${RUNNER_TEMP}/raterudder" ./cmd/raterudder
+          test -x "${RUNNER_TEMP}/raterudder"
+
+      - name: Build CLI binaries
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          go build -tags timetzdata -o "${RUNNER_TEMP}/bin/" ./cmd/inspectsite ./cmd/replayplan ./cmd/fetchhistory
+          for bin in inspectsite replayplan fetchhistory; do
+            test -x "${RUNNER_TEMP}/bin/${bin}"
+          done
