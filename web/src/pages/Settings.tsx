@@ -1192,6 +1192,7 @@ const Settings = ({
         newOpts: Record<string, any>
     ) => {
         if (!newProvider || !newRate) {
+            setUtilityPeriods([]);
             setBatteryError(null);
             return;
         }
@@ -1256,6 +1257,7 @@ const Settings = ({
                 }
             });
         } catch (err) {
+            setUtilityPeriods([]);
             console.error("Failed to re-validate utility periods", err);
         }
     };
@@ -1267,19 +1269,30 @@ const Settings = ({
         }
     }, [settings?.minBatterySOCPeriods]);
 
+    const hasSettings = settings !== null;
     const rateOptionsKey = JSON.stringify(settings?.utilityRateOptions);
     useEffect(() => {
-        if (siteID && settings?.utilityProvider && settings?.utilityRate) {
+        if (!hasSettings) return;
+        if (!settings?.utilityProvider || !settings?.utilityRate) {
+            setUtilityPeriods([]);
+            return;
+        }
+        if (siteID) {
             fetchUtilityPeriods(siteID, settings.utilityProvider, settings.utilityRate, settings.utilityRateOptions)
                 .then(periods => setUtilityPeriods(periods || []))
                 .catch(() => setUtilityPeriods([]));
         }
-    }, [siteID, settings?.utilityProvider, settings?.utilityRate, settings?.utilityRateOptions, rateOptionsKey]);
+    }, [siteID, hasSettings, settings?.utilityProvider, settings?.utilityRate, settings?.utilityRateOptions, rateOptionsKey]);
 
     const handleOpenReserveSchedule = async () => {
         setLoadingPeriods(true);
         try {
-            const fetched = await fetchUtilityPeriods(siteID);
+            const fetched = await fetchUtilityPeriods(
+                siteID,
+                settings?.utilityProvider,
+                settings?.utilityRate,
+                settings?.utilityRateOptions
+            );
             setUtilityPeriods(fetched || []);
             const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
             if (fetchedNames.length === 0) {
@@ -3270,7 +3283,16 @@ const Settings = ({
                                                         onClick={async () => {
                                                             let periods = utilityPeriods;
                                                             if (!periods) {
-                                                                periods = await fetchUtilityPeriods(siteID);
+                                                                try {
+                                                                    periods = await fetchUtilityPeriods(
+                                                                        siteID,
+                                                                        settings.utilityProvider,
+                                                                        settings.utilityRate,
+                                                                        settings.utilityRateOptions
+                                                                    );
+                                                                } catch {
+                                                                    periods = [];
+                                                                }
                                                                 setUtilityPeriods(periods || []);
                                                             }
                                                             const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
@@ -3334,7 +3356,16 @@ const Settings = ({
                                                             onClick={async () => {
                                                                 let periods = utilityPeriods;
                                                                 if (!periods) {
-                                                                    periods = await fetchUtilityPeriods(siteID);
+                                                                    try {
+                                                                        periods = await fetchUtilityPeriods(
+                                                                            siteID,
+                                                                            settings.utilityProvider,
+                                                                            settings.utilityRate,
+                                                                            settings.utilityRateOptions
+                                                                        );
+                                                                    } catch {
+                                                                        periods = [];
+                                                                    }
                                                                     setUtilityPeriods(periods || []);
                                                                 }
                                                                 const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];

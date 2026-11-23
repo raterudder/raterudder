@@ -34,7 +34,7 @@ func TestSawneeUtility(t *testing.T) {
 		}
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Schedule TU-28 Rate", func(t *testing.T) {

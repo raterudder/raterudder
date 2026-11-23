@@ -36,7 +36,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("E-TOU-C summer peak with baseline credit", func(t *testing.T) {

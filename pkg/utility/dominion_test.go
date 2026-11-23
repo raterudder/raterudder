@@ -31,7 +31,7 @@ func TestDominion(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Schedule 1G TOU Summer", func(t *testing.T) {

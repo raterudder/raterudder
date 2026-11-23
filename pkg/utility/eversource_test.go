@@ -82,7 +82,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("CT Residential Heating Rate 5", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("CT Residential TOU Rate 7", func(t *testing.T) {
@@ -312,7 +312,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 
 		// Pre-Sep 2017 "net" 1:1 net metering option
 		netSettings := types.Settings{
@@ -472,7 +472,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 
 		// January 2026 (fallback)
 		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))

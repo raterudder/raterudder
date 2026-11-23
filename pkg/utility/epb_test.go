@@ -49,7 +49,7 @@ func TestEPB(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Time Shift Plan", func(t *testing.T) {

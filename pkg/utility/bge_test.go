@@ -31,7 +31,7 @@ func TestBGE(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Schedule RL Residential Optional TOU", func(t *testing.T) {

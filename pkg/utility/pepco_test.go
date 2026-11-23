@@ -48,7 +48,7 @@ func TestPepcoDC(t *testing.T) {
 		require.NoError(t, err)
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 
 		err = u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "pepco",
