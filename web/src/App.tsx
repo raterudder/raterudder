@@ -134,6 +134,7 @@ function AppContent() {
     const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
     const [currentUserID, setCurrentUserID] = useState<string>("");
     const [termsAccepted, setTermsAccepted] = useState(true);
+    const settingsBeforeLeaveRef = React.useRef<(() => boolean) | null>(null);
 
     const [location, navigate] = useLocationWithViewSite();
     const isHome = isMarketingRoute(location);
@@ -398,6 +399,13 @@ function AppContent() {
     }, [selectedSiteID, effectiveSites.length, sites]);
 
     const handleSiteChange = (id: string) => {
+        if (id === effectiveSiteID && !viewSiteOverride) {
+            return;
+        }
+        if (settingsBeforeLeaveRef.current && !settingsBeforeLeaveRef.current()) {
+            return;
+        }
+
         const params = new URLSearchParams(window.location.search);
         params.delete('viewSite');
         const searchStr = params.toString();
@@ -542,7 +550,7 @@ function AppContent() {
                                         ) : effectiveSiteID === 'ALL' ? (
                                             <Redirect to="/dashboard" replace />
                                         ) : (
-                                            <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} />
+                                            <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} beforeLeaveRef={settingsBeforeLeaveRef} />
                                         )}
                                     </ProtectedRoute>
                                 </Route>
