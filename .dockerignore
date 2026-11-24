@@ -10,3 +10,11 @@ bin
 tmp
 .env
 .DS_Store
+pkg/controller/testdata
+**/*_test.go
+web/src/**/*.test.*
+examples
+user_guide
+.github
+.agents
+**/*.md
