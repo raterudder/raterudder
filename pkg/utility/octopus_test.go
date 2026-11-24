@@ -3,9 +3,12 @@ package utility
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1360,29 +1363,41 @@ func TestOctopusUtility(t *testing.T) {
 		assert.Equal(t, "Standard", currCosy.PeriodName)
 		assert.InDelta(t, 0.21, currCosy.GenerationCreditDollarsPerKWH, 1e-4)
 
-		// 4. Switch rate to octopus_flux -> must use genericTOU, not SiteFees!
-		u4, err := m.Site(ctx, "site-trans", types.Settings{
+		// 4. Switch rate to octopus_flux (even with stale outgoing_agile option) -> must use genericTOU, not SiteFees!
+		fluxSettings := types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_flux",
 			UtilityRateOptions: types.UtilityRateOptions{
-				Location: "london",
+				Location:       "london",
+				GenerationRate: "outgoing_agile",
 			},
-		})
+		}
+		u4, err := m.Site(ctx, "site-trans", fluxSettings)
 		require.NoError(t, err)
 		_, isTOU4 := u4.(*genericTOU)
-		assert.True(t, isTOU4, "octopus_flux must use genericTOU")
+		assert.True(t, isTOU4, "octopus_flux must use genericTOU even when stale outgoing_agile is present")
+		u4Preview, err := m.PreviewSite(ctx, fluxSettings)
+		require.NoError(t, err)
+		_, isTOU4Preview := u4Preview.(*genericTOU)
+		assert.True(t, isTOU4Preview, "octopus_flux preview must use genericTOU even when stale outgoing_agile is present")
 
-		// 5. Switch rate to octopus_intelligent_flux -> must use genericTOU!
-		u5, err := m.Site(ctx, "site-trans", types.Settings{
+		// 5. Switch rate to octopus_intelligent_flux (even with stale outgoing_agile option) -> must use genericTOU!
+		intelliFluxSettings := types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_intelligent_flux",
 			UtilityRateOptions: types.UtilityRateOptions{
-				Location: "london",
+				Location:       "london",
+				GenerationRate: "outgoing_agile",
 			},
-		})
+		}
+		u5, err := m.Site(ctx, "site-trans", intelliFluxSettings)
 		require.NoError(t, err)
 		_, isTOU5 := u5.(*genericTOU)
-		assert.True(t, isTOU5, "octopus_intelligent_flux must use genericTOU")
+		assert.True(t, isTOU5, "octopus_intelligent_flux must use genericTOU even when stale outgoing_agile is present")
+		u5Preview, err := m.PreviewSite(ctx, intelliFluxSettings)
+		require.NoError(t, err)
+		_, isTOU5Preview := u5Preview.(*genericTOU)
+		assert.True(t, isTOU5Preview, "octopus_intelligent_flux preview must use genericTOU even when stale outgoing_agile is present")
 	})
 
 	t.Run("GetConfirmedPrices Pre-1600 Horizon Capping and Active Slot Inclusion", func(t *testing.T) {
@@ -1507,11 +1522,30 @@ func TestOctopusUtility(t *testing.T) {
 			nowFunc:         func() time.Time { return targetNow },
 		}
 
+		var confirmed []types.Price
+		var err error
+		for attempt := range 3 {
+			attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			confirmed, err = base.GetConfirmedPrices(attemptCtx, "london", dayStart, dayEnd)
+			attemptCancel()
+			if err == nil {
+				break
+			}
+			if attempt < 2 {
+				time.Sleep(1 * time.Second)
+			}
+		}
+		var netErr net.Error
+		if err != nil && (strings.Contains(err.Error(), "octopus api returned status: 5") ||
+			strings.Contains(err.Error(), "octopus api returned status: 429") ||
+			errors.Is(err, context.DeadlineExceeded) ||
+			(errors.As(err, &netErr) && netErr.Timeout())) {
+			t.Skipf("octopus API transiently unavailable: %v", err)
+		}
+		require.NoError(t, err)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-
-		confirmed, err := base.GetConfirmedPrices(ctx, "london", dayStart, dayEnd)
-		require.NoError(t, err)
 		if assert.Len(t, confirmed, 48) {
 			assert.Equal(t, dayStart, confirmed[0].TSStart)
 			assert.Equal(t, dayEnd, confirmed[len(confirmed)-1].TSEnd)

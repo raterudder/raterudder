@@ -1222,7 +1222,19 @@ type baseOctopusRegion struct {
 	location string
 }
 
+func octopusSupportsGenerationRate(rateID string) bool {
+	switch rateID {
+	case "octopus_flux", "octopus_intelligent_flux":
+		return false
+	default:
+		return true
+	}
+}
+
 func (r *baseOctopusRegion) settingsMatch(settings types.Settings) bool {
+	if !octopusSupportsGenerationRate(settings.UtilityRate) {
+		return false
+	}
 	loc, _, err := normalizeOctopusLocation(settings.UtilityRateOptions.Location)
 	if err != nil {
 		return false

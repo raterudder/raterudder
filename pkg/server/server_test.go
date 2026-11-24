@@ -1043,7 +1043,7 @@ func TestRun(t *testing.T) {
 		var googleDiscoveryCalls, appleDiscoveryCalls atomic.Int32
 		appleFirstAttemptStarted := make(chan struct{})
 		appleFirstAttemptRelease := make(chan struct{})
-		appleFirstAttemptDone := make(chan struct{})
+		warmOIDCDone := make(chan struct{})
 		var appleOnce sync.Once
 
 		flakyAppleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1058,9 +1058,6 @@ func TestRun(t *testing.T) {
 			}
 			if appleFail.Load() {
 				http.Error(w, "bad gateway", http.StatusBadGateway)
-				if callNum == 1 {
-					close(appleFirstAttemptDone)
-				}
 				return
 			}
 			appleSrv.Config.Handler.ServeHTTP(w, r)
@@ -1108,6 +1105,7 @@ func TestRun(t *testing.T) {
 			generalBurst:         30,
 			sensitiveRateLimit:   rate.Inf,
 			sensitiveBurst:       5,
+			onWarmOIDCDone:       func() { close(warmOIDCDone) },
 		}
 		require.NoError(t, srv.configureOIDC(
 			context.Background(),
@@ -1164,9 +1162,9 @@ func TestRun(t *testing.T) {
 		// Unblock Apple warmup attempt -> fails with 502 and continues without retrying in background
 		close(appleFirstAttemptRelease)
 		select {
-		case <-appleFirstAttemptDone:
+		case <-warmOIDCDone:
 		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for Apple OIDC warmup failure")
+			t.Fatal("timed out waiting for OIDC warmup completion")
 		}
 
 		srv.oidcMu.RLock()
