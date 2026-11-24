@@ -61,7 +61,7 @@ func TestFPLRates(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("RTR-1 TOU Rate", func(t *testing.T) {

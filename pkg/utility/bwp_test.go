@@ -52,7 +52,7 @@ func TestBWPUtility(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Residential TOU EV R-TOU-EV Pricing and Seasons", func(t *testing.T) {

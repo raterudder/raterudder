@@ -1,15 +1,18 @@
 package ess
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3642,6 +3645,14 @@ func TestFranklin(t *testing.T) {
 					})
 					return
 				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
+					})
+					return
+				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
@@ -3707,6 +3718,14 @@ func TestFranklin(t *testing.T) {
 					})
 					return
 				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
+					})
+					return
+				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
@@ -3750,6 +3769,14 @@ func TestFranklin(t *testing.T) {
 						"code":    200,
 						"success": true,
 						"result":  map[string]any{"totalCap": 30.0},
+					})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
 					})
 					return
 				}
@@ -3799,6 +3826,14 @@ func TestFranklin(t *testing.T) {
 					})
 					return
 				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
+					})
+					return
+				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
@@ -3843,6 +3878,14 @@ func TestFranklin(t *testing.T) {
 						"code":    200,
 						"success": true,
 						"result":  map[string]any{"totalCap": 30.0},
+					})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
 					})
 					return
 				}
@@ -3906,6 +3949,15 @@ func TestFranklin(t *testing.T) {
 					http.Error(w, "unexpected token: "+token, 400)
 					return
 				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					assert.Equal(t, "new-token", r.Header.Get("logintoken"))
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
+					})
+					return
+				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
@@ -3967,6 +4019,14 @@ func TestFranklin(t *testing.T) {
 					})
 					return
 				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
+					})
+					return
+				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
@@ -4016,6 +4076,14 @@ func TestFranklin(t *testing.T) {
 						"result": map[string]any{
 							"status": 1,
 						},
+					})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"valid": true, "runtimeData": map[string]any{"soc": 50.0, "mode": 1}},
 					})
 					return
 				}
@@ -5963,5 +6031,172 @@ func TestFranklin(t *testing.T) {
 		_, err = f.getPowerCapacityConfigWithCache(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 2, powerCapHits)
+	})
+
+	t.Run("Authenticate Caches Composite Info And Fails On Operation Without Permission", func(t *testing.T) {
+		var compositeHits int
+		var denyComposite bool
+		var expireCompositeTokenOnce bool
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/initialize/appUserOrInstallerLogin":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"token": "refreshed-tok"},
+				})
+			case "/hes-gateway/terminal/getDeviceInfoV2":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 27.2, "zoneInfo": "UTC"},
+				})
+			case "/hes-gateway/terminal/getDeviceCompositeInfo":
+				compositeHits++
+				if expireCompositeTokenOnce && r.Header.Get("logintoken") == "stale-tok" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    401,
+						"success": false,
+						"message": "invalid token!",
+					})
+					return
+				}
+				if denyComposite {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    403,
+						"success": false,
+						"message": "Operation without permission",
+					})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":       true,
+						"runtimeData": map[string]any{"soc": 64.0, "mode": 2},
+					},
+				})
+			case "/hes-gateway/common/getPowerCapConfigList":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+			case "/hes-gateway/terminal/tou/getPowerControlSetting":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 1}})
+			case "/hes-gateway/terminal/tou/getGatewayTouListV2":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": []map[string]any{{"id": 2, "workMode": 2}}, "currendId": 2},
+				})
+			default:
+				http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		f := &Franklin{client: ts.Client(), baseURL: ts.URL}
+		creds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:    "user@example.com",
+				MD5Password: "passhash",
+				GatewayID:   "gw1",
+				Token:       "valid-tok",
+			},
+		}
+
+		// 1. Authenticate populates runtime composite cache so immediate GetStatus reuses it
+		_, changed, err := f.Authenticate(ctx, creds)
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 1, compositeHits)
+
+		status, err := f.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 64.0, status.BatterySOC)
+		assert.Equal(t, 1, compositeHits, "GetStatus should reuse cached composite runtime data from Authenticate")
+
+		// 2. Operation without permission on getDeviceCompositeInfo (after refreshing expired token) fails Authenticate with ErrUnauthorized
+		denyComposite = true
+		expireCompositeTokenOnce = true
+		creds.Franklin.Token = "stale-tok"
+		f2 := &Franklin{client: ts.Client(), baseURL: ts.URL}
+		_, _, err = f2.Authenticate(ctx, creds)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+		assert.NotErrorIs(t, err, ErrAccountLocked)
+		assert.Empty(t, logBuf.String(), "permission rejection must not emit ERROR logs")
+	})
+
+	t.Run("Permanent Auth And Lockout Classification With Zero Error Logs", func(t *testing.T) {
+		loginCode := 400
+		loginMsg := "Incorrect password, you still have 1 chances to enter."
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/initialize/appUserOrInstallerLogin":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    loginCode,
+					"success": false,
+					"message": loginMsg,
+				})
+			case "/hes-gateway/terminal/tou/updateSocV2":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    403,
+					"success": false,
+					"message": "Operation without permission",
+				})
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		f := &Franklin{client: ts.Client(), baseURL: ts.URL, gatewayID: "gw1", tokenStr: "tok"}
+		creds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:    "user@example.com",
+				MD5Password: "badhash",
+				GatewayID:   "gw1",
+			},
+		}
+
+		// 1. Wrong password ("Incorrect password, you still have 1 chances to enter.") wraps ErrUnauthorized (not ErrAccountLocked)
+		_, _, err := f.Authenticate(ctx, creds)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+		assert.NotErrorIs(t, err, ErrAccountLocked)
+
+		// 2. Account or password error (" Account or password error!") wraps ErrUnauthorized (not ErrAccountLocked)
+		loginMsg = " Account or password error!"
+		_, _, err = f.Authenticate(ctx, creds)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+		assert.NotErrorIs(t, err, ErrAccountLocked)
+
+		// 3. Locked password wraps both ErrAccountLocked and ErrUnauthorized
+		loginMsg = "The password is locked"
+		_, _, err = f.Authenticate(ctx, creds)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+		assert.ErrorIs(t, err, ErrAccountLocked)
+
+		// 4. JSON code 429 without "429" in message is detected as rate limit and does NOT wrap ErrUnauthorized
+		loginCode = http.StatusTooManyRequests
+		loginMsg = "Rate limit exceeded"
+		_, _, err = f.Authenticate(ctx, creds)
+		require.Error(t, err)
+		assert.True(t, isFranklinRateLimit(err))
+		assert.NotErrorIs(t, err, ErrUnauthorized)
+
+		// 5. SetModes helper permission rejection wraps ErrUnauthorized with zero ERROR logs
+		socErr := f.postFranklinSOCUpdate(ctx, franklinMode{WorkMode: franklinWorkModeSelfConsumption}, 20)
+		require.Error(t, socErr)
+		assert.ErrorIs(t, socErr, ErrUnauthorized)
+		assert.Empty(t, logBuf.String(), "permanent credential, lockout, and permission errors must emit zero ERROR logs")
 	})
 }

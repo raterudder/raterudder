@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 import { analyzer } from 'vite-bundle-analyzer'
 import { buildSync } from 'esbuild'
 import path from 'path'
+import process from 'process'
 import { fileURLToPath } from 'url'
 import { PUBLIC_PAGES_SEO, renderSubpageHtml } from './src/utils/seo.ts'
 
@@ -70,10 +71,14 @@ function seoSubpagesPlugin(): Plugin {
 export default defineConfig({
   plugins: [
     react(),
-    analyzer({
-      analyzerMode: 'static',
-      openAnalyzer: false,
-    }),
+    ...(process.env.ANALYZE === 'true'
+      ? [
+          analyzer({
+            analyzerMode: 'static',
+            openAnalyzer: false,
+          }),
+        ]
+      : []),
     serviceWorkerPlugin(),
     seoSubpagesPlugin(),
   ],

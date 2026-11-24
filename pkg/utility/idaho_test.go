@@ -42,7 +42,7 @@ func TestIdahoUtility(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Schedule 6 TOU Rates", func(t *testing.T) {

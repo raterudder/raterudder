@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -1521,6 +1525,73 @@ func TestHandleUpdate(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("SetESSModes Rate Limited In PerformSiteUpdate Emits Warn And Zero Error Logs", func(t *testing.T) {
+		now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+		yesterday := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil).Once()
+		mockS.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{{TSDayStart: yesterday}},
+			},
+		}, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, "site1", mock.MatchedBy(func(a types.Action) bool {
+			return a.Failed && strings.Contains(a.Error, errESSRateLimited.Error())
+		})).Return(nil).Once()
+
+		mockES := &mockESS{MockName: "tesla"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, fmt.Errorf("%w, try again in 30m0s", errESSRateLimited)).Once()
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site1", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil).Once()
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil).Once()
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Once()
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site1", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			nowFunc:    func() time.Time { return now },
+		}
+
+		var errBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		action, _, err := srv.performSiteUpdate(ctx, "site1", settingsWithVersion{
+			Settings: types.Settings{
+				ESS:             "tesla",
+				MinBatterySOC:   5.0,
+				UtilityProvider: "test",
+			},
+			version: types.CurrentSettingsVersion,
+		}, types.Credentials{}, false)
+		require.NoError(t, err)
+		if assert.NotNil(t, action) {
+			assert.True(t, action.Failed)
+		}
+		assert.Empty(t, errBuf.String(), "performSiteUpdate must emit zero ERROR logs when setESSModes returns errESSRateLimited")
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+	})
 }
 
 func TestHandleUpdateSites(t *testing.T) {
@@ -2285,6 +2356,46 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
 		mockU.AssertExpectations(t)
+	})
+
+	t.Run("Permanent auth failure in handleUpdateSites emits WARN and zero ERROR logs", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+			"site1": {
+				ESS:             "franklin",
+				UtilityProvider: "test",
+				UpdateGroup:     1,
+			},
+		}, map[string]int{
+			"site1": types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil)
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("wrong password: %w", ess.ErrUnauthorized))
+		essMap := ess.NewMap()
+		essMap.SetSystem("site1", mockES)
+
+		srv := &Server{
+			storage:    mockS,
+			ess:        essMap,
+			utilities:  utility.NewMap(mockS),
+			bypassAuth: true,
+		}
+
+		var errBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		req := httptest.NewRequest("POST", "/api/updateSites", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSites(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.Empty(t, errBuf.String(), "handleUpdateSites must not emit ERROR logs on permanent ESS auth rejection")
 	})
 }
 
@@ -3139,24 +3250,39 @@ func TestSetESSModes(t *testing.T) {
 		mockES.AssertExpectations(t)
 	})
 
-	t.Run("Unauthorized error increments ConsecutiveSetFailures", func(t *testing.T) {
+	t.Run("Unauthorized error increments ConsecutiveSetFailures 0 to 1 then jumps to 40", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
-		// Expect SetModes to return unauthorized
-		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized)
-
-		// Expect settings to be saved with ConsecutiveSetFailures incremented
-		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
-		}), 1, mock.Anything).Return(time.Time{}, nil)
+		// 1. First permanent unauthorized error increments 0 -> 1
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Twice()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 1
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
 		}
 
-		settings := settingsWithVersion{
+		s0 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 0,
+				},
+			},
+			version: 1,
+		}
+
+		_, err := srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 2. Second permanent unauthorized error when ConsecutiveSetFailures >= 1 jumps to 40
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		s1 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveSetFailures: 1,
@@ -3166,8 +3292,19 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s1)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 3. Explicit lockout error jumps directly from 0 to 40
+		lockedErr := fmt.Errorf("locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, lockedErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrAccountLocked)
+
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
 	})

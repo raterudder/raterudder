@@ -168,6 +168,51 @@ describe('App routing and viewSite parameter preservation', () => {
         expect(api.fetchUtilities).toHaveBeenCalledTimes(1);
     });
 
+    it('guards handleSiteChange on /settings before resetting settings or mutating selectedSiteID', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/settings');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            sites: [
+                { id: 'site1', name: 'Site 1' },
+                { id: 'site2', name: 'Site 2' },
+            ],
+        });
+
+        render(<App />);
+
+        const minSocInput = await screen.findByLabelText(/Minimum Battery %/i);
+        await user.clear(minSocInput);
+        await user.type(minSocInput, '45');
+        expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+
+        const trigger = screen.getByLabelText('Select Site');
+        await user.click(trigger);
+        const site2Option = await screen.findByRole('option', { name: 'Site 2' });
+        await user.click(site2Option);
+
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
+        expect(confirmSpy).toHaveBeenCalledWith('You have unsaved changes. Are you sure you want to leave?');
+        expect(window.location.pathname).toBe('/settings');
+        expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(45);
+        expect(api.fetchSettings).not.toHaveBeenCalledWith('site2');
+
+        confirmSpy.mockReturnValueOnce(true);
+        await user.click(screen.getByLabelText('Select Site'));
+        const overviewOption = await screen.findByRole('option', { name: 'Overview' });
+        await user.click(overviewOption);
+
+        expect(confirmSpy).toHaveBeenCalledTimes(2);
+        await waitFor(() => {
+            expect(window.location.pathname).toBe('/dashboard');
+        });
+        confirmSpy.mockRestore();
+    });
+
     it('redirects /forecast, /history, and /settings to /dashboard when Overview (ALL) is selected', async () => {
         const user = userEvent.setup();
         window.history.pushState(null, '', '/forecast');

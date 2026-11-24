@@ -8,6 +8,15 @@
   margin: 0 auto;
 }
 
+.settings-container:not(.wizard-container) {
+  padding-bottom: 5.5rem;
+}
+
+.settings-container.has-unsaved-bar:not(.wizard-container),
+.settings-container:not(.wizard-container):has(.unsaved-changes-bar) {
+  padding-bottom: calc(6rem + var(--unsaved-bar-offset, 80px));
+}
+
 .settings-container h2 {
   letter-spacing: -0.025em;
   font-size: 2.25rem;
@@ -690,6 +699,14 @@
   gap: 1rem;
 }
 
+.unsaved-changes-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
+}
+
 .unsaved-changes-text {
   display: flex;
   align-items: center;
@@ -699,21 +716,40 @@
   color: var(--on-surface);
 }
 
+.unsaved-changes-error {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ef4444;
+  line-height: 1.35;
+}
+
 .unsaved-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--warning);
   box-shadow: 0 0 8px var(--warning);
+  flex-shrink: 0;
+}
+
+.unsaved-changes-bar.has-error .unsaved-dot {
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
 }
 
 .unsaved-changes-actions {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 @media (max-width: 640px) {
+  .settings-container.has-unsaved-bar:not(.wizard-container),
+  .settings-container:not(.wizard-container):has(.unsaved-changes-bar) {
+    padding-bottom: calc(6.5rem + var(--unsaved-bar-offset, 124px));
+  }
+
   .unsaved-changes-bar {
     padding: 0.75rem 1rem;
   }

@@ -75,12 +75,19 @@
   - When testing HTTP handlers that use `authMiddleware` (with `bypassAuth: false`), use `setupOIDCTest(t)` and `generateTestToken` to create mock OIDC servers and valid JWT cookies in `httptest.NewRequest`. Do not rely solely on injecting `context.WithValue`.
 - **Firestore Emulator**:
   `npx firebase-tools emulators:start --only firestore --project demo-test`
+- **Go Binary Compilation**:
+  - Compile and link all server and CLI packages under `cmd/`:
+    `go build -tags timetzdata ./cmd/...`
+  - Build static production `raterudder` binary with embedded `web/dist` (run frontend build first):
+    `CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o /tmp/raterudder ./cmd/raterudder`
 
 ### Frontend Tests
 - **Vitest**: Run single test files with `npm test path/to/test.test.tsx`.
 - **Implicit Vitest Imports**: Always import Vitest functions explicitly:
   `import { describe, it, expect, beforeEach, vi } from 'vitest';`
 - **Mock Setup**: Update `web/src/test/apiMocks.ts` whenever shared settings or notification types are modified.
+- **Production Build**: Run `npm run build` in `web/` (`cd web && npm run build`) to type-check and bundle `web/dist` (including `sw.js` and SEO HTML subpages) without `dist/stats.html`.
+- **Bundle Analysis**: Run `ANALYZE=true npm run build` in `web/` (`cd web && ANALYZE=true npm run build`) to activate `vite-bundle-analyzer` and emit `dist/stats.html` on demand.
 
 ---
 
