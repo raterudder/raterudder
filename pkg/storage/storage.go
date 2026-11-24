@@ -20,11 +20,16 @@ var (
 	ErrFeatureConfigConflict = errors.New("feature config conflict: cannot overwrite")
 )
 
+// SettingsMutator mutates the current settings and version during an atomic read-modify-write.
+// Return save=false (with err=nil) to leave stored settings unchanged without writing.
+type SettingsMutator func(current types.Settings, version int) (updated types.Settings, newVersion int, save bool, err error)
+
 // Database defines the interface for persisting data and retrieving settings.
 type Database interface {
 	// Settings
 	GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error)
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error)
+	UpdateSettings(ctx context.Context, siteID string, mutate SettingsMutator) (types.Settings, int, time.Time, error)
 	ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, map[string]time.Time, error)
 
 	// Data Persistence

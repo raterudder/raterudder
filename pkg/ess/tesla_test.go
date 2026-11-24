@@ -315,6 +315,231 @@ func TestTesla(t *testing.T) {
 			assert.Error(t, err)
 			assert.ErrorContains(t, err, "credential validation failed")
 		})
+
+		t.Run("Concurrent callers with single-use expired refresh token refresh once and share rotated credentials", func(t *testing.T) {
+			var refreshCalls atomic.Int32
+			var tokenMu sync.Mutex
+			redeemed := make(map[string]bool)
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
+					require.NoError(t, r.ParseForm())
+					assert.Equal(t, "refresh_token", r.FormValue("grant_type"))
+					rt := r.FormValue("refresh_token")
+
+					tokenMu.Lock()
+					alreadyUsed := redeemed[rt]
+					if !alreadyUsed {
+						redeemed[rt] = true
+					}
+					tokenMu.Unlock()
+
+					refreshCalls.Add(1)
+					if alreadyUsed || rt != "single-use-refresh-1" {
+						w.WriteHeader(http.StatusUnauthorized)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"error":             "login_required",
+							"error_description": "The refresh_token is invalid",
+						})
+						return
+					}
+
+					time.Sleep(25 * time.Millisecond)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"access_token":  "rotated-access-2",
+						"refresh_token": "single-use-refresh-2",
+						"expires_in":    28800,
+					})
+				case "/api/1/energy_sites/1234/site_info":
+					if r.Header.Get("Authorization") != "Bearer rotated-access-2" {
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"backup_reserve_percent": 20.0},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					if r.Header.Get("Authorization") != "Bearer rotated-access-2" {
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"percentage_charged": 62.5},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "concurrent-refresh-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+			fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+			sys.(*Tesla).nowFunc = func() time.Time { return fixedNow }
+
+			const callers = 5
+			start := make(chan struct{})
+			type authRes struct {
+				creds   types.Credentials
+				changed bool
+				err     error
+			}
+			results := make([]authRes, callers)
+			var wg sync.WaitGroup
+			for i := range callers {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					<-start
+					stale := types.Credentials{
+						Tesla: &types.TeslaCredentials{
+							Region:       "NA",
+							AccessToken:  "expired-access-1",
+							RefreshToken: "single-use-refresh-1",
+							Expiry:       fixedNow.Add(-time.Minute),
+							EnergySiteID: 1234,
+						},
+					}
+					c, ch, aErr := sys.Authenticate(ctx, stale)
+					results[idx] = authRes{creds: c, changed: ch, err: aErr}
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			assert.Equal(t, int32(1), refreshCalls.Load(), "single-use refresh token must only be redeemed once")
+			expectedExpiry := fixedNow.Add(28800 * time.Second)
+			for i, res := range results {
+				require.NoError(t, res.err, "caller %d failed", i)
+				assert.True(t, res.changed, "caller %d should report changed credentials", i)
+				require.NotNil(t, res.creds.Tesla)
+				assert.Equal(t, "rotated-access-2", res.creds.Tesla.AccessToken)
+				assert.Equal(t, "single-use-refresh-2", res.creds.Tesla.RefreshToken)
+				assert.True(t, expectedExpiry.Equal(res.creds.Tesla.Expiry))
+			}
+
+			// A late caller still presenting the already-redeemed refresh token also reuses the rotated credentials without hitting /token
+			lateCreds, lateChanged, err := sys.Authenticate(ctx, types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "expired-access-1",
+					RefreshToken: "single-use-refresh-1",
+					Expiry:       fixedNow.Add(-time.Minute),
+					EnergySiteID: 1234,
+				},
+			})
+			require.NoError(t, err)
+			assert.True(t, lateChanged)
+			assert.Equal(t, int32(1), refreshCalls.Load())
+			assert.Equal(t, "rotated-access-2", lateCreds.Tesla.AccessToken)
+			assert.Equal(t, "single-use-refresh-2", lateCreds.Tesla.RefreshToken)
+		})
+
+		t.Run("Concurrent callers with revoked non-expired access token refresh once on 401 and reuse rotated token", func(t *testing.T) {
+			var refreshCalls atomic.Int32
+			var tokenMu sync.Mutex
+			redeemed := make(map[string]bool)
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
+					require.NoError(t, r.ParseForm())
+					rt := r.FormValue("refresh_token")
+
+					tokenMu.Lock()
+					alreadyUsed := redeemed[rt]
+					if !alreadyUsed {
+						redeemed[rt] = true
+					}
+					tokenMu.Unlock()
+
+					refreshCalls.Add(1)
+					if alreadyUsed || rt != "revoked-flow-refresh-1" {
+						w.WriteHeader(http.StatusUnauthorized)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"error": "The refresh_token is invalid",
+						})
+						return
+					}
+
+					time.Sleep(20 * time.Millisecond)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"access_token":  "revoked-flow-access-2",
+						"refresh_token": "revoked-flow-refresh-2",
+						"expires_in":    28800,
+					})
+				case "/api/1/energy_sites/1234/site_info":
+					if r.Header.Get("Authorization") != "Bearer revoked-flow-access-2" {
+						w.WriteHeader(http.StatusUnauthorized)
+						_ = json.NewEncoder(w).Encode(map[string]any{"error": "token expired (401)"})
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"backup_reserve_percent": 20.0},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					if r.Header.Get("Authorization") != "Bearer revoked-flow-access-2" {
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"percentage_charged": 80.0},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "concurrent-401-refresh-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+			fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+			sys.(*Tesla).nowFunc = func() time.Time { return fixedNow }
+
+			const callers = 4
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			errs := make([]error, callers)
+			rotatedOut := make([]types.Credentials, callers)
+			changedOut := make([]bool, callers)
+
+			for i := range callers {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					<-start
+					c, ch, aErr := sys.Authenticate(ctx, types.Credentials{
+						Tesla: &types.TeslaCredentials{
+							Region:       "NA",
+							AccessToken:  "revoked-access-1",
+							RefreshToken: "revoked-flow-refresh-1",
+							Expiry:       fixedNow.Add(2 * time.Hour),
+							EnergySiteID: 1234,
+						},
+					})
+					rotatedOut[idx] = c
+					changedOut[idx] = ch
+					errs[idx] = aErr
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			assert.Equal(t, int32(1), refreshCalls.Load())
+			for i := range callers {
+				require.NoError(t, errs[i])
+				assert.True(t, changedOut[i])
+				assert.Equal(t, "revoked-flow-access-2", rotatedOut[i].Tesla.AccessToken)
+				assert.Equal(t, "revoked-flow-refresh-2", rotatedOut[i].Tesla.RefreshToken)
+			}
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 80.0, status.BatterySOC)
+		})
 	})
 
 	t.Run("GetStatus Basic", func(t *testing.T) {
