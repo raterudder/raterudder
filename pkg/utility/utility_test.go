@@ -1,6 +1,7 @@
 package utility
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"math/rand"
@@ -449,6 +450,92 @@ func TestMap(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, vppInfo.Mandatory, 6)
 	})
+
+	t.Run("PreviewSite builds temporary provider without reading or mutating cache or logging warnings", func(t *testing.T) {
+		m := Configured(nil)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logCtx := log.With(ctx, logger)
+
+		savedSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+			},
+		}
+		cached, err := m.Site(logCtx, "site1", savedSettings)
+		require.NoError(t, err)
+
+		preview, err := m.PreviewSite(logCtx, types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_e_tou_c",
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, preview)
+		assert.NotSame(t, cached, preview)
+		assert.Same(t, cached, m.utilities["site1"])
+		assert.NotContains(t, m.utilities, "")
+		assert.NotContains(t, buf.String(), "site changed utility rate")
+
+		cachedAgain, err := m.Site(logCtx, "site1", savedSettings)
+		require.NoError(t, err)
+		assert.Same(t, cached, cachedAgain)
+	})
+
+	t.Run("Site and PreviewSite reject empty UtilityRate on comed and ameren unless custom periods are set", func(t *testing.T) {
+		m := Configured(nil)
+
+		_, err := m.Site(ctx, "site-comed", types.Settings{UtilityProvider: "comed"})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "utility rate is required for provider: comed")
+
+		_, err = m.PreviewSite(ctx, types.Settings{UtilityProvider: "ameren"})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "utility rate is required for provider: ameren")
+
+		uComedCustom, err := m.Site(ctx, "site-comed-custom", types.Settings{
+			UtilityProvider: "comed",
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{DollarsPerKWH: 0.05},
+			},
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, uComedCustom)
+
+		uAmerenCustom, err := m.PreviewSite(ctx, types.Settings{
+			UtilityProvider: "ameren",
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{DollarsPerKWH: 0.05},
+			},
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, uAmerenCustom)
+	})
+
+	t.Run("Site rebuilds SiteFees when ComEd rate options change", func(t *testing.T) {
+		m := Configured(nil)
+		u1, err := m.Site(ctx, "site-comed", types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+				VariableDeliveryRate: false,
+			},
+		})
+		require.NoError(t, err)
+
+		u2, err := m.Site(ctx, "site-comed", types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+				VariableDeliveryRate: true,
+			},
+		})
+		require.NoError(t, err)
+		assert.NotSame(t, u1, u2)
+	})
 }
 
 func TestRatesCoverAllTime(t *testing.T) {
@@ -632,8 +719,11 @@ func TestRatesCoverAllTime(t *testing.T) {
 								}
 							}
 							expectBase := 1
-							if rate.ID == "comed_besh" || rate.ID == "ameren_psp" {
+							if rate.ID == "comed_besh" {
 								expectBase = 0
+							} else if rate.ID == "ameren_psp" || rate.ID == "ameren_bgs" {
+								// Rider TS and Rider RTP (ameren_psp) or BGS-1 Supply (ameren_bgs) are GridAdditional: false per Rider NMOS.
+								expectBase = 2
 							}
 							isMatch := len(applicableNames) == expectBase
 							if rate.ID == "comed_bes" || rate.ID == "comed_besh" {

@@ -146,13 +146,13 @@ export const fetchUtilityPeriods = async (
     if (siteID) {
         query.append('siteID', siteID);
     }
-    if (utilityProvider) {
+    if (utilityProvider !== undefined) {
         query.append('utilityProvider', utilityProvider);
     }
-    if (utilityRate) {
+    if (utilityRate !== undefined) {
         query.append('utilityRate', utilityRate);
     }
-    if (utilityRateOptions && Object.keys(utilityRateOptions).length > 0) {
+    if (utilityRateOptions !== undefined) {
         query.append('utilityRateOptions', JSON.stringify(utilityRateOptions));
     }
     const response = await fetch(`/api/utility/periods${query.toString() ? `?${query.toString()}` : ''}`);

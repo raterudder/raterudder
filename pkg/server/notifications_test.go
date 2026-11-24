@@ -1548,6 +1548,41 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
+	t.Run("NormalizesDisabledPerAlertSensitivity", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		siteID := "site-123"
+		var saved types.UserNotificationSettings
+		mockS.On("UpdateSiteNotificationSettings", mock.Anything, siteID, "fake", mock.AnythingOfType("types.UserNotificationSettings")).
+			Run(func(args mock.Arguments) {
+				saved = args.Get(3).(types.UserNotificationSettings)
+			}).
+			Return(nil).Once()
+
+		updateReq := updateNotificationSettingsRequest{
+			SiteID: siteID,
+			Settings: types.UserNotificationSettings{
+				AllAlertSensitivity:       "",
+				PriceSpikeAlert:           "disabled",
+				SolarUnderproductionAlert: "disabled",
+				HighHomeLoadAlert:         "disabled",
+			},
+		}
+		body, err := json.Marshal(updateReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "", saved.PriceSpikeAlert)
+		assert.Equal(t, "", saved.SolarUnderproductionAlert)
+		assert.Equal(t, "", saved.HighHomeLoadAlert)
+		mockS.AssertExpectations(t)
+	})
+
 	t.Run("StorageError", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		_, handler, _, _ := createTestEndpointsServer(t, mockS)

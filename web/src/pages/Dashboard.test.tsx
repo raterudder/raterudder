@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText, STALE_DASHBOARD_TIMEOUT_MS } from './Dashboard';
+import Dashboard, { whatsNewVersion, whatsNewText, STALE_DASHBOARD_TIMEOUT_MS } from './Dashboard';
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
@@ -1013,12 +1013,29 @@ describe('Dashboard', () => {
             expect(screen.getByText('Direct Solar & Battery Export')).toBeInTheDocument();
             expect(screen.getByText('EV Standby Charging')).toBeInTheDocument();
             expect(screen.getByText('Updated Dashboard & Forecast')).toBeInTheDocument();
-            if (whatsNewLinkText) {
-                const link = screen.getByRole('link', { name: whatsNewLinkText });
-                expect(link).toBeInTheDocument();
-                expect(link).toHaveAttribute('href', '/settings');
-            }
+            expect(screen.getByRole('link', { name: /Configure in Settings/i })).toHaveAttribute('href', '/settings?tou=1');
+            expect(screen.getByRole('link', { name: /Enable in Settings/i })).toHaveAttribute('href', '/settings?ev=1');
+            expect(screen.getByRole('link', { name: /View Forecast/i })).toHaveAttribute('href', '/forecast');
         });
+    });
+
+    it("hides single-site links in What's New banner when siteID is ALL", async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        renderWithRouter(<Dashboard siteID="ALL" settings={null} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('whats-new-banner')).toBeInTheDocument();
+            expect(screen.getByText('SmartPlan Algorithm')).toBeInTheDocument();
+            expect(screen.getByText('Direct Solar & Battery Export')).toBeInTheDocument();
+            expect(screen.getByText('EV Standby Charging')).toBeInTheDocument();
+            expect(screen.getByText('Updated Dashboard & Forecast')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('link', { name: /Configure in Settings/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Enable in Settings/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /View Forecast/i })).not.toBeInTheDocument();
+        expect(screen.getByTestId('whats-new-banner').querySelectorAll('a')).toHaveLength(0);
     });
 
     it("can dismiss the What's New banner", async () => {
@@ -1376,6 +1393,90 @@ describe('Dashboard', () => {
             ).toBeInTheDocument();
             const link = screen.getByRole('link', { name: /re-authenticate in Settings/i });
             expect(link).toHaveAttribute('href', '/settings?ess=1');
+        });
+    });
+
+    it('shows count-based auth warning for consecutiveFailures 3..39 and count-free paused warning at >= 40', async () => {
+        mockActionsAndSavings([]);
+        const transientSettings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 5,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        const { unmount } = renderWithRouter(<Dashboard siteID="site1" settings={transientSettings as any} />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/Energy Storage System authentication failed 5 time\(s\)\./i)
+            ).toBeInTheDocument();
+        });
+        unmount();
+
+        const pausedSettings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={pausedSettings as any} />);
+
+        await waitFor(() => {
+            const warningEl = screen.getByText(/Energy Storage System authentication is paused\./i);
+            expect(warningEl).toBeInTheDocument();
+            expect(warningEl.textContent).not.toContain('40');
+            const link = screen.getByRole('link', { name: /Update your credentials in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?ess=1');
+        });
+    });
+
+    it('shows count-free paused mode update banners when consecutiveSetFailures >= 40 for Tesla and non-Tesla', async () => {
+        mockActionsAndSavings([]);
+        const teslaPaused = {
+            utilityProvider: 'comed',
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        const { unmount } = renderWithRouter(<Dashboard siteID="site1" settings={teslaPaused as any} />);
+
+        await waitFor(() => {
+            const teslaMsg = screen.getByText(/RateRudder can read your Tesla battery status, but battery mode updates are paused due to missing command permissions\./i);
+            expect(teslaMsg).toBeInTheDocument();
+            expect(teslaMsg.textContent).not.toContain('40');
+        });
+        unmount();
+
+        const franklinPaused = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 40,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={franklinPaused as any} />);
+
+        await waitFor(() => {
+            const franklinMsg = screen.getByText(/Energy Storage System battery mode updates are paused\./i);
+            expect(franklinMsg).toBeInTheDocument();
+            expect(franklinMsg.textContent).not.toContain('40');
         });
     });
 

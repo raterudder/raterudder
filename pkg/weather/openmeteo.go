@@ -293,6 +293,9 @@ func (s *OpenMeteo) Forecast(
 		return nil, fmt.Errorf("invalid timezone: %w", err)
 	}
 
+	startDate = startDate.In(tLoc)
+	endDate = endDate.In(tLoc)
+
 	// Open-Meteo expects an inclusive end date for its query.
 	// we used to subtract one day if the endDate sent was exactly midnight, but
 	// some of the data points from the API are for the preceding hour so we need

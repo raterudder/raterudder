@@ -363,48 +363,48 @@ func TestHandleUpdateSettings(t *testing.T) {
 		_, _, err = srv.getESSSystem(ctx, "site1", s1, creds)
 		require.NoError(t, err)
 
-		// 3. Failures = 2, wait 30s. If last attempt was 10s ago, should fail.
+		// 3. Failures = 2, wait 30m. If last attempt was 20m ago, should fail (exceeds 20m poll cadence).
 		s2 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
-					LastAttempt:         testTime.Add(-10 * time.Second),
+					LastAttempt:         testTime.Add(-20 * time.Minute),
 				},
 			},
 		}
 		_, _, err = srv.getESSSystem(ctx, "site1", s2, creds)
-		require.ErrorContains(t, err, "try again in 20s")
+		require.ErrorContains(t, err, "try again in 10m0s")
 
-		// 4. Failures = 2, wait 30s. If last attempt was 31s ago, should succeed.
+		// 4. Failures = 2, wait 30m. If last attempt was 31m ago, should succeed.
 		s2_expired := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
-					LastAttempt:         testTime.Add(-31 * time.Second),
+					LastAttempt:         testTime.Add(-31 * time.Minute),
 				},
 			},
 		}
 		_, _, err = srv.getESSSystem(ctx, "site1", s2_expired, creds)
 		require.NoError(t, err)
 
-		// 5. Failures = 5, backoff should be 240s (4 mins). If last attempt was 1 min ago, should fail.
+		// 5. Failures = 5, backoff should be 45m. If last attempt was 20m ago, should fail.
 		s5 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
-					LastAttempt:         testTime.Add(-1 * time.Minute),
+					LastAttempt:         testTime.Add(-20 * time.Minute),
 				},
 			},
 		}
 		_, _, err = srv.getESSSystem(ctx, "site1", s5, creds)
-		require.ErrorContains(t, err, "try again in 3m0s")
+		require.ErrorContains(t, err, "try again in 25m0s")
 
-		// 6. Failures = 5, backoff should be 240s. If last attempt was 5 mins ago, should succeed.
+		// 6. Failures = 5, backoff should be 45m. If last attempt was 46m ago, should succeed.
 		s5_expired := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
-					LastAttempt:         testTime.Add(-5 * time.Minute),
+					LastAttempt:         testTime.Add(-46 * time.Minute),
 				},
 			},
 		}
@@ -461,6 +461,70 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Ensure fields were updated
 		assert.Equal(t, 1, savedSettings.ESSAuthStatus.ConsecutiveFailures, "ConsecutiveFailures should be incremented")
 		assert.Equal(t, testTime, savedSettings.ESSAuthStatus.LastAttempt, "LastAttempt should be updated to now")
+	})
+
+	t.Run("getESSSystem Permanent Auth 1 Retry And Lockout Jump To 40", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		essMap := ess.NewMap()
+		mockES := &mockESS{}
+		essMap.SetSystem("site1", mockES)
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+			nowFunc:       func() time.Time { return testTime },
+		}
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		permErr := fmt.Errorf("bad credentials: %w", ess.ErrUnauthorized)
+
+		// 1. First permanent error from 0 increments to 1 so next poll retries once
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, permErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), 1, mock.Anything).Return(testTime, nil).Once()
+
+		_, out1, err := srv.getESSSystem(ctx, "site1", settingsWithVersion{version: 1}, types.Credentials{})
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Equal(t, 1, out1.ESSAuthStatus.ConsecutiveFailures)
+
+		// 2. Retry on next poll (ConsecutiveFailures == 1 has 0s backoff): if it succeeds, resets to 0
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), 1, mock.Anything).Return(testTime, nil).Once()
+
+		sys, outRecovered, err := srv.getESSSystem(ctx, "site1", out1, types.Credentials{})
+		require.NoError(t, err)
+		require.NotNil(t, sys)
+		assert.Equal(t, 0, outRecovered.ESSAuthStatus.ConsecutiveFailures)
+
+		// 3. Second permanent error when ConsecutiveFailures >= 1 jumps directly to 40
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, permErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 40
+		}), 1, mock.Anything).Return(testTime, nil).Once()
+
+		_, outPaused, err := srv.getESSSystem(ctx, "site1", out1, types.Credentials{})
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Equal(t, 40, outPaused.ESSAuthStatus.ConsecutiveFailures)
+
+		// 4. Explicit lockout error jumps directly from 0 to 40 without a retry
+		lockedErr := fmt.Errorf("password locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, lockedErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 40
+		}), 1, mock.Anything).Return(testTime, nil).Once()
+
+		_, outLocked, err := srv.getESSSystem(ctx, "site1", settingsWithVersion{version: 1}, types.Credentials{})
+		require.ErrorIs(t, err, ess.ErrAccountLocked)
+		assert.Equal(t, 40, outLocked.ESSAuthStatus.ConsecutiveFailures)
+		assert.Empty(t, logBuf.String(), "permanent auth failures must emit zero ERROR logs")
 	})
 
 	t.Run("getESSSystem Saves Rotated Credentials When Authenticate Fails With Updated True", func(t *testing.T) {
@@ -3713,12 +3777,12 @@ func TestGetESSBackoff(t *testing.T) {
 	}{
 		{0, 0},
 		{1, 0},
-		{2, 30 * time.Second},
-		{3, 60 * time.Second},
-		{4, 120 * time.Second},
-		{5, 240 * time.Second},
-		{6, 480 * time.Second},
-		{7, 900 * time.Second}, // Max capped at 15m
+		{2, 30 * time.Minute},
+		{3, 30 * time.Minute},
+		{4, 30 * time.Minute},
+		{5, 45 * time.Minute},
+		{6, 45 * time.Minute},
+		{7, 45 * time.Minute},
 		{10, time.Hour},
 		{13, 2 * time.Hour},
 		{22, 12 * time.Hour},
@@ -3732,10 +3796,24 @@ func TestGetESSBackoff(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%d failures", tt.failures), func(t *testing.T) {
 			result := getESSBackoff(tt.failures)
-			// assert that the expected backoff matches the calculated backoff based on the given failure count
 			assert.Equal(t, tt.expected, result)
+			if tt.failures >= 2 {
+				assert.Greater(t, result, 20*time.Minute)
+			}
 		})
 	}
+
+	t.Run("Interactive ESS Backoff Preserves 15m Curve", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), getInteractiveESSBackoff(0))
+		assert.Equal(t, time.Duration(0), getInteractiveESSBackoff(1))
+		assert.Equal(t, 30*time.Second, getInteractiveESSBackoff(2))
+		assert.Equal(t, 60*time.Second, getInteractiveESSBackoff(3))
+		assert.Equal(t, 120*time.Second, getInteractiveESSBackoff(4))
+		assert.Equal(t, 240*time.Second, getInteractiveESSBackoff(5))
+		assert.Equal(t, 480*time.Second, getInteractiveESSBackoff(6))
+		assert.Equal(t, 15*time.Minute, getInteractiveESSBackoff(7))
+		assert.Equal(t, 15*time.Minute, getInteractiveESSBackoff(40))
+	})
 }
 
 func TestHandleESSStage(t *testing.T) {

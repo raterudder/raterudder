@@ -29,7 +29,7 @@ func (s *Server) handleSubmitFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var siteID string
-	if val, ok := ctx.Value(siteIDContextKey).(string); ok {
+	if val, ok := ctx.Value(siteIDContextKey).(string); ok && val != SiteIDAll {
 		siteID = val
 	}
 

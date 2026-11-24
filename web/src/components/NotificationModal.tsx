@@ -130,6 +130,9 @@ const alertSensitivityLabels: Record<AlertSensitivity, string> = {
     high: 'High Sensitivity'
 };
 
+const normalizePerAlertSensitivity = (val?: AnomalyAlertSensitivity): AnomalyAlertSensitivity =>
+    (!val || val === 'disabled') ? '' : val;
+
 interface NotificationSampleProps {
     headerLabel?: string;
     title: string;
@@ -229,6 +232,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     const [removingEndpoint, setRemovingEndpoint] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    const isAllSites = siteID === 'ALL';
     const hasAnyDeviceConnected = isSubscribedLocally || subscriptions.length > 0;
 
     const isIOS = isIOSDevice();
@@ -322,9 +326,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     : defaultSettingsValues.eveningSummaryHour,
                 eveningSummaryFlavor: server.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
                 gridOutageAlert: server.gridOutageAlert ?? defaultSettingsValues.gridOutageAlert,
-                priceSpikeAlert: server.priceSpikeAlert || '',
-                solarUnderproductionAlert: server.solarUnderproductionAlert || '',
-                highHomeLoadAlert: server.highHomeLoadAlert || '',
+                priceSpikeAlert: normalizePerAlertSensitivity(server.priceSpikeAlert),
+                solarUnderproductionAlert: normalizePerAlertSensitivity(server.solarUnderproductionAlert),
+                highHomeLoadAlert: normalizePerAlertSensitivity(server.highHomeLoadAlert),
                 vppDispatchAlert: server.vppDispatchAlert ?? defaultSettingsValues.vppDispatchAlert,
                 quietPeriods: server.quietPeriods || [],
             } : defaultSettingsValues;
@@ -449,14 +453,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSwitchToCustom = () => {
-        const sens = draftSettings.allAlertSensitivity || 'medium';
+        const sens: AnomalyAlertSensitivity = draftSettings.allAlertSensitivity === 'disabled'
+            ? ''
+            : (draftSettings.allAlertSensitivity || 'medium');
         handleUpdateDraft({
             allAlertSensitivity: '',
             gridOutageAlert: draftSettings.gridOutageAlert ?? true,
             vppDispatchAlert: draftSettings.vppDispatchAlert ?? true,
-            priceSpikeAlert: (draftSettings.priceSpikeAlert && draftSettings.priceSpikeAlert !== 'disabled') ? draftSettings.priceSpikeAlert : sens,
-            solarUnderproductionAlert: (draftSettings.solarUnderproductionAlert && draftSettings.solarUnderproductionAlert !== 'disabled') ? draftSettings.solarUnderproductionAlert : sens,
-            highHomeLoadAlert: (draftSettings.highHomeLoadAlert && draftSettings.highHomeLoadAlert !== 'disabled') ? draftSettings.highHomeLoadAlert : sens,
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert) || sens,
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert) || sens,
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert) || sens,
         });
     };
 
@@ -467,13 +473,21 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     };
 
     const handleSavePreferences = async () => {
-        if (!siteID || isQuietPeriodInvalid) return;
+        if (!siteID || isAllSites || isQuietPeriodInvalid) {
+            if (isAllSites) {
+                setError('Please select a specific site to save alert preferences.');
+            }
+            return;
+        }
         setSaving(true);
         setError(null);
 
         const settingsToSave: UserNotificationSettings = {
             ...draftSettings,
             allAlertSensitivity: draftSettings.allAlertSensitivity ?? '',
+            priceSpikeAlert: normalizePerAlertSensitivity(draftSettings.priceSpikeAlert),
+            solarUnderproductionAlert: normalizePerAlertSensitivity(draftSettings.solarUnderproductionAlert),
+            highHomeLoadAlert: normalizePerAlertSensitivity(draftSettings.highHomeLoadAlert),
             morningSummaryFlavor: draftSettings.morningSummaryFlavor || defaultSettingsValues.morningSummaryFlavor,
             morningSummaryHour: draftSettings.morningSummaryHour ?? defaultSettingsValues.morningSummaryHour,
             eveningSummaryFlavor: draftSettings.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
@@ -550,7 +564,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             <Dialog.Title className="dialog-title" id="notification-modal-title">
                                 Notifications
                             </Dialog.Title>
-                            {siteName && (
+                            {siteName && !isAllSites && (
                                 <span className="modal-site-subtitle">
                                     Configuring alerts for {siteName}
                                 </span>
@@ -729,7 +743,17 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 </div>
 
                                 {/* Preferences Area (Shown once at least 1 device is connected) */}
-                                {!hasAnyDeviceConnected ? (
+                                {isAllSites ? (
+                                    <div className="notif-connect-prompt" data-testid="select-site-prompt">
+                                        <span className="notif-prompt-icon" aria-hidden="true">🏠</span>
+                                        <div className="notif-prompt-text">
+                                            <strong>Select a site to configure alert preferences</strong>
+                                            <p>
+                                                Subscribed devices above apply across your account. Select a specific site from the header menu to customize daily summaries, real-time alerts, and quiet hours.
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : !hasAnyDeviceConnected ? (
                                     <div className="notif-connect-prompt">
                                         <span className="notif-prompt-icon">🔔</span>
                                         <div className="notif-prompt-text">
@@ -1685,14 +1709,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             >
                                 Cancel
                             </button>
-                            <button
-                                type="button"
-                                className="btn btn-primary"
-                                onClick={handleSavePreferences}
-                                disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
-                            >
-                                {saving ? 'Saving...' : 'Save Preferences'}
-                            </button>
+                            {!isAllSites && (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleSavePreferences}
+                                    disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
+                                >
+                                    {saving ? 'Saving...' : 'Save Preferences'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </Dialog.Popup>

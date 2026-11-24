@@ -235,3 +235,52 @@ describe('updateSettings', () => {
     });
 });
 
+describe('fetchUtilityPeriods', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('serializes empty utilityRate and empty utilityRateOptions when defined', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+            new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } })
+        );
+
+        const periods = await fetchUtilityPeriods('site1', 'comed', '', {});
+
+        expect(fetchSpy).toHaveBeenCalledWith(
+            '/api/utility/periods?siteID=site1&utilityProvider=comed&utilityRate=&utilityRateOptions=%7B%7D'
+        );
+        expect(periods).toBeNull();
+    });
+
+    it('omits optional parameters when undefined', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+            new Response(JSON.stringify([{ name: 'Peak' }]), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+
+        const periods = await fetchUtilityPeriods('site1');
+
+        expect(fetchSpy).toHaveBeenCalledWith('/api/utility/periods?siteID=site1');
+        expect(periods).toEqual([{ name: 'Peak' }]);
+    });
+
+    it('serializes populated utilityRateOptions and throws on non-OK responses', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+            new Response(JSON.stringify({ error: 'invalid utility provider settings' }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+
+        await expect(
+            fetchUtilityPeriods('site1', 'tesla_electric_tx', 'tesla_dynamic', { location: 'invalid' })
+        ).rejects.toThrow('invalid utility provider settings');
+
+        expect(fetchSpy).toHaveBeenCalledWith(
+            '/api/utility/periods?siteID=site1&utilityProvider=tesla_electric_tx&utilityRate=tesla_dynamic&utilityRateOptions=%7B%22location%22%3A%22invalid%22%7D'
+        );
+    });
+});

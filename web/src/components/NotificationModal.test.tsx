@@ -62,6 +62,9 @@ describe('NotificationModal', () => {
         };
 
         delete (navigator as any).standalone;
+        window.matchMedia = vi.fn().mockImplementation(() => ({
+            matches: false,
+        })) as any;
 
         (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
@@ -1179,6 +1182,69 @@ describe('NotificationModal', () => {
         });
     });
 
+    it('normalizes disabled per-alert sensitivities to empty strings when switching from Disabled to Custom', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    allAlertSensitivity: 'disabled',
+                    priceSpikeAlert: 'disabled',
+                    solarUnderproductionAlert: 'disabled',
+                    highHomeLoadAlert: 'disabled',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        });
+
+        // Switch from Recommended ("disabled") to Custom
+        fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+
+        expect(screen.getByRole('button', { name: 'Custom' })).toHaveClass('active');
+
+        // Save Preferences
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    allAlertSensitivity: '',
+                    priceSpikeAlert: '',
+                    solarUnderproductionAlert: '',
+                    highHomeLoadAlert: '',
+                })
+            );
+            expect(mockOnSaved).toHaveBeenCalled();
+            expect(mockOnClose).toHaveBeenCalled();
+        });
+    });
+
     it('renders Android browser guidance banner when visiting on Android in browser tab and hides when standalone', async () => {
         vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
         window.matchMedia = vi.fn().mockReturnValue({ matches: false });
@@ -1371,6 +1437,66 @@ describe('NotificationModal', () => {
             expect(deviceNames.some((el) => el.textContent === 'RateRudder App (Android)')).toBe(true);
             expect(deviceNames.some((el) => el.textContent === 'Chrome on Android')).toBe(true);
         });
+    });
+
+    it('scopes modal to device subscriptions and prompts to select a site when siteID is ALL', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+                    tsCreated: '2026-09-02T08:00:00Z',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID="ALL"
+                siteName="ALL"
+                settings={null}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Notifications')).toBeInTheDocument();
+            expect(screen.getByText('Subscribed Devices (1)')).toBeInTheDocument();
+            expect(screen.getByTestId('select-site-prompt')).toHaveTextContent(/Select a site to configure alert preferences/i);
+        });
+
+        // Subtitle, site-scoped alert forms, and Save Preferences button are hidden
+        expect(screen.queryByText(/Configuring alerts for/i)).not.toBeInTheDocument();
+        expect(screen.queryByTestId('devices-clarity-banner')).not.toBeInTheDocument();
+        expect(screen.queryByText('Daily Summaries')).not.toBeInTheDocument();
+        expect(screen.queryByText('Real-Time Alerts')).not.toBeInTheDocument();
+        expect(screen.queryByText('Quiet Hours')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Save Preferences/i })).not.toBeInTheDocument();
+
+        // Push subscription controls remain active in Overview
+        const subscribeBtn = screen.getByRole('button', { name: /Subscribe this device to notifications/i });
+        expect(subscribeBtn).not.toBeDisabled();
+        fireEvent.click(subscribeBtn);
+
+        await waitFor(() => {
+            expect(api.subscribePushNotification).toHaveBeenCalledTimes(1);
+        });
+
+        // Removing a subscribed device also remains active in Overview
+        const removeBtn = screen.getByRole('button', { name: 'Remove' });
+        fireEvent.click(removeBtn);
+
+        await waitFor(() => {
+            expect(api.unsubscribePushNotification).toHaveBeenCalledWith('https://fcm.googleapis.com/fcm/send/sub-iphone');
+        });
+
+        expect(api.updateNotificationSettings).not.toHaveBeenCalled();
     });
 });
 

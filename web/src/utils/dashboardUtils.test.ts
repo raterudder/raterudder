@@ -95,6 +95,13 @@ describe('dashboardUtils', () => {
             expect(formatCurrency(-5.25, false, '£')).toBe('- £ 5.25');
             expect(formatCurrency(3.21, true, '£')).toBe('+ £ 3.21');
         });
+        it('does not format values that round to zero as negative', () => {
+            expect(formatCurrency(-0.001)).toBe('$ 0.00');
+            expect(formatCurrency(-0.004)).toBe('$ 0.00');
+            expect(formatCurrency(-0.001, true)).toBe('+ $ 0.00');
+            expect(formatCurrency(-0)).toBe('$ 0.00');
+            expect(formatCurrency(-0.005)).toBe('- $ 0.01');
+        });
     });
 
     describe('gridChargeCost', () => {

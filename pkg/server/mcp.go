@@ -233,7 +233,7 @@ func (s *Server) handleMCPHelpPage(w http.ResponseWriter, r *http.Request) {
 		Tools       []*mcp.Tool
 	}{
 		EndpointURL: requestBaseURL(r) + "/mcp",
-		Tools:       s.getMCPTools(),
+		Tools:       s.getMCPTools(r.Context()),
 	}); err != nil {
 		log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to render mcp help page", slog.Any("error", err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -316,18 +316,27 @@ func (s *Server) getMCPServer() *mcp.Server {
 	return s.mcpServer
 }
 
-func (s *Server) getMCPTools() []*mcp.Tool {
-	s.mcpToolsOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+func (s *Server) getMCPTools(ctx context.Context) []*mcp.Tool {
+	s.mcpToolsMu.Lock()
+	defer s.mcpToolsMu.Unlock()
 
-		tools, err := s.listMCPTools(ctx)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to list mcp tools for help page", slog.Any("error", err))
-			return
-		}
-		s.mcpTools = tools
-	})
+	if s.mcpTools != nil {
+		return s.mcpTools
+	}
+
+	listCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listFn := s.listMCPToolsFunc
+	if listFn == nil {
+		listFn = s.listMCPTools
+	}
+	tools, err := listFn(listCtx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to list mcp tools for help page", slog.Any("error", err))
+		return nil
+	}
+	s.mcpTools = tools
 	return s.mcpTools
 }
 
@@ -452,23 +461,33 @@ func (s *Server) newMCPServer() *mcp.Server {
 	return srv
 }
 
-func (s *Server) resolveSiteLocation(ctx context.Context, siteID string, settings settingsWithVersion) *time.Location {
+// resolveActionLocation determines the site's time.Location using a consistent
+// precedence across endpoints: ESS-reported SystemStatus.TimeLocation first,
+// then configured settings.Location.TimeZone, then the restored location on
+// Action.SystemTimestamp, and finally time.UTC.
+func resolveActionLocation(settings settingsWithVersion, latestAction *types.Action) *time.Location {
+	if latestAction != nil && latestAction.SystemStatus.TimeLocation != "" {
+		if l, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
+			return l
+		}
+	}
 	if settings.Location != nil && settings.Location.TimeZone != "" {
 		if l, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
 			return l
 		}
 	}
-	if latestAction, err := s.storage.GetLatestAction(ctx, siteID); err == nil && latestAction != nil {
-		if latestAction.SystemStatus.TimeLocation != "" {
-			if l, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
-				return l
-			}
-		}
-		if !latestAction.Timestamp.IsZero() && latestAction.Timestamp.Location() != nil && latestAction.Timestamp.Location() != time.UTC {
-			return latestAction.Timestamp.Location()
-		}
+	if latestAction != nil && !latestAction.SystemTimestamp.IsZero() && latestAction.SystemTimestamp.Location() != nil {
+		return latestAction.SystemTimestamp.Location()
 	}
 	return time.UTC
+}
+
+func (s *Server) resolveSiteLocation(ctx context.Context, siteID string, settings settingsWithVersion) *time.Location {
+	var latestAction *types.Action
+	if a, err := s.storage.GetLatestAction(ctx, siteID); err == nil {
+		latestAction = a
+	}
+	return resolveActionLocation(settings, latestAction)
 }
 
 // callMCPEnergySummary returns domain failures as plain errors so the SDK reports them as

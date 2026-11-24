@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -1521,6 +1525,73 @@ func TestHandleUpdate(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("SetESSModes Rate Limited In PerformSiteUpdate Emits Warn And Zero Error Logs", func(t *testing.T) {
+		now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+		yesterday := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil).Once()
+		mockS.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{{TSDayStart: yesterday}},
+			},
+		}, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, "site1", mock.MatchedBy(func(a types.Action) bool {
+			return a.Failed && strings.Contains(a.Error, errESSRateLimited.Error())
+		})).Return(nil).Once()
+
+		mockES := &mockESS{MockName: "tesla"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, fmt.Errorf("%w, try again in 30m0s", errESSRateLimited)).Once()
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site1", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil).Once()
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil).Once()
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Once()
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site1", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			nowFunc:    func() time.Time { return now },
+		}
+
+		var errBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		action, _, err := srv.performSiteUpdate(ctx, "site1", settingsWithVersion{
+			Settings: types.Settings{
+				ESS:             "tesla",
+				MinBatterySOC:   5.0,
+				UtilityProvider: "test",
+			},
+			version: types.CurrentSettingsVersion,
+		}, types.Credentials{}, false)
+		require.NoError(t, err)
+		if assert.NotNil(t, action) {
+			assert.True(t, action.Failed)
+		}
+		assert.Empty(t, errBuf.String(), "performSiteUpdate must emit zero ERROR logs when setESSModes returns errESSRateLimited")
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+	})
 }
 
 func TestHandleUpdateSites(t *testing.T) {
@@ -2286,6 +2357,46 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockES.AssertExpectations(t)
 		mockU.AssertExpectations(t)
 	})
+
+	t.Run("Permanent auth failure in handleUpdateSites emits WARN and zero ERROR logs", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+			"site1": {
+				ESS:             "franklin",
+				UtilityProvider: "test",
+				UpdateGroup:     1,
+			},
+		}, map[string]int{
+			"site1": types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil)
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("wrong password: %w", ess.ErrUnauthorized))
+		essMap := ess.NewMap()
+		essMap.SetSystem("site1", mockES)
+
+		srv := &Server{
+			storage:    mockS,
+			ess:        essMap,
+			utilities:  utility.NewMap(mockS),
+			bypassAuth: true,
+		}
+
+		var errBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		req := httptest.NewRequest("POST", "/api/updateSites", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSites(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.Empty(t, errBuf.String(), "handleUpdateSites must not emit ERROR logs on permanent ESS auth rejection")
+	})
 }
 
 // Helpers for Recording Mocks
@@ -2922,7 +3033,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertExpectations(t)
 	})
 
-	t.Run("Scheduled Slots Refresh - 10:00pm Local (Next Day Only)", func(t *testing.T) {
+	t.Run("Scheduled Slots Refresh - 10:00pm Local (Today & Tomorrow)", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
@@ -2940,10 +3051,10 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		// Last updated before 10:00 PM local slot.
 		lastUpdate := time.Date(2026, 6, 5, 21, 59, 0, 0, utcLoc)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
-		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		// Expect fetch starting from tomorrow (next day only).
-		mockW.On("Forecast", mock.Anything, utcSl, tomorrowMidnight, tomorrowMidnight.AddDate(0, 0, 1)).Return([]types.Weather{
+		// Expect fetch starting from today through tomorrow ([todayMidnight, todayMidnight+2d)).
+		mockW.On("Forecast", mock.Anything, utcSl, todayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: todayMidnight},
 			{TSDayStart: tomorrowMidnight},
 		}, nil)
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
@@ -2956,11 +3067,12 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", utcSl)
 		assert.NoError(t, err)
+		mockS.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 		mockW.AssertExpectations(t)
 	})
 
-	t.Run("Scheduled Slots Refresh - 11:00pm CST (6/4) updates 6/5 only", func(t *testing.T) {
+	t.Run("Scheduled Slots Refresh - 11:00pm CST (6/4) updates 6/4 and 6/5", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
@@ -2980,10 +3092,10 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		// Last updated before 10:00 PM CST June 4 slot (e.g. 9:59 PM CST June 4)
 		lastUpdate := time.Date(2026, 6, 4, 21, 59, 0, 0, cstLoc)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
-		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		// Hour >= 17 (22 >= 17) -> fetches tomorrow (June 5) only
-		mockW.On("Forecast", mock.Anything, cstSl, tomorrowMidnight, tomorrowMidnight.AddDate(0, 0, 1)).Return([]types.Weather{
+		// Evening slot refreshes both today (June 4) and tomorrow (June 5) without reading daytime GTI
+		mockW.On("Forecast", mock.Anything, cstSl, todayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: todayMidnight},
 			{TSDayStart: tomorrowMidnight},
 		}, nil)
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
@@ -2995,6 +3107,79 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		}
 
 		err = srv.updateWeatherHistory(context.Background(), "test-site", cstSl)
+		assert.NoError(t, err)
+		mockS.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Scheduled Slots Refresh - 00:00 Slot Backfills Yesterday", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockW := &mockWeather{}
+
+		// 00:15 local time is the 00:00 slot.
+		midnightSlotTime := time.Date(2026, 6, 5, 0, 15, 0, 0, loc)
+		todayMidnight := time.Date(2026, 6, 5, 0, 0, 0, 0, loc)
+		yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
+		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
+
+		// Last updated during yesterday's 22:00 slot.
+		lastUpdate := time.Date(2026, 6, 4, 22, 5, 0, 0, loc)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(todayMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
+		mockS.On("GetWeather", mock.Anything, "test-site", todayMidnight, todayMidnight.Add(24*time.Hour)).Return([]types.Weather{}, nil).Once()
+
+		// Expect fetch starting from yesterday through tomorrow ([todayMidnight-1d, todayMidnight+2d)).
+		mockW.On("Forecast", mock.Anything, sl, yesterdayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: yesterdayMidnight},
+			{TSDayStart: todayMidnight},
+			{TSDayStart: tomorrowMidnight},
+		}, nil)
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+			nowFunc: func() time.Time { return midnightSlotTime },
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
+		assert.NoError(t, err)
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Scheduled Slots Refresh - Missed 00:00 Slot Recovers At 02:00", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockW := &mockWeather{}
+
+		// 02:10 local time is the 02:00 slot after the 00:00 slot failed.
+		twoAMTime := time.Date(2026, 6, 5, 2, 10, 0, 0, loc)
+		todayMidnight := time.Date(2026, 6, 5, 0, 0, 0, 0, loc)
+		yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
+		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
+
+		// Last updated before midnight (22:05 yesterday) because 00:00 failed.
+		lastUpdate := time.Date(2026, 6, 4, 22, 5, 0, 0, loc)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(todayMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
+		mockS.On("GetWeather", mock.Anything, "test-site", todayMidnight, todayMidnight.Add(24*time.Hour)).Return([]types.Weather{}, nil).Once()
+
+		// Non-zero lastWeatherUpdated before todayMidnight triggers yesterday backfill at 02:00.
+		mockW.On("Forecast", mock.Anything, sl, yesterdayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: yesterdayMidnight},
+			{TSDayStart: todayMidnight},
+			{TSDayStart: tomorrowMidnight},
+		}, nil)
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+			nowFunc: func() time.Time { return twoAMTime },
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
 		mockW.AssertExpectations(t)
@@ -3065,24 +3250,39 @@ func TestSetESSModes(t *testing.T) {
 		mockES.AssertExpectations(t)
 	})
 
-	t.Run("Unauthorized error increments ConsecutiveSetFailures", func(t *testing.T) {
+	t.Run("Unauthorized error increments ConsecutiveSetFailures 0 to 1 then jumps to 40", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
-		// Expect SetModes to return unauthorized
-		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized)
-
-		// Expect settings to be saved with ConsecutiveSetFailures incremented
-		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
-		}), 1, mock.Anything).Return(time.Time{}, nil)
+		// 1. First permanent unauthorized error increments 0 -> 1
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Twice()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 1
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
 		}
 
-		settings := settingsWithVersion{
+		s0 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 0,
+				},
+			},
+			version: 1,
+		}
+
+		_, err := srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 2. Second permanent unauthorized error when ConsecutiveSetFailures >= 1 jumps to 40
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		s1 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveSetFailures: 1,
@@ -3092,8 +3292,19 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s1)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		// 3. Explicit lockout error jumps directly from 0 to 40
+		lockedErr := fmt.Errorf("locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, lockedErr).Once()
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+
+		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
+		assert.ErrorIs(t, err, ess.ErrAccountLocked)
+
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
 	})
@@ -4218,6 +4429,142 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 				}
 			}
 		}
+	})
+
+	t.Run("DefersPreMidnightWeatherUntilPostMidnightOrSixHourThreshold", func(t *testing.T) {
+		h23 := yesterday.Add(23 * time.Hour)
+		dailyEnergy := []types.DailyEnergyStats{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: loc.String(),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: h23, TimeLocation: loc.String(), HomeKWH: 1.2},
+				},
+			},
+		}
+
+		staleWeather := []types.Weather{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: loc.String(),
+				TSUpdated:    yesterday.Add(22*time.Hour + 5*time.Minute),
+			},
+		}
+
+		// 1. Before 6-hour threshold with pre-midnight weather: archival is deferred.
+		earlyNow := time.Date(2026, 10, 20, 1, 0, 0, 0, loc)
+		mockDefer := &mockStorage{}
+		mockDefer.On("GetEnergyHistory", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(dailyEnergy, nil).Once()
+		mockDefer.On("GetWeather", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(staleWeather, nil).Once()
+
+		srvDefer := &Server{
+			storage: mockDefer,
+			nowFunc: func() time.Time { return earlyNow },
+		}
+		updated, err := srvDefer.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		require.NoError(t, err)
+		assert.Empty(t, updated)
+		mockDefer.AssertNotCalled(t, "GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockDefer.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockDefer.AssertExpectations(t)
+
+		// 2. Before 6-hour threshold once post-midnight weather arrives: archives immediately.
+		freshWeather := []types.Weather{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: loc.String(),
+				TSUpdated:    time.Date(2026, 10, 20, 0, 5, 0, 0, loc),
+			},
+		}
+		mockFresh := &mockStorage{}
+		mockFresh.On("GetEnergyHistory", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(dailyEnergy, nil).Once()
+		mockFresh.On("GetWeather", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(freshWeather, nil).Once()
+		mockFresh.On("GetActionHistory", mock.Anything, "site1", h23, h23.Add(time.Hour)).Return([]types.Action{}, nil).Once()
+
+		var archivedFresh types.HistorySummary
+		mockFresh.On("UpdateHistorySummary", mock.Anything, "site1", "2026-10", mock.Anything).Run(func(args mock.Arguments) {
+			archivedFresh = args.Get(3).(types.HistorySummary)
+		}).Return(types.HistorySummary{}, nil).Once()
+
+		srvFresh := &Server{
+			storage: mockFresh,
+			nowFunc: func() time.Time { return earlyNow },
+		}
+		updated, err = srvFresh.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		require.NoError(t, err)
+		assert.Len(t, updated, 1)
+		if assert.Len(t, archivedFresh.Weather, 1) {
+			assert.Equal(t, freshWeather[0].TSUpdated, archivedFresh.Weather[0].TSUpdated)
+		}
+		mockFresh.AssertExpectations(t)
+
+		// 3. At 6-hour threshold with pre-midnight weather: falls back to archiving.
+		sixHourNow := yesterday.Add(30 * time.Hour)
+		mockFallback := &mockStorage{}
+		mockFallback.On("GetEnergyHistory", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(dailyEnergy, nil).Once()
+		mockFallback.On("GetWeather", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(staleWeather, nil).Once()
+		mockFallback.On("GetActionHistory", mock.Anything, "site1", h23, h23.Add(time.Hour)).Return([]types.Action{}, nil).Once()
+
+		var archivedFallback types.HistorySummary
+		mockFallback.On("UpdateHistorySummary", mock.Anything, "site1", "2026-10", mock.Anything).Run(func(args mock.Arguments) {
+			archivedFallback = args.Get(3).(types.HistorySummary)
+		}).Return(types.HistorySummary{}, nil).Once()
+
+		srvFallback := &Server{
+			storage: mockFallback,
+			nowFunc: func() time.Time { return sixHourNow },
+		}
+		updated, err = srvFallback.syncHistorySummaryRange(context.Background(), "site1", yesterday, sixHourNow, false)
+		require.NoError(t, err)
+		assert.Len(t, updated, 1)
+		if assert.Len(t, archivedFallback.Weather, 1) {
+			assert.Equal(t, staleWeather[0].TSUpdated, archivedFallback.Weather[0].TSUpdated)
+		}
+		mockFallback.AssertExpectations(t)
+	})
+
+	t.Run("DefersPreMidnightWeatherAcrossFallBackDST", func(t *testing.T) {
+		// 2026-11-01 in America/Chicago is a 25-hour Fall-Back DST day (-05:00 CDT -> -06:00 CST).
+		dstDay := time.Date(2026, 11, 1, 0, 0, 0, 0, loc)
+		dstDayEnd := time.Date(2026, 11, 2, 0, 0, 0, 0, loc) // 25 hours after dstDay
+		h23 := time.Date(2026, 11, 1, 23, 0, 0, 0, loc)
+
+		dailyEnergy := []types.DailyEnergyStats{
+			{
+				TSDayStart:   dstDay,
+				TimeLocation: loc.String(),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: h23, TimeLocation: loc.String(), HomeKWH: 1.0},
+				},
+			},
+		}
+
+		// Simulate JSON-unmarshaled TSDayStart with a fixed -05:00 offset and TSUpdated at 23:15 CST
+		// (24h15m after start of day, yet still 45 minutes before local midnight dstDayEnd).
+		fixedCDT := time.FixedZone("", -5*3600)
+		dstWeather := []types.Weather{
+			{
+				TSDayStart:   time.Date(2026, 11, 1, 0, 0, 0, 0, fixedCDT),
+				TimeLocation: loc.String(),
+				TSUpdated:    dstDayEnd.Add(-45 * time.Minute),
+			},
+		}
+
+		earlyNow := dstDayEnd.Add(30 * time.Minute)
+		mockS := &mockStorage{}
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", dstDay, dstDayEnd).Return(dailyEnergy, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", dstDay, dstDayEnd).Return(dstWeather, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return earlyNow },
+		}
+
+		updated, err := srv.syncHistorySummaryRange(context.Background(), "site1", dstDay, earlyNow, false)
+		require.NoError(t, err)
+		assert.Empty(t, updated)
+		mockS.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
 	})
 }
 

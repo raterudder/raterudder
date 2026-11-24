@@ -149,7 +149,7 @@ func TestGenerate(t *testing.T) {
 		assert.Contains(t, src, "export const HIGH_HOME_LOAD_MIN_KW_MEDIUM = 4.5;")
 		assert.Contains(t, src, "export const HIGH_HOME_LOAD_MIN_KW_HIGH = 3.5;")
 		assert.Contains(t, src, "export type MorningSummaryFlavor = 'home_planner' | 'executive' | 'pilot' | 'metrics_heavy';")
-		assert.Contains(t, src, "export type AlertSensitivity = 'disabled' | 'low' | 'medium' | 'high';")
+		assert.Contains(t, src, "export type AlertSensitivity = 'low' | 'medium' | 'high' | 'disabled';")
 		assert.Contains(t, src, "export type AnomalyAlertSensitivity = '' | AlertSensitivity;")
 	})
 

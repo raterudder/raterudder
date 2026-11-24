@@ -1,6 +1,7 @@
 package ess
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -4506,6 +4509,148 @@ func TestTesla(t *testing.T) {
 		// 11:00 SOE-only bucket
 		assert.Equal(t, yesterday.Add(11*time.Hour), daily[0].Hourly[2].TSHourStart)
 		assert.Equal(t, 80.0, daily[0].Hourly[2].MinBatterySOC)
+	})
+
+	t.Run("Permanent OAuth And SetModes Missing Scopes Classification And 401 Refresh", func(t *testing.T) {
+		var refreshCalls int
+		tokenStatus := http.StatusOK
+		var tokenErrBody map[string]any
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/oauth2/v3/token":
+				refreshCalls++
+				if tokenStatus != http.StatusOK {
+					w.WriteHeader(tokenStatus)
+					json.NewEncoder(w).Encode(tokenErrBody)
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"access_token":  "refreshed-access",
+					"refresh_token": "refreshed-refresh",
+					"expires_in":    3600,
+				})
+			case "/api/1/energy_sites/1234/site_info":
+				if r.Header.Get("Authorization") != "Bearer refreshed-access" {
+					w.WriteHeader(http.StatusUnauthorized)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error": "invalid_token",
+					})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "UTC",
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"percentage_charged": 75.0},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":             "unauthorized",
+					"error_description": "Unauthorized missing scopes",
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+
+		m := NewMap()
+		m.baseTesla = &baseTesla{
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			baseURLs:     map[string]string{"NA": "http://tesla.mock"},
+			tokenURL:     "http://tesla.mock/oauth2/v3/token",
+			client: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, r)
+					return rec.Result(), nil
+				}),
+			},
+		}
+
+		var logBuf bytes.Buffer
+		errCtx := log.With(ctx, slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		sys, err := m.Site(errCtx, "site-perm-auth", types.Settings{ESS: "tesla", MinBatterySOC: 20})
+		require.NoError(t, err)
+
+		// 1. Revoked/early-expired 401 access token refreshes via RefreshToken before succeeding
+		updatedCreds, changed, err := sys.Authenticate(errCtx, types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "revoked-access",
+				RefreshToken: "valid-refresh",
+				Expiry:       time.Now().Add(time.Hour),
+				EnergySiteID: 1234,
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, refreshCalls)
+		assert.Equal(t, "refreshed-access", updatedCreds.Tesla.AccessToken)
+
+		// 2. SetModes 403 "Unauthorized missing scopes" wraps ErrUnauthorized and emits zero ERROR logs
+		_, err = sys.SetModes(errCtx, types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{MinimumSOC: 75})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+
+		// 3. 401 "User consent revoked." (error: "login_required") on refresh wraps ErrUnauthorized
+		tokenStatus = http.StatusUnauthorized
+		tokenErrBody = map[string]any{
+			"error":             "login_required",
+			"error_description": "User consent revoked.",
+		}
+		_, _, err = sys.Authenticate(errCtx, types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "revoked-access",
+				RefreshToken: "revoked-refresh",
+				Expiry:       time.Now().Add(-time.Minute),
+				EnergySiteID: 1234,
+			},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+
+		// 4. 401 "The refresh_token is invalid" on refresh wraps ErrUnauthorized
+		tokenStatus = http.StatusUnauthorized
+		tokenErrBody = map[string]any{
+			"error": "The refresh_token is invalid",
+		}
+		_, _, err = sys.Authenticate(errCtx, types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "revoked-access",
+				RefreshToken: "invalid-refresh",
+				Expiry:       time.Now().Add(-time.Minute),
+				EnergySiteID: 1234,
+			},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+
+		// 5. 400 "The authorization code is invalid..." (error: "invalid_grant") on auth-code exchange wraps ErrUnauthorized
+		tokenStatus = http.StatusBadRequest
+		tokenErrBody = map[string]any{
+			"error":             "invalid_grant",
+			"error_description": "The authorization code is invalid. It may have already been used or expired. Request a new sign in session to generate a new code.",
+		}
+		_, _, err = sys.Authenticate(errCtx, types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				AuthCode: "NA_used_auth_code",
+			},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnauthorized)
+		assert.Empty(t, logBuf.String(), "Tesla auth/scope rejections must emit zero ERROR logs")
 	})
 }
 

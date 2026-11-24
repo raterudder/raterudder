@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -550,5 +551,35 @@ func TestHandleAgentSummary(t *testing.T) {
 		srv.setupHandler().ServeHTTP(wUnauth, reqUnauth)
 		assert.Equal(t, http.StatusUnauthorized, wUnauth.Code)
 		assert.Empty(t, wUnauth.Header().Get("WWW-Authenticate"))
+	})
+
+	t.Run("LocationFallsBackToSystemTimestamp", func(t *testing.T) {
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		mockStore := &mockStorage{}
+		srv := &Server{
+			storage:           mockStore,
+			appsEncryptionKey: testAppsEncryptionKey,
+			bypassAuth:        true,
+			nowFunc:           func() time.Time { return fixedNow.UTC() },
+		}
+
+		mockStore.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
+			ESS: "tesla",
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return(&types.Action{
+			Timestamp:       fixedNow.UTC(),
+			SystemTimestamp: fixedNow.In(nyLoc),
+			SystemStatus: types.SystemStatus{
+				BatterySOC: 50,
+			},
+		}, nil).Once()
+		mockStore.On("GetEnergyHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats(nil), nil).Once()
+
+		res, err := srv.buildAgentSummary(context.Background(), "site-1")
+		require.NoError(t, err)
+		assert.Equal(t, "America/New_York", res.TimeZone)
+		mockStore.AssertExpectations(t)
 	})
 }

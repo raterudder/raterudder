@@ -98,9 +98,29 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 		log.Ctx(ctx).Warn("site changed utility rate", slog.String("expected", settings.UtilityRate), slog.String("actual", p.Name()))
 	}
 
+	u, err := m.buildUtility(ctx, siteID, settings)
+	if err != nil {
+		return nil, err
+	}
+	m.utilities[siteID] = u
+	return u, nil
+}
+
+// PreviewSite builds a temporary utility provider for settings previews without reading or mutating cached site providers.
+func (m *Map) PreviewSite(ctx context.Context, settings types.Settings) (Utility, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.buildUtility(ctx, "", settings)
+}
+
+func (m *Map) buildUtility(ctx context.Context, siteID string, settings types.Settings) (Utility, error) {
 	var u Utility
 	switch settings.UtilityProvider {
 	case "comed":
+		if settings.UtilityRate == "" && settings.UtilityFeesPeriods == nil {
+			return nil, fmt.Errorf("utility rate is required for provider: %s", settings.UtilityProvider)
+		}
 		if settings.UtilityRate == "comed_bes" || settings.UtilityRate == "comed_best" {
 			u = &genericTOU{
 				siteID: siteID,
@@ -121,6 +141,9 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 		}
 	case "ameren":
+		if settings.UtilityRate == "" && settings.UtilityFeesPeriods == nil {
+			return nil, fmt.Errorf("utility rate is required for provider: %s", settings.UtilityProvider)
+		}
 		if settings.UtilityRate == "ameren_psp" || settings.UtilityRate == "" {
 			if m.baseAmerenSmart == nil {
 				return nil, fmt.Errorf("ameren provider not configured")
@@ -214,12 +237,10 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			if err := u.ApplySettings(ctx, settings); err != nil {
 				return nil, err
 			}
-			m.utilities[siteID] = u
 			return u, nil
 		}
 		return nil, fmt.Errorf("unknown utility provider: %s", settings.UtilityProvider)
 	}
-	m.utilities[siteID] = u
 	return u, nil
 }
 

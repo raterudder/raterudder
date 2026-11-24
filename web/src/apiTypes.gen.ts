@@ -68,7 +68,7 @@ export const HIGH_HOME_LOAD_MIN_KW_HIGH = 3.5;
 
 export type MorningSummaryFlavor = 'home_planner' | 'executive' | 'pilot' | 'metrics_heavy';
 export type EveningSummaryFlavor = 'home_planner' | 'executive' | 'pilot' | 'metrics_heavy';
-export type AlertSensitivity = 'disabled' | 'low' | 'medium' | 'high';
+export type AlertSensitivity = 'low' | 'medium' | 'high' | 'disabled';
 export type AnomalyAlertSensitivity = '' | AlertSensitivity;
 
 export type CredentialsPayload = Record<string, Record<string, string | number | boolean | undefined>>;

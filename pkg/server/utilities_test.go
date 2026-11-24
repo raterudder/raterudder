@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
@@ -380,5 +383,214 @@ func TestHandleGetPeriods(t *testing.T) {
 		if assert.NotEmpty(t, periods) {
 			assert.NotEmpty(t, periods[0].Name)
 		}
+	})
+
+	t.Run("Does not mutate cached site provider or log rate change warning during preview", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		savedSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Name: "Saved Custom Peak"},
+					DollarsPerKWH: 0.12,
+				},
+			},
+		}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(savedSettings, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		uMap := utility.Configured(mockStorage)
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		ctx := log.With(context.Background(), logger)
+
+		cached, err := uMap.Site(ctx, "test-site", savedSettings)
+		require.NoError(t, err)
+
+		srv := &Server{
+			utilities:  uMap,
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=pg_e&utilityRate=pg_e_e_tou_c", nil)
+		reqCtx := context.WithValue(log.With(req.Context(), logger), siteIDContextKey, "test-site")
+		req = req.WithContext(reqCtx)
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.NotContains(t, logBuf.String(), "site changed utility rate")
+
+		after, err := uMap.Site(ctx, "test-site", savedSettings)
+		require.NoError(t, err)
+		assert.Same(t, cached, after)
+		cachedPeriods, err := after.GetPeriods(ctx)
+		require.NoError(t, err)
+		if assert.Len(t, cachedPeriods, 1) {
+			assert.Equal(t, "Saved Custom Peak", cachedPeriods[0].Name)
+		}
+	})
+
+	t.Run("Changing utilityProvider clears inherited rate, options, and custom periods", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Name: "Saved Custom Period"},
+					DollarsPerKWH: 0.15,
+				},
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		srv := &Server{
+			utilities:  utility.Configured(mockStorage),
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		// Provider selected without rate returns 200 null rather than inheriting old rate or custom periods
+		req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=comed", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.Equal(t, "null\n", w.Body.String())
+
+		// Switching to Origin without options clears inherited "oncor" location and returns 400
+		req2 := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=origin&utilityRate=origin_solar_saver", nil)
+		req2 = req2.WithContext(context.WithValue(req2.Context(), siteIDContextKey, "test-site"))
+		w2 := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w2, req2)
+
+		assert.Equal(t, http.StatusBadRequest, w2.Result().StatusCode)
+	})
+
+	t.Run("Changing utilityRate clears inherited options and custom periods", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_fixed",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Name: "Saved Custom Period"},
+					DollarsPerKWH: 0.15,
+				},
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		srv := &Server{
+			utilities:  utility.Configured(mockStorage),
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		// Empty utilityRate returns 200 null
+		reqEmpty := httptest.NewRequest("GET", "/api/utility/periods?utilityRate=", nil)
+		reqEmpty = reqEmpty.WithContext(context.WithValue(reqEmpty.Context(), siteIDContextKey, "test-site"))
+		wEmpty := httptest.NewRecorder()
+
+		srv.handleGetPeriods(wEmpty, reqEmpty)
+
+		assert.Equal(t, http.StatusOK, wEmpty.Result().StatusCode)
+		assert.Equal(t, "null\n", wEmpty.Body.String())
+
+		// Changing rate without passing options clears inherited Location: "oncor"
+		reqNewRate := httptest.NewRequest("GET", "/api/utility/periods?utilityRate=tesla_dynamic", nil)
+		reqNewRate = reqNewRate.WithContext(context.WithValue(reqNewRate.Context(), siteIDContextKey, "test-site"))
+		wNewRate := httptest.NewRecorder()
+
+		srv.handleGetPeriods(wNewRate, reqNewRate)
+
+		assert.Equal(t, http.StatusBadRequest, wNewRate.Result().StatusCode)
+		assert.Contains(t, wNewRate.Body.String(), "tdu location is required to determine ercot load zone")
+	})
+
+	t.Run("Explicit empty utilityRateOptions overrides saved options", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "tesla_electric_tx",
+			UtilityRate:     "tesla_dynamic",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "oncor",
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		srv := &Server{
+			utilities:  utility.Configured(mockStorage),
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/utility/periods?utilityRateOptions=%7B%7D", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "tdu location is required to determine ercot load zone")
+	})
+
+	t.Run("Returns 400 and logs warning on invalid JSON or invalid utility options", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		srv := &Server{
+			utilities:  utility.Configured(mockStorage),
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		var jsonLogBuf bytes.Buffer
+		jsonLogger := slog.New(slog.NewJSONHandler(&jsonLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		reqBadJSON := httptest.NewRequest("GET", "/api/utility/periods?utilityRateOptions=%7Binvalid", nil)
+		reqBadJSON = reqBadJSON.WithContext(context.WithValue(log.With(reqBadJSON.Context(), jsonLogger), siteIDContextKey, "test-site"))
+		wBadJSON := httptest.NewRecorder()
+
+		srv.handleGetPeriods(wBadJSON, reqBadJSON)
+
+		assert.Equal(t, http.StatusBadRequest, wBadJSON.Result().StatusCode)
+		assert.Contains(t, wBadJSON.Body.String(), "invalid utility rate options")
+		assert.Contains(t, jsonLogBuf.String(), `"level":"WARN"`)
+		assert.NotContains(t, jsonLogBuf.String(), `"level":"ERROR"`)
+
+		var optLogBuf bytes.Buffer
+		optLogger := slog.New(slog.NewJSONHandler(&optLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		reqBadOpt := httptest.NewRequest("GET", `/api/utility/periods?utilityProvider=comed&utilityRate=comed_besh&utilityRateOptions=%7B%22rateClass%22:%22invalid%22%7D`, nil)
+		reqBadOpt = reqBadOpt.WithContext(context.WithValue(log.With(reqBadOpt.Context(), optLogger), siteIDContextKey, "test-site"))
+		wBadOpt := httptest.NewRecorder()
+
+		srv.handleGetPeriods(wBadOpt, reqBadOpt)
+
+		assert.Equal(t, http.StatusBadRequest, wBadOpt.Result().StatusCode)
+		assert.Contains(t, wBadOpt.Body.String(), "invalid utility provider settings")
+		assert.Contains(t, optLogBuf.String(), `"level":"WARN"`)
+		assert.NotContains(t, optLogBuf.String(), `"level":"ERROR"`)
 	})
 }

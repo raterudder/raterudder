@@ -32,7 +32,7 @@ func TestEngieUtility(t *testing.T) {
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
-		assert.NotEmpty(t, periods)
+		assert.Empty(t, periods)
 	})
 
 	t.Run("Solar Elec Single Rate - Endeavour", func(t *testing.T) {
