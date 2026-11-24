@@ -193,6 +193,12 @@ type SimulationParams struct {
 	AverageSolarEfficiency float64 `json:"averageSolarEfficiency"`
 	// DetectedShift represents any detected structural load shift ("none", "down", "up").
 	DetectedShift string `json:"detectedShift,omitempty"`
+	// BatteryDischargeEfficiency is the per-site learned one-way discharge efficiency (omitted when using static baseline).
+	BatteryDischargeEfficiency float64 `json:"batteryDischargeEfficiency,omitempty"`
+	// BatteryChargeEfficiency is the per-site learned one-way charge efficiency (omitted when using static baseline).
+	BatteryChargeEfficiency float64 `json:"batteryChargeEfficiency,omitempty"`
+	// BatteryDischargeFixedKW is the per-site learned constant inverter/BMS overhead (kW) during active discharge.
+	BatteryDischargeFixedKW float64 `json:"batteryDischargeFixedKW,omitempty"`
 }
 
 // EnergyStats represents aggregated energy statistics for an hourly period.

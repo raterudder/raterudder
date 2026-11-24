@@ -241,6 +241,7 @@ type planState struct {
 	maxGridImportKW  float64
 	maxGridExportKW  float64
 	chargingDisabled bool
+	batteryModel     BatteryModel
 }
 
 // actionCandidate represents a permissible control action pair for an interval.
@@ -525,7 +526,14 @@ func (c *Controller) Plan(
 	vppEvents = filterVPPAnchorsToTimeline(vppEvents, timeline)
 	postHorizon := c.buildPostHorizonValuation(ctx, timeline, futurePrices, settings, currentStatus, model, history)
 
-	// 4. Initial battery state
+	// 4. Initial battery state & per-site learned battery conversion model
+	completedHistory := FilterCompletedHourlyStats(history, now)
+	batteryModel := LearnBatteryModel(ctx, completedHistory, currentStatus, settings)
+	if batteryModel.Source != "baseline" {
+		simParams.BatteryDischargeEfficiency = batteryModel.DischargeEff
+		simParams.BatteryChargeEfficiency = batteryModel.ChargeEff
+		simParams.BatteryDischargeFixedKW = batteryModel.DischargeFixedKW
+	}
 	capKWH := currentStatus.BatteryCapacityKWH
 	maxChargeKW := resolveBatteryPowerKW(currentStatus.MaxBatteryChargeKW, capKWH)
 	maxDischargeKW := resolveBatteryPowerKW(currentStatus.MaxBatteryDischargeKW, capKWH)
@@ -540,10 +548,10 @@ func (c *Controller) Plan(
 		maxGridImportKW:  resolveGridLimitKW(currentStatus.MaxGridImportKW),
 		maxGridExportKW:  resolveGridLimitKW(currentStatus.MaxGridExportKW),
 		chargingDisabled: currentStatus.BatteryChargingDisabled,
+		batteryModel:     batteryModel,
 	}
 
 	// 5. Perform the two-pass regime block plan search across the timeline
-	completedHistory := FilterCompletedHourlyStats(history, now)
 	winningPath := c.searchOptimalPlanBlocks(ctx, timeline, initialState, vppEvents, postHorizon, settings, currentStatus, lastAction, completedHistory)
 
 	// 6. Finalize output: extract immediate Decision for hardware dispatch and full Plan for UI
@@ -1326,9 +1334,10 @@ func stepPhysics(
 	}
 	reserveKWH := capacityKWH * (minSOC / 100.0)
 
-	// Half efficiency for one-way conversions: sqrt(roundTripEfficiency)
-	rtEff := sanitizeRoundTripEfficiency(roundTripEfficiency)
-	oneWayEff := math.Sqrt(rtEff)
+	// One-way charge/discharge efficiencies and fixed active-discharge inverter/BMS overhead.
+	// Falls back to symmetric sqrt(roundTripEfficiency) with zero fixed overhead when batteryModel is unset.
+	chargeEff, dischargeEff, dischargeFixedKW := state.batteryModel.resolveEfficiencies(roundTripEfficiency)
+	fixedOverheadKWH := dischargeFixedKW * dHours
 
 	// Override reserve floor if non-zero override specified on candidate action (e.g. VPP active event)
 	// or if a targetSOC floor is specified on BatteryModeExport (matching ESS MinimumSOC hardware dispatch).
@@ -1373,7 +1382,8 @@ func stepPhysics(
 		// However, if home load exceeds battery discharge capability,
 		// solar covers remaining home load first (obeying Kirchhoff's law on residential meter).
 		usableBatEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
-		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableBatEnergy*oneWayEff)
+		usableForDeliveryKWH := max(0.0, usableBatEnergy-fixedOverheadKWH)
+		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableForDeliveryKWH*dischargeEff)
 		uncoveredHomeLoadKWH := max(0.0, totalHomeLoadKWH-maxBatDischargeKWH)
 
 		solarToHomeKWH = min(totalSolarKWH, uncoveredHomeLoadKWH)
@@ -1396,7 +1406,7 @@ func stepPhysics(
 			// Behind a single meter, solar charges battery up to available room before exporting or pulling from grid
 			if !state.chargingDisabled {
 				roomInBatKWH := max(0.0, capacityKWH-newEnergy)
-				maxSolarChargePossible := min(solarSurplus, min(maxChargeKW*dHours, roomInBatKWH/oneWayEff))
+				maxSolarChargePossible := min(solarSurplus, min(maxChargeKW*dHours, roomInBatKWH/chargeEff))
 				solarToBatKWH = maxSolarChargePossible
 			}
 
@@ -1417,7 +1427,7 @@ func stepPhysics(
 
 	// 2. Battery & Grid Dispatch
 	if solarToBatKWH > 0 {
-		newEnergy += solarToBatKWH * oneWayEff
+		newEnergy += solarToBatKWH * chargeEff
 	}
 
 	var gridImportKWH, batExportKWH, gridChargeKWH, batSuppliedHomeKWH float64
@@ -1432,13 +1442,13 @@ func stepPhysics(
 			}
 			roomInBatKWH := max(0.0, targetLimitKWH-newEnergy)
 			remainingChargeKW := max(0.0, maxChargeKW-(solarToBatKWH/dHours))
-			maxGridChargePossible := min(remainingChargeKW*dHours, roomInBatKWH/oneWayEff)
+			maxGridChargePossible := min(remainingChargeKW*dHours, roomInBatKWH/chargeEff)
 			if maxGridImportKW > 0 {
 				remainingGridImportKWH := max(0.0, maxGridImportKW*dHours-unmetHomeLoadKWH)
 				maxGridChargePossible = min(maxGridChargePossible, remainingGridImportKWH)
 			}
 			gridChargeKWH = maxGridChargePossible
-			newEnergy += gridChargeKWH * oneWayEff
+			newEnergy += gridChargeKWH * chargeEff
 		}
 
 		// Unmet home load pulls from grid
@@ -1447,27 +1457,31 @@ func stepPhysics(
 	case types.BatteryModeLoad:
 		// Battery supplies unmet home load down to reserve floor
 		usableBatEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
-		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableBatEnergy*oneWayEff)
+		usableForDeliveryKWH := max(0.0, usableBatEnergy-fixedOverheadKWH)
+		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableForDeliveryKWH*dischargeEff)
 		batSuppliedHomeKWH = min(unmetHomeLoadKWH, maxBatDischargeKWH)
 
-		newEnergy -= batSuppliedHomeKWH / oneWayEff
+		if batSuppliedHomeKWH > 0 {
+			newEnergy -= batSuppliedHomeKWH/dischargeEff + fixedOverheadKWH
+		}
 		gridImportKWH = unmetHomeLoadKWH - batSuppliedHomeKWH
 
 	case types.BatteryModeExport:
 		// Battery supplies unmet home load down to reserve floor, and exports surplus to grid down to targetSOC
 		usableBatEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
-		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableBatEnergy*oneWayEff)
+		usableForDeliveryKWH := max(0.0, usableBatEnergy-fixedOverheadKWH)
+		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableForDeliveryKWH*dischargeEff)
 		batSuppliedHomeKWH = min(unmetHomeLoadKWH, maxBatDischargeKWH)
-		newEnergy -= batSuppliedHomeKWH / oneWayEff
 
-		usableExportEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
-		remainingDischargeKWH := min(max(0.0, maxBatDischargeKWH-batSuppliedHomeKWH), usableExportEnergy*oneWayEff)
+		remainingDischargeKWH := max(0.0, maxBatDischargeKWH-batSuppliedHomeKWH)
 		batExportKWH = remainingDischargeKWH
 		if maxGridExportKW > 0 {
 			remainingGridExportKWH := max(0.0, maxGridExportKW*dHours-solarExportKWH)
 			batExportKWH = min(batExportKWH, remainingGridExportKWH)
 		}
-		newEnergy -= batExportKWH / oneWayEff
+		if batSuppliedHomeKWH > 0 || batExportKWH > 0 {
+			newEnergy -= (batSuppliedHomeKWH+batExportKWH)/dischargeEff + fixedOverheadKWH
+		}
 
 		gridImportKWH = unmetHomeLoadKWH - batSuppliedHomeKWH
 
@@ -1517,6 +1531,7 @@ func stepPhysics(
 		maxGridImportKW:  maxGridImportKW,
 		maxGridExportKW:  maxGridExportKW,
 		chargingDisabled: state.chargingDisabled,
+		batteryModel:     state.batteryModel,
 	}
 
 	return newState, metrics

@@ -1184,13 +1184,17 @@ func isBlockActionAllowed(
 		// minimum price-spread hurdle over this block's minimum import rate.
 		hasArbitrageAhead := false
 		cumNetKWH := block.netSolarKWH
-		oneWayEff := math.Sqrt(effRT)
+		_, dischargeEff, dischargeFixedKW := startState.batteryModel.resolveEfficiencies(effRT)
+		cumDisHours := 0.0
 		for j := blockIdx + 1; j < len(blocks); j++ {
 			// if we are going to hit reserve, then this isn't arbitrage and instead it's deficit avoidance which
 			// is a smaller gate
 			cumNetKWH += blocks[j].netSolarKWH
-			usableKWH := (startState.soc - blocks[j].minSOC) / 100.0 * startState.capacityKWH
-			willHitDeficit := -cumNetKWH >= usableKWH*oneWayEff
+			if blocks[j].netSolarKWH < 0 {
+				cumDisHours += blocks[j].durationHours
+			}
+			usableKWH := max(0.0, (startState.soc-blocks[j].minSOC)/100.0*startState.capacityKWH-dischargeFixedKW*cumDisHours)
+			willHitDeficit := -cumNetKWH >= usableKWH*dischargeEff
 			requiredImportGate := wear.arbitrageGatePerKWH
 			if willHitDeficit {
 				requiredImportGate = wear.gridChargePerKWH
