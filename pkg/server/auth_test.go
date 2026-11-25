@@ -1092,12 +1092,76 @@ func TestAuthMiddleware(t *testing.T) {
 			mocks := new(mockStorage)
 			server.storage = mocks
 
+			var allowedLogBuf bytes.Buffer
+			allowedLogger := slog.New(slog.NewJSONHandler(&allowedLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "https://staging.raterudder.com"+allowedPath, nil)
+			req = req.WithContext(log.With(req.Context(), allowedLogger))
 			server.authMiddleware(testHandler).ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `Bearer resource_metadata="https://staging.raterudder.com/.well-known/oauth-protected-resource"`)
+			assert.NotContains(t, allowedLogBuf.String(), `"level":"WARN"`)
+			assert.NotContains(t, allowedLogBuf.String(), `"level":"ERROR"`)
+
+			var mcpLogBuf bytes.Buffer
+			mcpLogger := slog.New(slog.NewJSONHandler(&mcpLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			wMCP := httptest.NewRecorder()
+			reqMCP := httptest.NewRequest(http.MethodPost, "https://staging.raterudder.com/mcp", nil)
+			reqMCP = reqMCP.WithContext(log.With(reqMCP.Context(), mcpLogger))
+			server.authMiddleware(testHandler).ServeHTTP(wMCP, reqMCP)
+
+			assert.Equal(t, http.StatusUnauthorized, wMCP.Code)
+			assert.Contains(t, wMCP.Header().Get("WWW-Authenticate"), `Bearer resource_metadata="https://staging.raterudder.com/.well-known/oauth-protected-resource"`)
+			assert.Contains(t, mcpLogBuf.String(), `"level":"DEBUG"`)
+			assert.Contains(t, mcpLogBuf.String(), "missing app token on endpoint requiring app token")
+			assert.NotContains(t, mcpLogBuf.String(), `"level":"WARN"`)
+			assert.NotContains(t, mcpLogBuf.String(), `"level":"ERROR"`)
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("BlankAndWhitespaceBearerLogsWarning", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+
+			sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", time.Hour)
+			require.NoError(t, err)
+			validSessionCookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+
+			checkRejectedMCPAuth := func(authHeader string) {
+				var logBuf bytes.Buffer
+				bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, "https://staging.raterudder.com/mcp", nil)
+				req = req.WithContext(log.With(req.Context(), bufLogger))
+				req.Header.Set("Authorization", authHeader)
+				server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusUnauthorized, w.Code, "header %q", authHeader)
+				assert.Contains(t, w.Header().Get("WWW-Authenticate"), `Bearer resource_metadata="https://staging.raterudder.com/.well-known/oauth-protected-resource"`)
+				assert.Contains(t, logBuf.String(), `"level":"WARN"`, "header %q should log WARN", authHeader)
+				assert.Contains(t, logBuf.String(), "app token validation failed", "header %q", authHeader)
+			}
+
+			checkRejectedMCPAuth("Bearer ")
+			checkRejectedMCPAuth("Bearer    ")
+			checkRejectedMCPAuth("Bearer")
+			checkRejectedMCPAuth("Bearer rr_invalid")
+
+			// Blank Bearer header on a disallowed endpoint fails with 403 and logs WARN without falling back to session cookie
+			var disallowedBuf bytes.Buffer
+			disallowedLogger := slog.New(slog.NewJSONHandler(&disallowedBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			wDisallowed := httptest.NewRecorder()
+			reqDisallowed := createReq("GET", "/api/settings", nil, validSessionCookie)
+			reqDisallowed = reqDisallowed.WithContext(log.With(reqDisallowed.Context(), disallowedLogger))
+			reqDisallowed.Header.Set("Authorization", "Bearer ")
+			server.authMiddleware(testHandler).ServeHTTP(wDisallowed, reqDisallowed)
+			assert.Equal(t, http.StatusForbidden, wDisallowed.Code)
+			assert.Contains(t, disallowedBuf.String(), `"level":"WARN"`)
+
 			assert.True(t, mocks.AssertExpectations(t))
 		})
 	})

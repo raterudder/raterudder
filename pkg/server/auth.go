@@ -110,13 +110,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Authorization header as an app token attempt so malformed or non-rr_ Bearer tokens fail
 		// immediately instead of silently falling back to session cookies.
 		var rawAppToken string
+		var hasAppTokenAttempt bool
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			if strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) || !isUpdatePath {
+				hasAppTokenAttempt = true
 				rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
 			}
 		} else if allowQueryToken {
 			q := r.URL.Query()
 			if q.Has("token") {
+				hasAppTokenAttempt = true
 				rawAppToken = q.Get("token")
 				// remove token so it doesn't end up in logs
 				q.Del("token")
@@ -124,7 +127,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		if rawAppToken != "" && !allowAppToken {
+		if hasAppTokenAttempt && !allowAppToken {
 			log.Ctx(ctx).WarnContext(ctx, "app token not allowed on endpoint", slog.String("path", r.URL.Path))
 			writeJSONError(w, "app token not allowed on this endpoint", http.StatusForbidden)
 			return
@@ -190,15 +193,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			authSuccess = true
 			ctx = context.WithValue(ctx, userContextKey, user)
 		} else {
-			if requireAppToken && rawAppToken == "" {
-				log.Ctx(ctx).WarnContext(ctx, "missing app token on endpoint requiring app token", slog.String("path", r.URL.Path))
+			if requireAppToken && !hasAppTokenAttempt {
+				log.Ctx(ctx).DebugContext(ctx, "missing app token on endpoint requiring app token", slog.String("path", r.URL.Path))
 				setWWWAuthenticate()
 				writeJSONError(w, "missing app token", http.StatusUnauthorized)
 				return
 			}
 
 			// Check app token auth on allowed endpoints
-			if rawAppToken != "" && allowAppToken {
+			if hasAppTokenAttempt && allowAppToken {
 				if len(s.appsEncryptionKey) != 32 {
 					writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 					return

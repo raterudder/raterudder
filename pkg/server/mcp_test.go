@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1245,6 +1247,9 @@ func TestHandleMCP(t *testing.T) {
 			assert.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
 			assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 			assert.Equal(t, "noindex, nofollow, noarchive, nosnippet", w.Header().Get("X-Robots-Tag"))
+			assert.Contains(t, w.Header().Values("Vary"), "Accept")
+			assert.Contains(t, w.Header().Values("Vary"), "Sec-Fetch-Mode")
+			assert.Contains(t, w.Header().Values("Vary"), "Sec-Fetch-Dest")
 			body := w.Body.String()
 			assert.Contains(t, body, "RateRudder MCP Server")
 			assert.Contains(t, body, "https://raterudder.example.com/mcp")
@@ -1257,14 +1262,36 @@ func TestHandleMCP(t *testing.T) {
 			assert.Contains(t, body, `href="/settings"`)
 		})
 
-		t.Run("AcceptHTMLWithoutSecFetchGets401", func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
-			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
+		t.Run("AcceptHTMLWithoutSecFetch", func(t *testing.T) {
+			var getLogBuf bytes.Buffer
+			getLogger := slog.New(slog.NewJSONHandler(&getLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-			assert.Equal(t, http.StatusUnauthorized, w.Code)
-			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+			reqGet := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			reqGet = reqGet.WithContext(log.With(reqGet.Context(), getLogger))
+			reqGet.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			wGet := httptest.NewRecorder()
+			handler.ServeHTTP(wGet, reqGet)
+
+			assert.Equal(t, http.StatusOK, wGet.Code)
+			assert.Equal(t, "text/html; charset=utf-8", wGet.Header().Get("Content-Type"))
+			assert.Contains(t, wGet.Header().Values("Vary"), "Accept")
+			assert.Contains(t, wGet.Body.String(), "RateRudder MCP Server")
+			assert.NotContains(t, getLogBuf.String(), `"level":"WARN"`)
+
+			var headLogBuf bytes.Buffer
+			headLogger := slog.New(slog.NewJSONHandler(&headLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			reqHead := httptest.NewRequest(http.MethodHead, "https://raterudder.example.com/mcp", nil)
+			reqHead = reqHead.WithContext(log.With(reqHead.Context(), headLogger))
+			reqHead.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			wHead := httptest.NewRecorder()
+			handler.ServeHTTP(wHead, reqHead)
+
+			assert.Equal(t, http.StatusOK, wHead.Code)
+			assert.Equal(t, "text/html; charset=utf-8", wHead.Header().Get("Content-Type"))
+			assert.Contains(t, wHead.Header().Values("Vary"), "Accept")
+			assert.Empty(t, wHead.Body.String())
+			assert.NotContains(t, headLogBuf.String(), `"level":"WARN"`)
 		})
 
 		t.Run("HeadRequest", func(t *testing.T) {
@@ -1280,16 +1307,61 @@ func TestHandleMCP(t *testing.T) {
 		})
 
 		t.Run("CORSFetchClientGets401", func(t *testing.T) {
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req = req.WithContext(log.With(req.Context(), bufLogger))
 			req.Header.Set("Origin", "https://claude.ai")
 			req.Header.Set("Sec-Fetch-Mode", "cors")
 			req.Header.Set("Sec-Fetch-Dest", "empty")
-			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Accept", "text/html,*/*;q=0.8")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+			assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
+		})
+
+		t.Run("AcceptEventStreamGets401", func(t *testing.T) {
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req = req.WithContext(log.With(req.Context(), bufLogger))
+			req.Header.Set("Accept", "text/html, text/event-stream")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+			assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
+		})
+
+		t.Run("ZeroWeightAcceptHTMLGets401", func(t *testing.T) {
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			req := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			req = req.WithContext(log.With(req.Context(), bufLogger))
+			req.Header.Set("Accept", "text/html;q=0, application/json")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `resource_metadata="`)
+			assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
+
+			reqNavZero := httptest.NewRequest(http.MethodGet, "https://raterudder.example.com/mcp", nil)
+			reqNavZero = reqNavZero.WithContext(log.With(reqNavZero.Context(), bufLogger))
+			reqNavZero.Header.Set("Sec-Fetch-Mode", "navigate")
+			reqNavZero.Header.Set("Accept", "text/html;charset=utf-8;q=0.000")
+			wNavZero := httptest.NewRecorder()
+			handler.ServeHTTP(wNavZero, reqNavZero)
+
+			assert.Equal(t, http.StatusUnauthorized, wNavZero.Code)
+			assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
 		})
 
 		t.Run("AuthenticatedGetStillReturns405", func(t *testing.T) {
