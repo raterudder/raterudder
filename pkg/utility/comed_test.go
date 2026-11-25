@@ -860,7 +860,7 @@ func TestComEd(t *testing.T) {
 		// Find transmission services charge (PSC) for BESH Jan-May 2026
 		var pscJanMay, pscJune2026, pscSept2026 *types.UtilityFeesPeriod
 		var mpccJanMay, mpccJune2026 *types.UtilityFeesPeriod
-		var hpeaJan, hpeaJune, hpeaAug, hpeaSept, hpeaOct, hpeaNov, hpeaDecFallback *types.UtilityFeesPeriod
+		var hpeaJan, hpeaJune, hpeaAug, hpeaSept, hpeaOct, hpeaNov, hpeaDec, hpeaJan2027Fallback *types.UtilityFeesPeriod
 
 		for i := range fees {
 			f := &fees[i]
@@ -881,7 +881,7 @@ func TestComEd(t *testing.T) {
 				}
 			}
 			if strings.Contains(f.Description, "Hourly Purchased Electricity Adjustment (HPEA)") {
-				if f.Start.Month() == time.January {
+				if f.Start.Year() == 2026 && f.Start.Month() == time.January {
 					hpeaJan = f
 				} else if f.Start.Month() == time.June {
 					hpeaJune = f
@@ -894,7 +894,9 @@ func TestComEd(t *testing.T) {
 				} else if f.Start.Month() == time.November {
 					hpeaNov = f
 				} else if f.Start.Month() == time.December {
-					hpeaDecFallback = f
+					hpeaDec = f
+				} else if f.Start.Year() == 2027 && f.Start.Month() == time.January {
+					hpeaJan2027Fallback = f
 				}
 			}
 		}
@@ -941,12 +943,20 @@ func TestComEd(t *testing.T) {
 		}
 		if assert.NotNil(t, hpeaNov) {
 			assert.InDelta(t, 0.01193, hpeaNov.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), hpeaNov.End)
 			assert.False(t, hpeaNov.GridAdditional)
 		}
-		if assert.NotNil(t, hpeaDecFallback) {
-			assert.InDelta(t, 0.01193, hpeaDecFallback.DollarsPerKWH, 0.00001)
-			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), hpeaDecFallback.End)
-			assert.False(t, hpeaDecFallback.GridAdditional)
+		if assert.NotNil(t, hpeaDec) {
+			assert.InDelta(t, -0.02346, hpeaDec.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), hpeaDec.Start)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), hpeaDec.End)
+			assert.False(t, hpeaDec.GridAdditional)
+		}
+		if assert.NotNil(t, hpeaJan2027Fallback) {
+			assert.InDelta(t, -0.02346, hpeaJan2027Fallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), hpeaJan2027Fallback.Start)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), hpeaJan2027Fallback.End)
+			assert.False(t, hpeaJan2027Fallback.GridAdditional)
 		}
 
 		// BES Fees
@@ -955,7 +965,7 @@ func TestComEd(t *testing.T) {
 		assert.NotEmpty(t, besFees)
 
 		var pscBESJanMay, pscBESJune2026, pscBESSept2026 *types.UtilityFeesPeriod
-		var peaJan, peaJune, peaAug, peaSept, peaOct, peaNov, peaDecFallback *types.UtilityFeesPeriod
+		var peaJan, peaJune, peaAug, peaSept, peaOct, peaNov, peaDec, peaJan2027Fallback *types.UtilityFeesPeriod
 		var pecSummerJuneAug, pecSummerSept, pecNonsummerJanMay, pecNonsummerOctMay *types.UtilityFeesPeriod
 
 		for i := range besFees {
@@ -970,7 +980,7 @@ func TestComEd(t *testing.T) {
 				}
 			}
 			if strings.Contains(f.Description, "Purchased Electricity Adjustment (PEA)") {
-				if f.Start.Month() == time.January {
+				if f.Start.Year() == 2026 && f.Start.Month() == time.January {
 					peaJan = f
 				} else if f.Start.Month() == time.June {
 					peaJune = f
@@ -983,7 +993,9 @@ func TestComEd(t *testing.T) {
 				} else if f.Start.Month() == time.November {
 					peaNov = f
 				} else if f.Start.Month() == time.December {
-					peaDecFallback = f
+					peaDec = f
+				} else if f.Start.Year() == 2027 && f.Start.Month() == time.January {
+					peaJan2027Fallback = f
 				}
 			}
 			if strings.Contains(f.Description, "Electricity Supply Charge (PEC)") {
@@ -1025,10 +1037,20 @@ func TestComEd(t *testing.T) {
 		}
 		if assert.NotNil(t, peaNov) {
 			assert.InDelta(t, 0.03758, peaNov.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), peaNov.End)
+			assert.False(t, peaNov.GridAdditional)
 		}
-		if assert.NotNil(t, peaDecFallback) {
-			assert.InDelta(t, 0.03758, peaDecFallback.DollarsPerKWH, 0.00001)
-			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), peaDecFallback.End)
+		if assert.NotNil(t, peaDec) {
+			assert.InDelta(t, -0.00542, peaDec.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), peaDec.Start)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), peaDec.End)
+			assert.False(t, peaDec.GridAdditional)
+		}
+		if assert.NotNil(t, peaJan2027Fallback) {
+			assert.InDelta(t, -0.00542, peaJan2027Fallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), peaJan2027Fallback.Start)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), peaJan2027Fallback.End)
+			assert.False(t, peaJan2027Fallback.GridAdditional)
 		}
 		if assert.NotNil(t, pecSummerJuneAug) {
 			assert.InDelta(t, 0.08677, pecSummerJuneAug.DollarsPerKWH, 0.00001)
@@ -1051,7 +1073,7 @@ func TestComEd(t *testing.T) {
 		var mpecBESTSummerJuneAug, mdppecBESTSummerJuneAug, epecBESTSummerJuneAug, opecBESTSummerJuneAug *types.UtilityFeesPeriod
 		var mpecBESTSummerSept, mdppecBESTSummerSept, epecBESTSummerSept, opecBESTSummerSept *types.UtilityFeesPeriod
 		var mpecBESTNonsummer, mdppecBESTNonsummer, epecBESTNonsummer, opecBESTNonsummer *types.UtilityFeesPeriod
-		var pjmBEST, tpeaBESTJanSep, tpeaBESTOct, tpeaBESTNov, tpeaBESTDecFallback *types.UtilityFeesPeriod
+		var pjmBEST, tpeaBESTJanSep, tpeaBESTOct, tpeaBESTNov, tpeaBESTDec, tpeaBESTJan2027Fallback *types.UtilityFeesPeriod
 
 		for i := range bestFees {
 			f := &bestFees[i]
@@ -1059,14 +1081,16 @@ func TestComEd(t *testing.T) {
 				pjmBEST = f
 			}
 			if strings.Contains(f.Description, "Adjustment Factor (TPEA)") {
-				if f.Start.Month() == time.January {
+				if f.Start.Year() == 2026 && f.Start.Month() == time.January {
 					tpeaBESTJanSep = f
 				} else if f.Start.Month() == time.October {
 					tpeaBESTOct = f
 				} else if f.Start.Month() == time.November {
 					tpeaBESTNov = f
 				} else if f.Start.Month() == time.December {
-					tpeaBESTDecFallback = f
+					tpeaBESTDec = f
+				} else if f.Start.Year() == 2027 && f.Start.Month() == time.January {
+					tpeaBESTJan2027Fallback = f
 				}
 			}
 			if strings.Contains(f.Description, "BEST Summer Morning") {
@@ -1122,10 +1146,20 @@ func TestComEd(t *testing.T) {
 		}
 		if assert.NotNil(t, tpeaBESTNov) {
 			assert.InDelta(t, 0.00460, tpeaBESTNov.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), tpeaBESTNov.End)
+			assert.False(t, tpeaBESTNov.GridAdditional)
 		}
-		if assert.NotNil(t, tpeaBESTDecFallback) {
-			assert.InDelta(t, 0.00460, tpeaBESTDecFallback.DollarsPerKWH, 0.00001)
-			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), tpeaBESTDecFallback.End)
+		if assert.NotNil(t, tpeaBESTDec) {
+			assert.InDelta(t, 0.01441, tpeaBESTDec.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation), tpeaBESTDec.Start)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), tpeaBESTDec.End)
+			assert.False(t, tpeaBESTDec.GridAdditional)
+		}
+		if assert.NotNil(t, tpeaBESTJan2027Fallback) {
+			assert.InDelta(t, 0.01441, tpeaBESTJan2027Fallback.DollarsPerKWH, 0.00001)
+			assert.Equal(t, time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation), tpeaBESTJan2027Fallback.Start)
+			assert.Equal(t, time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation), tpeaBESTJan2027Fallback.End)
+			assert.False(t, tpeaBESTJan2027Fallback.GridAdditional)
 		}
 		if assert.NotNil(t, mpecBESTSummerJuneAug) {
 			assert.InDelta(t, 0.03778, mpecBESTSummerJuneAug.DollarsPerKWH, 0.00001)
@@ -1164,69 +1198,214 @@ func TestComEd(t *testing.T) {
 			assert.InDelta(t, 0.03394, opecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 
-		// Verify exact full BES and BEST supply (DollarsPerKWH) and delivery (GridUseDollarsPerKWH)
-		// totals from Oct 2026 through May 2027 so any missing rider or base charge is caught.
+		// Verify exact full BESH, BES, and BEST supply (DollarsPerKWH), delivery (GridUseDollarsPerKWH),
+		// import (ImportRateDollars), and export (ExportRateDollars) totals from Oct 2026 through May 2027.
 		// Single-family non-electric heat delivery multiplier:
 		// 1.0090 (IDUF) + 0.06551 (TPAF) + 0.007668 (RBAFD) = 1.082178, plus $0.00062/kWh (DGRAD).
 		wantBESDeliveryDollarsPerKWH := 0.05698*1.082178 + 0.00062
 		wantBESTMidDayDeliveryDollarsPerKWH := 0.10712*1.082178 + 0.00062
 		wantBESTNightDeliveryDollarsPerKWH := 0.02984*1.082178 + 0.00062
 
-		uBES := &genericTOU{}
-		require.NoError(t, uBES.ApplySettings(context.Background(), types.Settings{
-			UtilityProvider:    "comed",
-			UtilityRate:        "comed_bes",
-			UtilityRateOptions: opts,
-		}))
+		t.Run("comed_besh Dec 2026 and Q1 2027 import and export prices", func(t *testing.T) {
+			beshSettings := types.Settings{
+				UtilityProvider:    "comed",
+				UtilityRate:        "comed_besh",
+				UtilityRateOptions: opts,
+			}
+			fullNEMSettings := types.Settings{
+				UtilityProvider: "comed",
+				UtilityRate:     "comed_besh",
+				UtilityRateOptions: types.UtilityRateOptions{
+					RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+					VariableDeliveryRate: false,
+					NetMeteringCredits:   true,
+				},
+			}
+			sf := &SiteFees{}
+			require.NoError(t, sf.ApplySettings(context.Background(), beshSettings))
 
-		// Oct 2026 BES supply = 0.01723 (PSC) + 0.08241 (PEC) - 0.01551 (Oct PEA) = 0.08413
-		pBESOct, err := uBES.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.08413, pBESOct.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESOct.GridUseDollarsPerKWH, 1e-6)
+			// Nov 2026 BESH supply adder = 0.01073 (PSC) + 0.00134 (MPCC) + 0.01193 (Nov HPEA) = +0.02400
+			novStart := time.Date(2026, time.November, 30, 23, 0, 0, 0, ctLocation)
+			pNov, err := sf.applyFees(types.Price{
+				Provider:      "comed_besh",
+				TSStart:       novStart,
+				TSEnd:         novStart.Add(time.Hour),
+				DollarsPerKWH: 0.04000,
+			})
+			require.NoError(t, err)
+			assert.InDelta(t, 0.06400, pNov.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pNov.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.06400+wantBESDeliveryDollarsPerKWH, pNov.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.06400, pNov.ExportRateDollars(beshSettings, nil), 1e-6)
 
-		// Nov 2026 through May 2027 BES supply = 0.01723 (PSC) + 0.08241 (PEC) + 0.03758 (Nov PEA & fallback) = 0.13722
-		for _, checkTime := range []time.Time{
-			time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
-			time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
-			time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
-		} {
-			p, err := uBES.priceForTime(checkTime)
-			require.NoError(t, err, "priceForTime failed for comed_bes at %v", checkTime)
-			assert.InDelta(t, 0.13722, p.DollarsPerKWH, 1e-6, "unexpected supply price for comed_bes at %v", checkTime)
-			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, p.GridUseDollarsPerKWH, 1e-6, "unexpected delivery price for comed_bes at %v", checkTime)
-		}
+			// Dec 2026 (at 2026-12-01 00:00 CT transition):
+			// BESH supply adder = 0.01073 (PSC) + 0.00134 (MPCC) - 0.02346 (Dec HPEA) = -0.01139
+			// With $0.04000/kWh HEC -> supply = $0.02861/kWh
+			decStart := time.Date(2026, time.December, 1, 0, 0, 0, 0, ctLocation)
+			pDec, err := sf.applyFees(types.Price{
+				Provider:      "comed_besh",
+				TSStart:       decStart,
+				TSEnd:         decStart.Add(time.Hour),
+				DollarsPerKWH: 0.04000,
+			})
+			require.NoError(t, err)
+			assert.InDelta(t, 0.02861, pDec.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pDec.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.02861+wantBESDeliveryDollarsPerKWH, pDec.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.02861, pDec.ExportRateDollars(beshSettings, nil), 1e-6)
+			assert.InDelta(t, 0.02861+wantBESDeliveryDollarsPerKWH, pDec.ExportRateDollars(fullNEMSettings, nil), 1e-6)
 
-		uBEST := &genericTOU{}
-		require.NoError(t, uBEST.ApplySettings(context.Background(), types.Settings{
-			UtilityProvider:    "comed",
-			UtilityRate:        "comed_best",
-			UtilityRateOptions: opts,
-		}))
+			// Q1 2027 (carry-forward through 2027-06-01 CT): same -$0.02346/kWh HPEA factor
+			q1Start := time.Date(2027, time.February, 15, 14, 0, 0, 0, ctLocation)
+			pQ1, err := sf.applyFees(types.Price{
+				Provider:      "comed_besh",
+				TSStart:       q1Start,
+				TSEnd:         q1Start.Add(time.Hour),
+				DollarsPerKWH: 0.04000,
+			})
+			require.NoError(t, err)
+			assert.InDelta(t, 0.02861, pQ1.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pQ1.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.02861+wantBESDeliveryDollarsPerKWH, pQ1.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.02861, pQ1.ExportRateDollars(beshSettings, nil), 1e-6)
 
-		// Oct 2026 BEST Mid-Day supply = 0.01875 (PJM) + 0.00110 (Oct TPEA) + 0.14700 (MDPPEC) = 0.16685
-		pBESTOct, err := uBEST.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.16685, pBESTOct.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTOct.GridUseDollarsPerKWH, 1e-6)
+			// Low-price hour edge case: $0.00500/kWh HEC + (-$0.01139/kWh adder) = -$0.00639/kWh
+			// Net supply and Rider POGNM export credit become negative while delivery remains non-creditable.
+			pLowHour, err := sf.applyFees(types.Price{
+				Provider:      "comed_besh",
+				TSStart:       decStart.Add(2 * time.Hour),
+				TSEnd:         decStart.Add(3 * time.Hour),
+				DollarsPerKWH: 0.00500,
+			})
+			require.NoError(t, err)
+			assert.InDelta(t, -0.00639, pLowHour.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.00639, pLowHour.ExportRateDollars(beshSettings, nil), 1e-6)
+			assert.InDelta(t, -0.00639+wantBESDeliveryDollarsPerKWH, pLowHour.ImportRateDollars(), 1e-6)
+		})
 
-		// Nov 2026 through May 2027 BEST Mid-Day supply = 0.01875 (PJM) + 0.00460 (Nov TPEA & fallback) + 0.14700 (MDPPEC) = 0.17035
-		for _, checkTime := range []time.Time{
-			time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation),
-			time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation),
-			time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation),
-		} {
-			p, err := uBEST.priceForTime(checkTime)
-			require.NoError(t, err, "priceForTime failed for comed_best at %v", checkTime)
-			assert.InDelta(t, 0.17035, p.DollarsPerKWH, 1e-6, "unexpected supply price for comed_best at %v", checkTime)
-			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, p.GridUseDollarsPerKWH, 1e-6, "unexpected delivery price for comed_best at %v", checkTime)
-		}
+		t.Run("comed_bes Dec 2026 and Q1 2027 import and export prices", func(t *testing.T) {
+			besSettings := types.Settings{
+				UtilityProvider:    "comed",
+				UtilityRate:        "comed_bes",
+				UtilityRateOptions: opts,
+			}
+			fullNEMSettings := types.Settings{
+				UtilityProvider: "comed",
+				UtilityRate:     "comed_bes",
+				UtilityRateOptions: types.UtilityRateOptions{
+					RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+					VariableDeliveryRate: false,
+					NetMeteringCredits:   true,
+				},
+			}
+			uBES := &genericTOU{}
+			require.NoError(t, uBES.ApplySettings(context.Background(), besSettings))
 
-		// Overnight 2027 BEST supply = 0.01875 (PJM) + 0.00460 (Nov TPEA fallback) + 0.03394 (OPEC) = 0.05729
-		pBESTNight, err := uBEST.priceForTime(time.Date(2027, time.January, 15, 2, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.05729, pBESTNight.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, wantBESTNightDeliveryDollarsPerKWH, pBESTNight.GridUseDollarsPerKWH, 1e-6)
+			// Oct 2026 BES supply = 0.01723 (PSC) + 0.08241 (PEC) - 0.01551 (Oct PEA) = 0.08413
+			pBESOct, err := uBES.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.08413, pBESOct.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESOct.GridUseDollarsPerKWH, 1e-6)
+
+			// Nov 2026 BES supply = 0.01723 (PSC) + 0.08241 (PEC) + 0.03758 (Nov PEA) = 0.13722
+			pBESNov, err := uBES.priceForTime(time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.13722, pBESNov.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESNov.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.13722+wantBESDeliveryDollarsPerKWH, pBESNov.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.13722, pBESNov.ExportRateDollars(besSettings, nil), 1e-6)
+
+			// Dec 2026 BES supply = 0.01723 (PSC) + 0.08241 (PEC) - 0.00542 (Dec PEA) = 0.09422
+			pBESDec, err := uBES.priceForTime(time.Date(2026, time.December, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.09422, pBESDec.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESDec.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.09422+wantBESDeliveryDollarsPerKWH, pBESDec.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.09422, pBESDec.ExportRateDollars(besSettings, nil), 1e-6)
+			assert.InDelta(t, 0.09422+wantBESDeliveryDollarsPerKWH, pBESDec.ExportRateDollars(fullNEMSettings, nil), 1e-6)
+
+			// Q1 2027 and May 2027 BES supply carry-forward = 0.09422
+			pBESJan2027, err := uBES.priceForTime(time.Date(2027, time.January, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.09422, pBESJan2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESJan2027.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.09422+wantBESDeliveryDollarsPerKWH, pBESJan2027.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.09422, pBESJan2027.ExportRateDollars(besSettings, nil), 1e-6)
+
+			pBESMay2027, err := uBES.priceForTime(time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.09422, pBESMay2027.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESDeliveryDollarsPerKWH, pBESMay2027.GridUseDollarsPerKWH, 1e-6)
+		})
+
+		t.Run("comed_best Dec 2026 and Q1 2027 import and export prices", func(t *testing.T) {
+			bestSettings := types.Settings{
+				UtilityProvider:    "comed",
+				UtilityRate:        "comed_best",
+				UtilityRateOptions: opts,
+			}
+			fullNEMSettings := types.Settings{
+				UtilityProvider: "comed",
+				UtilityRate:     "comed_best",
+				UtilityRateOptions: types.UtilityRateOptions{
+					RateClass:          ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+					NetMeteringCredits: true,
+				},
+			}
+			uBEST := &genericTOU{}
+			require.NoError(t, uBEST.ApplySettings(context.Background(), bestSettings))
+
+			// Oct 2026 BEST Mid-Day supply = 0.01875 (PJM) + 0.00110 (Oct TPEA) + 0.14700 (MDPPEC) = 0.16685
+			pBESTOct, err := uBEST.priceForTime(time.Date(2026, time.October, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.16685, pBESTOct.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTOct.GridUseDollarsPerKWH, 1e-6)
+
+			// Nov 2026 BEST Mid-Day supply = 0.01875 (PJM) + 0.00460 (Nov TPEA) + 0.14700 (MDPPEC) = 0.17035
+			pBESTNov, err := uBEST.priceForTime(time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.17035, pBESTNov.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTNov.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.17035+wantBESTMidDayDeliveryDollarsPerKWH, pBESTNov.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.17035, pBESTNov.ExportRateDollars(bestSettings, nil), 1e-6)
+
+			// Dec 2026 BEST Mid-Day supply = 0.01875 (PJM) + 0.01441 (Dec TPEA) + 0.14700 (MDPPEC) = 0.18016
+			pBESTDecMidDay, err := uBEST.priceForTime(time.Date(2026, time.December, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.18016, pBESTDecMidDay.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTDecMidDay.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.18016+wantBESTMidDayDeliveryDollarsPerKWH, pBESTDecMidDay.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.18016, pBESTDecMidDay.ExportRateDollars(bestSettings, nil), 1e-6)
+			assert.InDelta(t, 0.18016+wantBESTMidDayDeliveryDollarsPerKWH, pBESTDecMidDay.ExportRateDollars(fullNEMSettings, nil), 1e-6)
+
+			// Dec 2026 BEST Overnight supply = 0.01875 (PJM) + 0.01441 (Dec TPEA) + 0.03394 (OPEC) = 0.06710
+			pBESTDecNight, err := uBEST.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.06710, pBESTDecNight.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTNightDeliveryDollarsPerKWH, pBESTDecNight.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.06710+wantBESTNightDeliveryDollarsPerKWH, pBESTDecNight.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.06710, pBESTDecNight.ExportRateDollars(bestSettings, nil), 1e-6)
+
+			// Q1 2027 and May 2027 BEST Mid-Day & Overnight carry-forward
+			pBESTQ1MidDay, err := uBEST.priceForTime(time.Date(2027, time.February, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.18016, pBESTQ1MidDay.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTQ1MidDay.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.18016+wantBESTMidDayDeliveryDollarsPerKWH, pBESTQ1MidDay.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.18016, pBESTQ1MidDay.ExportRateDollars(bestSettings, nil), 1e-6)
+
+			pBESTQ1Night, err := uBEST.priceForTime(time.Date(2027, time.January, 15, 2, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.06710, pBESTQ1Night.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTNightDeliveryDollarsPerKWH, pBESTQ1Night.GridUseDollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.06710+wantBESTNightDeliveryDollarsPerKWH, pBESTQ1Night.ImportRateDollars(), 1e-6)
+			assert.InDelta(t, 0.06710, pBESTQ1Night.ExportRateDollars(bestSettings, nil), 1e-6)
+
+			pBESTMayMidDay, err := uBEST.priceForTime(time.Date(2027, time.May, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.InDelta(t, 0.18016, pBESTMayMidDay.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, wantBESTMidDayDeliveryDollarsPerKWH, pBESTMayMidDay.GridUseDollarsPerKWH, 1e-6)
+		})
 	})
 
 	t.Run("GetCurrentPrice API Down Memory Fallback", func(t *testing.T) {
