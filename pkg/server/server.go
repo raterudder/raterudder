@@ -79,6 +79,7 @@ type Server struct {
 	oidcAudiences          map[string]string
 	oidcVerifiers          map[string]tokenVerifier
 	newOIDCProvider        func(context.Context, string) (*oidc.Provider, error)
+	onWarmOIDCDone         func()
 	oidcMu                 sync.RWMutex
 	oidcProviders          map[string]*oidc.Provider
 	oidcProviderGroup      singleflight.Group

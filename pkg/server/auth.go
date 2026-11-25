@@ -807,6 +807,9 @@ func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Prov
 // concurrently. Failures are logged and ignored so startup can continue and
 // subsequent requests can lazily discover the provider on demand.
 func (s *Server) warmOIDC(ctx context.Context) {
+	if s.onWarmOIDCDone != nil {
+		defer s.onWarmOIDCDone()
+	}
 	s.oidcMu.RLock()
 	var clients []string
 	for _, client := range userOIDCClients {
