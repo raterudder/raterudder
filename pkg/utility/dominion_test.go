@@ -22,12 +22,14 @@ func TestDominion(t *testing.T) {
 		// Summer (July 15, 2026 at 12:00 PM)
 		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.076602, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.176475, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Non-Summer (November 15, 2026 at 12:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.075454, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.175327, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
@@ -51,32 +53,33 @@ func TestDominion(t *testing.T) {
 		// Summer Weekday On-Peak (Monday July 13, 2026 at 4:00 PM) -> 3 PM to 6 PM
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 16, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.210415, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.310288, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Summer Weekday Off-Peak (Monday July 13, 2026 at 10:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 13, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.051367, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.151240, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekday Super Off-Peak (Monday July 13, 2026 at 2:00 AM) -> 12 AM to 5 AM
 		p, err = u.priceForTime(time.Date(2026, time.July, 13, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.033486, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.133359, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekend Off-Peak (Saturday July 18, 2026 at 12:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 18, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.051367, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.151240, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekend Super Off-Peak (Saturday July 18, 2026 at 2:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 18, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.033486, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.133359, p.DollarsPerKWH, 1e-6)
 
 		// Summer Holiday (Labor Day: Monday Sept 7, 2026 at 4:00 PM) -> should be Off-Peak (no peak on holidays)
 		p, err = u.priceForTime(time.Date(2026, time.September, 7, 16, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.051367, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.151240, p.DollarsPerKWH, 1e-6)
 	})
 
 	t.Run("Schedule 1G TOU Winter", func(t *testing.T) {
@@ -90,32 +93,120 @@ func TestDominion(t *testing.T) {
 		// Winter Weekday On-Peak Morning (Monday January 12, 2026 at 7:00 AM) -> 6 AM to 9 AM
 		p, err := u.priceForTime(time.Date(2026, time.January, 12, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.170938, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.270811, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Winter Weekday On-Peak Evening (Monday January 12, 2026 at 6:00 PM) -> 5 PM to 8 PM
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 18, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.170938, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.270811, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Off-Peak (Monday January 12, 2026 at 10:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.055752, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.155625, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Super Off-Peak (Monday January 12, 2026 at 2:00 AM) -> 12 AM to 5 AM
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.049529, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.149402, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekend Off-Peak (Saturday January 17, 2026 at 12:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 17, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.055752, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.155625, p.DollarsPerKWH, 1e-6)
 
 		// Winter Holiday (Thanksgiving Day: Thursday November 26, 2026 at 6:00 PM) -> should be Off-Peak
 		p, err = u.priceForTime(time.Date(2026, time.November, 26, 18, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.055752, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.155625, p.DollarsPerKWH, 1e-6)
+	})
+
+	t.Run("Schedule 1T TOU Summer", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "dominion",
+			UtilityRate:     "dominion_1t",
+		})
+		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+		}
+
+		// Summer Weekday Before Peak (Monday July 13, 2026 at 10:00 AM) -> Off-Peak
+		p, err := u.priceForTime(time.Date(2026, time.July, 13, 10, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+		assert.True(t, p.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// Summer Weekday On-Peak Start (Monday July 13, 2026 at 11:00 AM) -> 11 AM to 10 PM
+		p, err = u.priceForTime(time.Date(2026, time.July, 13, 11, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.246829, p.DollarsPerKWH, 1e-6)
+		assert.True(t, p.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// Summer Weekday On-Peak Last Hour (Monday July 13, 2026 at 9:00 PM)
+		p, err = u.priceForTime(time.Date(2026, time.July, 13, 21, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.246829, p.DollarsPerKWH, 1e-6)
+
+		// Summer Weekday After Peak (Monday July 13, 2026 at 10:00 PM) -> Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.July, 13, 22, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+
+		// Summer Weekend (Saturday July 18, 2026 at 2:00 PM) -> Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 14, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+
+		// Summer Observed Holiday (Friday July 3, 2026 for Saturday July 4 at 2:00 PM) -> Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.July, 3, 14, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+	})
+
+	t.Run("Schedule 1T TOU Winter", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "dominion",
+			UtilityRate:     "dominion_1t",
+		})
+		require.NoError(t, err)
+
+		// Non-Summer May Weekday On-Peak Morning (Monday May 11, 2026 at 8:00 AM) -> 7 AM to 11 AM
+		p, err := u.priceForTime(time.Date(2026, time.May, 11, 8, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.246829, p.DollarsPerKWH, 1e-6)
+		assert.True(t, p.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// Winter Weekday Midday Off-Peak (Monday January 12, 2026 at 12:00 PM) -> between 11 AM and 5 PM
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 12, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+		assert.True(t, p.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// Winter Weekday On-Peak Evening (Monday January 12, 2026 at 6:00 PM) -> 5 PM to 9 PM
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 18, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.246829, p.DollarsPerKWH, 1e-6)
+
+		// Winter Weekday After Evening Peak (Monday January 12, 2026 at 9:00 PM) -> Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 21, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
+
+		// Winter Holiday (Thanksgiving Day: Thursday November 26, 2026 at 6:00 PM) -> Off-Peak
+		p, err = u.priceForTime(time.Date(2026, time.November, 26, 18, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.132180, p.DollarsPerKWH, 1e-6)
 	})
 
 	t.Run("NC Schedule 1 Residential Service", func(t *testing.T) {
@@ -129,12 +220,14 @@ func TestDominion(t *testing.T) {
 		// Summer (July 15, 2026 at 12:00 PM)
 		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.121533, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.135910, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Non-Summer (November 15, 2026 at 12:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.105123, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.119500, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 	})
 
 	t.Run("NC Schedule 1P TOU", func(t *testing.T) {
@@ -148,47 +241,48 @@ func TestDominion(t *testing.T) {
 		// Summer Weekday On-Peak (Monday July 13, 2026 at 4:00 PM)
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 16, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.077548, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.091925, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Summer Weekday Off-Peak (Monday July 13, 2026 at 10:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 13, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekend Off-Peak (Saturday July 18, 2026 at 4:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 18, 16, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday On-Peak Morning (Monday January 12, 2026 at 7:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.077548, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.091925, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Off-Peak Morning Before Peak (Monday January 12, 2026 at 6:15 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 6, 15, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday On-Peak Morning After Peak Start (Monday January 12, 2026 at 6:45 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 6, 45, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.077548, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.091925, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Off-Peak (Monday January 12, 2026 at 2:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 14, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekend Off-Peak (Saturday January 17, 2026 at 7:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 17, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 
 		// Winter Holiday (Good Friday: Friday April 3, 2026 at 7:00 AM) -> should be Off-Peak
 		p, err = u.priceForTime(time.Date(2026, time.April, 3, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.053685, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.068062, p.DollarsPerKWH, 1e-6)
 	})
 
 	t.Run("NC Schedule 1T TOU", func(t *testing.T) {
@@ -202,37 +296,38 @@ func TestDominion(t *testing.T) {
 		// Summer Weekday On-Peak (Monday July 13, 2026 at 4:00 PM)
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 16, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.269467, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.283844, p.DollarsPerKWH, 1e-6)
+		assert.False(t, p.SeparateGenerationCredit)
 
 		// Summer Weekday Off-Peak (Monday July 13, 2026 at 10:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.July, 13, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.062731, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.077108, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday On-Peak Morning (Monday January 12, 2026 at 7:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.223556, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.237933, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Off-Peak Morning Before Peak (Monday January 12, 2026 at 6:15 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 6, 15, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.057137, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.071514, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday On-Peak Morning After Peak Start (Monday January 12, 2026 at 6:45 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 6, 45, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.223556, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.237933, p.DollarsPerKWH, 1e-6)
 
 		// Winter Weekday Off-Peak (Monday January 12, 2026 at 2:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 14, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.057137, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.071514, p.DollarsPerKWH, 1e-6)
 
 		// Winter Holiday (Day after Thanksgiving: Friday November 27, 2026 at 7:00 AM) -> should be Off-Peak
 		p, err = u.priceForTime(time.Date(2026, time.November, 27, 7, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.057137, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.071514, p.DollarsPerKWH, 1e-6)
 	})
 
 	t.Run("SC Rate 5 TOU - Solar Choice Default", func(t *testing.T) {
@@ -276,10 +371,27 @@ func TestDominion(t *testing.T) {
 		assert.True(t, p.SeparateGenerationCredit)
 		assert.InDelta(t, 0.29907, p.GenerationCreditDollarsPerKWH, 1e-6)
 
+		// Winter Off-Peak Before Noon Block (Monday January 12, 2026 at 11:00 AM)
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 11, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.15074, p.DollarsPerKWH, 1e-6)
+
+		// Winter Super Off-Peak Noon Block Start (Monday January 12, 2026 at 12:00 PM) -> 12:00 PM to 3:00 PM
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 12, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.09623, p.DollarsPerKWH, 1e-6)
+		assert.True(t, p.SeparateGenerationCredit)
+		assert.InDelta(t, 0.09623, p.GenerationCreditDollarsPerKWH, 1e-6)
+
 		// Winter Super Off-Peak Noon block (Monday January 12, 2026 at 1:00 PM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 13, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.09623, p.DollarsPerKWH, 1e-6)
+
+		// Winter Off-Peak After Noon Block (Monday January 12, 2026 at 3:00 PM)
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 15, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.15074, p.DollarsPerKWH, 1e-6)
 
 		// Winter Off-Peak (Monday January 12, 2026 at 10:00 AM)
 		p, err = u.priceForTime(time.Date(2026, time.January, 12, 10, 0, 0, 0, etLocation))
