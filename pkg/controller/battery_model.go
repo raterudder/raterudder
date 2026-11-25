@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -67,6 +68,43 @@ const (
 	batteryModelDischargeInterceptPriorWt  = 3.0  // Pseudo-observations shrinking fixed discharge overhead toward 0 kW
 	batteryModelChargePriorSamples         = 10.0 // Pseudo-observations anchoring charge efficiency to baselineEff
 	batteryModelChargePriorRateFraction    = 0.15 // Characteristic C-rate (15%/hr) scaling the charge slope prior
+
+	// batteryHeaterMinFlaggedHours is the minimum number of clean hours with HadBatteryHeating
+	// required before marking a site as having an active resistive battery heater.
+	batteryHeaterMinFlaggedHours = 2
+
+	// batteryHeaterDefaultTriggerTempC is the fallback outdoor temperature threshold (°C) used
+	// when a site has flagged heating hours but fewer than 2 matching weather readings.
+	batteryHeaterDefaultTriggerTempC = 5.0
+
+	// batteryHeaterMinTriggerTempC and heaterMaxTriggerTempC clamp the learned outdoor trigger
+	// temperature (°C) to physically plausible LFP heating thresholds (35–46°F).
+	batteryHeaterMinTriggerTempC = 2.0
+	batteryHeaterMaxTriggerTempC = 8.0
+
+	// batteryHeaterTriggerMarginC adds a 1°C safety margin above the 85th-percentile outdoor
+	// temperature of observed heating hours to account for overnight thermal lag.
+	batteryHeaterTriggerMarginC = 1.0
+
+	// batteryHeaterPeakPriorCapFrac is the Bayesian prior for full-on resistive heater power as
+	// a fraction of battery capacity per hour (2.6% cap/hr ≈ 390 W per 15 kWh unit).
+	batteryHeaterPeakPriorCapFrac = 0.026
+	batteryHeaterPeakPriorWeight  = 3.0
+	batteryHeaterMinPeakCapFrac   = 0.015
+	batteryHeaterMaxPeakCapFrac   = 0.045
+
+	// batteryHeaterMaxSampleCapFrac rejects implausible single-hour excess drain samples above
+	// 8% cap/hr (e.g. 2.4 kW on a 30 kWh battery) when estimating heater power.
+	batteryHeaterMaxSampleCapFrac = 0.08
+
+	// batteryHeaterBurstHours is the front-loaded resistive warmup duration (0.50h = 30 min)
+	// shared between active heating at step 0 and upcoming cold morning warmups.
+	batteryHeaterBurstHours = 0.50
+
+	// batteryHeaterMorningStartHour and heaterMorningEndHour define the local morning cold-start
+	// warmup window (06:00–08:59 local) where ~84% of FranklinWH heating cycles occur.
+	batteryHeaterMorningStartHour = 6
+	batteryHeaterMorningEndHour   = 9
 )
 
 // BatteryModel holds physical battery conversion parameters for SOC simulation.
@@ -383,4 +421,171 @@ func filterBatterySamplesByMAD(
 		}
 	}
 	return tx, ty
+}
+
+// BatteryHeaterModel holds per-site learned resistive battery heater parameters.
+type BatteryHeaterModel struct {
+	Detected     bool
+	TriggerTempC float64
+	PeakPowerKW  float64
+	FlaggedHours int
+}
+
+// BatteryHeaterState carries per-day morning warmup accounting across forward simulation steps.
+type BatteryHeaterState struct {
+	MorningBurstDay       int
+	MorningBurstUsedHours float64
+}
+
+// LearnBatteryHeaterModel detects whether a site has an active resistive battery heater from
+// completed hourly EnergyStats (via HadBatteryHeating) and hourly ambient weather.
+//
+// Indoor/garage batteries with zero heating flags and ESS platforms without a heating flag
+// remain Detected=false with zero impact on planning.
+func LearnBatteryHeaterModel(
+	ctx context.Context,
+	history []types.EnergyStats,
+	batteryModel BatteryModel,
+	weather []types.Weather,
+	settings types.Settings,
+) BatteryHeaterModel {
+	var hm BatteryHeaterModel
+	capKWH := batteryModel.EffectiveCapacityKWH
+	if capKWH <= 0 || math.IsNaN(capKWH) || math.IsInf(capKWH, 0) || len(history) == 0 {
+		return hm
+	}
+
+	tempByHour := make(map[int64]float64, len(weather)*24)
+	for _, w := range weather {
+		for _, hw := range w.ForecastHours {
+			if !math.IsNaN(hw.TemperatureC) && !math.IsInf(hw.TemperatureC, 0) {
+				tempByHour[hw.TSHourStart.Truncate(time.Hour).UTC().Unix()] = hw.TemperatureC
+			}
+		}
+	}
+
+	_, dischargeEff, dischargeFixedKW := batteryModel.resolveEfficiencies(settings.GetOptimizationParams().RoundTripEfficiency)
+	// Use the base MinBatterySOC floor rather than evaluating MinBatterySOCPeriods (which requires
+	// per-hour historical Price periods). Hours clamped at a higher period reserve either draw heater
+	// power via BatteryChargedKWH (>= 0.02, filtered out) or have zero SOC drop (extraKW <= 0, ignored),
+	// and P75 + Bayesian shrinkage toward priorPeakKW absorbs occasional partial-hour clamping.
+	minReserveSOC := max(settings.MinBatterySOC, batteryModelMinReserveFloorSOC)
+
+	var flaggedTemps, flaggedExtras []float64
+	for _, h := range history {
+		if !h.HadBatteryHeating || h.HadGridUnavailable || h.HadEmergencyMode || h.HadVPPActive {
+			continue
+		}
+		hm.FlaggedHours++
+		if tempC, ok := tempByHour[h.TSHourStart.Truncate(time.Hour).UTC().Unix()]; ok {
+			flaggedTemps = append(flaggedTemps, tempC)
+		}
+
+		// Estimate full-on heater draw (kW) on mid-SOC non-charging hours where SOC delta
+		// is free of reserve/full clamping and solar/grid charge mixing.
+		inMidSOC := h.MinBatterySOC > minReserveSOC+batteryModelReserveMarginSOC && h.MaxBatterySOC < batteryModelMaxDischargeSOC
+		if !inMidSOC || h.BatteryChargedKWH >= batteryModelMaxOppositeFlowKWH || h.SolarToBatteryKWH >= batteryModelMaxOppositeFlowKWH {
+			continue
+		}
+		var extraKW float64
+		if h.BatteryUsedKWH >= batteryModelMinDischargeHourKWH {
+			actualKW := ((h.MaxBatterySOC - h.MinBatterySOC) / 100.0) * capKWH
+			extraKW = actualKW - (dischargeFixedKW + h.BatteryUsedKWH/dischargeEff)
+		} else if h.BatteryUsedKWH < 0.10 {
+			extraKW = ((h.MaxBatterySOC - h.MinBatterySOC) / 100.0) * capKWH
+		}
+		if extraKW > 0 && extraKW < batteryHeaterMaxSampleCapFrac*capKWH {
+			flaggedExtras = append(flaggedExtras, extraKW)
+		}
+	}
+
+	if hm.FlaggedHours < batteryHeaterMinFlaggedHours {
+		return hm
+	}
+	hm.Detected = true
+
+	hm.TriggerTempC = batteryHeaterDefaultTriggerTempC
+	if len(flaggedTemps) >= 2 {
+		hm.TriggerTempC = min(max(linearPercentile(flaggedTemps, 0.85)+batteryHeaterTriggerMarginC, batteryHeaterMinTriggerTempC), batteryHeaterMaxTriggerTempC)
+	}
+
+	priorPeakKW := batteryHeaterPeakPriorCapFrac * capKWH
+	if len(flaggedExtras) > 0 {
+		obsPeakKW := linearPercentile(flaggedExtras, 0.75)
+		n := float64(len(flaggedExtras))
+		shrunkKW := (n*obsPeakKW + batteryHeaterPeakPriorWeight*priorPeakKW) / (n + batteryHeaterPeakPriorWeight)
+		hm.PeakPowerKW = min(max(shrunkKW, batteryHeaterMinPeakCapFrac*capKWH), batteryHeaterMaxPeakCapFrac*capKWH)
+	} else {
+		hm.PeakPowerKW = priorPeakKW
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "learned per-site battery heater model",
+		slog.Float64("triggerTempC", hm.TriggerTempC),
+		slog.Float64("peakPowerKW", hm.PeakPowerKW),
+		slog.Int("flaggedHours", hm.FlaggedHours),
+		slog.Int("powerSamples", len(flaggedExtras)),
+	)
+
+	return hm
+}
+
+// HeaterPowerKW returns the modeled resistive heater draw (kW) for a simulation interval
+// and the updated per-day HeaterState.
+//
+// Active heating at step 0 (initialHeating=true) and upcoming cold morning warmups
+// (06:00–08:59 local when tempC < TriggerTempC) share a single per-day heaterBurstHours
+// budget so morning heating never double-fires. The budget resets on each local calendar day.
+func (hm BatteryHeaterModel) HeaterPowerKW(
+	localTime time.Time,
+	durationHours, elapsedHours float64,
+	initialHeating bool,
+	tempC float64,
+	hasTemp bool,
+	st BatteryHeaterState,
+) (float64, BatteryHeaterState) {
+	if !hm.Detected || durationHours <= 0 || math.IsNaN(durationHours) || math.IsInf(durationHours, 0) {
+		return 0, st
+	}
+	dayKey := localTime.Year()*1000 + localTime.YearDay()
+	if st.MorningBurstDay != dayKey {
+		st.MorningBurstDay = dayKey
+		st.MorningBurstUsedHours = 0
+	}
+
+	hour := localTime.Hour()
+	if initialHeating && elapsedHours >= 0 && elapsedHours < batteryHeaterBurstHours {
+		remHours := min(durationHours, batteryHeaterBurstHours-elapsedHours)
+		if hour >= batteryHeaterMorningStartHour-1 && hour < batteryHeaterMorningEndHour {
+			st.MorningBurstUsedHours = min(batteryHeaterBurstHours, st.MorningBurstUsedHours+remHours)
+		}
+		return hm.PeakPowerKW * (remHours / durationHours), st
+	}
+
+	validTemp := hasTemp && !math.IsNaN(tempC) && !math.IsInf(tempC, 0)
+	if validTemp && tempC < hm.TriggerTempC &&
+		hour >= batteryHeaterMorningStartHour && hour < batteryHeaterMorningEndHour &&
+		st.MorningBurstUsedHours < batteryHeaterBurstHours {
+		remHours := min(durationHours, batteryHeaterBurstHours-st.MorningBurstUsedHours)
+		st.MorningBurstUsedHours += remHours
+		return hm.PeakPowerKW * (remHours / durationHours), st
+	}
+
+	return 0, st
+}
+
+// linearPercentile returns the linearly interpolated p-th percentile (p in [0, 1]) of vals.
+func linearPercentile(vals []float64, p float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	cp := make([]float64, len(vals))
+	copy(cp, vals)
+	sort.Float64s(cp)
+	pos := p * float64(len(cp)-1)
+	lo := int(math.Floor(pos))
+	hi := int(math.Ceil(pos))
+	if lo == hi {
+		return cp[lo]
+	}
+	return cp[lo] + (pos-float64(lo))*(cp[hi]-cp[lo])
 }

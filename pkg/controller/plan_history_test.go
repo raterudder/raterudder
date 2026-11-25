@@ -94,6 +94,7 @@ var planBaselines = map[string]float64{
 	"site15_september.json":      3.369,
 	"site16_late-september.json": 3.010,
 	"site5_mid-october.json":     1.789,
+	"site19_nov-cold.json":       2.606,
 }
 
 // TestPlanHistory evaluates the Plan engine against real-world recorded site history datasets.
@@ -279,6 +280,8 @@ func TestPlanHistory(t *testing.T) {
 				settings.GridExportSolar = false
 				settings.GridExportBatteries = false
 				settings.ManageTOUSchedules = true
+			} else if dataset.SiteID == "site19" {
+				settings.MinBatterySOC = 25
 			}
 
 			// Adjust simStart to the hour of the first action to align the evaluation window
@@ -321,6 +324,7 @@ func TestPlanHistory(t *testing.T) {
 			var lastAction *types.Action
 			var planModes []types.BatteryMode
 			var planReasons []types.ActionReason
+			sawLearnedHeater := false
 
 			for i := 0; i < len(activeActions); i++ {
 				action := activeActions[i]
@@ -373,55 +377,74 @@ func TestPlanHistory(t *testing.T) {
 					}
 				}
 
-				// Build mocked history (future 24 hours)
+				// Build history and weather: when the dataset includes recorded Weather (e.g. cold-weather
+				// heater datasets), pass real prior EnergyHistory and Weather up to tCurrent+24h so
+				// LearnBatteryModel and LearnHeaterModel run end-to-end; otherwise keep legacy synthetic mocks.
 				var mockHistory []types.EnergyStats
-				for k := 0; k < 24; k++ {
-					tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
-					mockHistory = append(mockHistory, types.EnergyStats{
-						TSHourStart:   tFuture,
-						HomeKWH:       stat.HomeKWH,
-						SolarKWH:      stat.SolarKWH,
-						GridExportKWH: stat.GridExportKWH,
-						MaxBatterySOC: 50.0,
-					})
-				}
-
-				// Build mocked weather (future 24 hours)
-				var forecastHours []types.HourlyWeather
-				var firstSolarTime time.Time
-				var lastSolarTime time.Time
-				for k := 0; k < 24; k++ {
-					tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
-					if stat.SolarKWH > 0.05 {
-						if firstSolarTime.IsZero() {
-							firstSolarTime = tFuture
+				var mockWeather []types.Weather
+				if len(dataset.Weather) > 0 {
+					currHr := tCurrent.Truncate(time.Hour)
+					for _, day := range dataset.EnergyHistory {
+						for _, hr := range day.Hourly {
+							if hr.TSHourStart.Before(currHr) {
+								mockHistory = append(mockHistory, hr)
+							}
 						}
-						lastSolarTime = tFuture
 					}
-					forecastHours = append(forecastHours, types.HourlyWeather{
-						TSHourStart:  tFuture,
-						GTI:          100.0 * stat.SolarKWH,
-						TemperatureC: 25.0,
-					})
-				}
+					weatherCutoff := tCurrent.In(fileLoc).Add(48 * time.Hour)
+					for _, w := range dataset.Weather {
+						if !w.TSDayStart.After(weatherCutoff) {
+							mockWeather = append(mockWeather, w)
+						}
+					}
+				} else {
+					for k := 0; k < 24; k++ {
+						tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
+						stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
+						mockHistory = append(mockHistory, types.EnergyStats{
+							TSHourStart:   tFuture,
+							HomeKWH:       stat.HomeKWH,
+							SolarKWH:      stat.SolarKWH,
+							GridExportKWH: stat.GridExportKWH,
+							MaxBatterySOC: 50.0,
+						})
+					}
 
-				if firstSolarTime.IsZero() {
-					firstSolarTime = tCurrent.Truncate(time.Hour).Add(6 * time.Hour)
-				}
-				if lastSolarTime.IsZero() {
-					lastSolarTime = tCurrent.Truncate(time.Hour).Add(19 * time.Hour)
-				}
+					var forecastHours []types.HourlyWeather
+					var firstSolarTime time.Time
+					var lastSolarTime time.Time
+					for k := 0; k < 24; k++ {
+						tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
+						stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
+						if stat.SolarKWH > 0.05 {
+							if firstSolarTime.IsZero() {
+								firstSolarTime = tFuture
+							}
+							lastSolarTime = tFuture
+						}
+						forecastHours = append(forecastHours, types.HourlyWeather{
+							TSHourStart:  tFuture,
+							GTI:          100.0 * stat.SolarKWH,
+							TemperatureC: 25.0,
+						})
+					}
 
-				mockWeather := []types.Weather{
-					{
-						TSDayStart:    tCurrent.In(fileLoc).Truncate(24 * time.Hour),
-						TimeLocation:  settings.Location.TimeZone,
-						TSSunrise:     firstSolarTime,
-						TSSunset:      lastSolarTime,
-						ForecastHours: forecastHours,
-					},
+					if firstSolarTime.IsZero() {
+						firstSolarTime = tCurrent.Truncate(time.Hour).Add(6 * time.Hour)
+					}
+					if lastSolarTime.IsZero() {
+						lastSolarTime = tCurrent.Truncate(time.Hour).Add(19 * time.Hour)
+					}
+
+					mockWeather = []types.Weather{
+						{
+							TSDayStart:    tCurrent.In(fileLoc).Truncate(24 * time.Hour),
+							TimeLocation:  settings.Location.TimeZone,
+							TSSunrise:     firstSolarTime,
+							TSSunset:      lastSolarTime,
+							ForecastHours: forecastHours,
+						},
+					}
 				}
 
 				simStatus := action.SystemStatus
@@ -443,6 +466,9 @@ func TestPlanHistory(t *testing.T) {
 
 				decision, plan, err := c.Plan(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings, lastAction)
 				require.NoError(t, err)
+				if decision.SimulationParams.BatteryHeaterPowerKW > 0 {
+					sawLearnedHeater = true
+				}
 				violations := findDominatedPlanPeriods(plan)
 				if len(violations) > 0 {
 					for idx, p := range plan.Periods {
@@ -649,6 +675,10 @@ func TestPlanHistory(t *testing.T) {
 			totalSimCost += simAdjustedNetCost
 			totalBaselineCost += baseNetCost
 			mu.Unlock()
+
+			if dataset.SiteID == "site19" {
+				assert.True(t, sawLearnedHeater, "cold-weather heater dataset must trigger LearnHeaterModel")
+			}
 
 			if hasBaseline {
 				simAdjustedNetCostRounded := math.Round(simAdjustedNetCost*1000.0) / 1000.0

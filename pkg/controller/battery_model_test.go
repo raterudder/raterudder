@@ -9,6 +9,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeSyntheticDischargeBlock(
@@ -429,5 +430,232 @@ func TestLearnBatteryModel(t *testing.T) {
 		mSplit := LearnBatteryModel(ctx, longRuns, status, settings)
 		assert.Equal(t, "blended", mSplit.Source)
 		assert.Equal(t, 12, mSplit.DischargeSamples, "six 10-hour runs must split into twelve 6h+4h blocks")
+	})
+}
+
+func makeWeatherDay(day time.Time, tempC float64) types.Weather {
+	hrs := make([]types.HourlyWeather, 24)
+	for h := 0; h < 24; h++ {
+		hrs[h] = types.HourlyWeather{
+			TSHourStart:  day.Add(time.Duration(h) * time.Hour),
+			TemperatureC: tempC,
+		}
+	}
+	return types.Weather{TSDayStart: day, ForecastHours: hrs}
+}
+
+func TestLearnBatteryHeaterModel(t *testing.T) {
+	ctx := context.Background()
+	baseDay := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	status30 := types.SystemStatus{BatteryCapacityKWH: 30.0}
+	settings := types.Settings{MinBatterySOC: 20.0}
+	bm30 := BaselineBatteryModel(0.90, status30)
+
+	t.Run("NoFlaggedHoursAndIndoorColdSiteRemainUndetected", func(t *testing.T) {
+		var history []types.EnergyStats
+		var weather []types.Weather
+		for d := 0; d < 10; d++ {
+			day := baseDay.AddDate(0, 0, d)
+			weather = append(weather, makeWeatherDay(day, -3.0))
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart:    day.Add(time.Duration(h) * time.Hour),
+					MinBatterySOC:  60.0,
+					MaxBatterySOC:  62.0,
+					BatteryUsedKWH: 0.6,
+				})
+			}
+		}
+		hm := LearnBatteryHeaterModel(ctx, history, bm30, weather, settings)
+		assert.False(t, hm.Detected)
+		assert.Zero(t, hm.FlaggedHours)
+		assert.Zero(t, hm.PeakPowerKW)
+	})
+
+	t.Run("SingleFlaggedHourBelowThresholdRemainsUndetected", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{
+				TSHourStart:       baseDay.Add(7 * time.Hour),
+				MinBatterySOC:     55.0,
+				MaxBatterySOC:     60.0,
+				BatteryUsedKWH:    0.6,
+				HadBatteryHeating: true,
+			},
+		}
+		hm := LearnBatteryHeaterModel(ctx, history, bm30, []types.Weather{makeWeatherDay(baseDay, 1.0)}, settings)
+		assert.False(t, hm.Detected)
+		assert.Equal(t, 1, hm.FlaggedHours)
+	})
+
+	t.Run("LearnsTriggerTempAndShrunkPeakPowerFromFlaggedHours", func(t *testing.T) {
+		// 6 flagged cold discharge hours with ~0.78 kW extra drain on a 30 kWh battery (2 units * ~390 W).
+		var history []types.EnergyStats
+		var weather []types.Weather
+		temps := []float64{-1.0, 0.5, 1.5, 2.5, 4.0, 5.0}
+		for i, tempC := range temps {
+			day := baseDay.AddDate(0, 0, i)
+			weather = append(weather, makeWeatherDay(day, tempC))
+			usedKWH := 0.80
+			expectedBaseDropKWH := usedKWH / bm30.DischargeEff
+			actualDropKWH := expectedBaseDropKWH + 0.78
+			endSOC := 70.0 - (actualDropKWH/30.0)*100.0
+			history = append(history, types.EnergyStats{
+				TSHourStart:       day.Add(7 * time.Hour),
+				MinBatterySOC:     endSOC,
+				MaxBatterySOC:     70.0,
+				BatteryUsedKWH:    usedKWH,
+				HadBatteryHeating: true,
+			})
+		}
+
+		hm := LearnBatteryHeaterModel(ctx, history, bm30, weather, settings)
+		assert.True(t, hm.Detected)
+		assert.Equal(t, 6, hm.FlaggedHours)
+		// P85 of [-1, 0.5, 1.5, 2.5, 4, 5] is 4.25 -> +1.0 margin = 5.25°C.
+		assert.InDelta(t, 5.25, hm.TriggerTempC, 0.05)
+		assert.InDelta(t, 0.78, hm.PeakPowerKW, 0.05)
+	})
+
+	t.Run("SmallNTwoFlaggedHoursInterpolatesPercentile", func(t *testing.T) {
+		// With exactly 2 flagged hours (1.0°C and 5.0°C), linear interpolation at P85 gives 4.4°C (+1 = 5.4°C),
+		// not the minimum 1.0°C (+1 = 2.0°C).
+		day0 := baseDay
+		day1 := baseDay.AddDate(0, 0, 1)
+		weather := []types.Weather{makeWeatherDay(day0, 1.0), makeWeatherDay(day1, 5.0)}
+		history := []types.EnergyStats{
+			{TSHourStart: day0.Add(7 * time.Hour), MinBatterySOC: 50, MaxBatterySOC: 53, BatteryUsedKWH: 0.0, HadBatteryHeating: true},
+			{TSHourStart: day1.Add(7 * time.Hour), MinBatterySOC: 50, MaxBatterySOC: 54, BatteryUsedKWH: 0.0, HadBatteryHeating: true},
+		}
+		hm := LearnBatteryHeaterModel(ctx, history, bm30, weather, settings)
+		assert.True(t, hm.Detected)
+		assert.InDelta(t, 5.4, hm.TriggerTempC, 0.05, "n=2 P85 must linearly interpolate rather than returning minimum")
+	})
+
+	t.Run("StandbyFlaggedHoursAndAnomalyFiltering", func(t *testing.T) {
+		// Standby flagged hours (BatteryUsedKWH < 0.10, no solar-to-battery) contribute power samples,
+		// while outage/emergency/VPP/solar-charging hours are excluded.
+		day0 := baseDay
+		day1 := baseDay.AddDate(0, 0, 1)
+		day2 := baseDay.AddDate(0, 0, 2)
+		weather := []types.Weather{makeWeatherDay(day0, 2.0), makeWeatherDay(day1, 3.0), makeWeatherDay(day2, 2.0)}
+		history := []types.EnergyStats{
+			// Clean standby flagged hours: 3% SOC drop on 30 kWh = 0.90 kW
+			{TSHourStart: day0.Add(7 * time.Hour), MinBatterySOC: 57, MaxBatterySOC: 60, HadBatteryHeating: true},
+			{TSHourStart: day1.Add(7 * time.Hour), MinBatterySOC: 57, MaxBatterySOC: 60, HadBatteryHeating: true},
+			// SolarToBatteryKWH >= 0.02 -> excluded from power samples (still counted as flagged hour)
+			{TSHourStart: day2.Add(7 * time.Hour), MinBatterySOC: 50, MaxBatterySOC: 60, SolarToBatteryKWH: 0.5, HadBatteryHeating: true},
+			// Outage / Emergency / VPP -> skipped completely
+			{TSHourStart: day2.Add(8 * time.Hour), MinBatterySOC: 30, MaxBatterySOC: 60, HadBatteryHeating: true, HadGridUnavailable: true},
+			{TSHourStart: day2.Add(9 * time.Hour), MinBatterySOC: 30, MaxBatterySOC: 60, HadBatteryHeating: true, HadEmergencyMode: true},
+			{TSHourStart: day2.Add(10 * time.Hour), MinBatterySOC: 30, MaxBatterySOC: 60, HadBatteryHeating: true, HadVPPActive: true},
+		}
+		hm := LearnBatteryHeaterModel(ctx, history, bm30, weather, settings)
+		assert.True(t, hm.Detected)
+		assert.Equal(t, 3, hm.FlaggedHours, "outage/emergency/VPP hours must be skipped")
+		assert.InDelta(t, (2*0.90+3*0.78)/5.0, hm.PeakPowerKW, 0.02)
+	})
+
+	t.Run("InvalidCapacityAndNaNWeatherGuards", func(t *testing.T) {
+		badBM := BatteryModel{EffectiveCapacityKWH: math.NaN()}
+		hm := LearnBatteryHeaterModel(ctx, []types.EnergyStats{{HadBatteryHeating: true}, {HadBatteryHeating: true}}, badBM, nil, settings)
+		assert.False(t, hm.Detected)
+
+		// NaN weather temperatures fall back to heaterDefaultTriggerTempC (5.0°C)
+		nanWeather := []types.Weather{makeWeatherDay(baseDay, math.NaN()), makeWeatherDay(baseDay.AddDate(0, 0, 1), math.Inf(1))}
+		hist := []types.EnergyStats{
+			{TSHourStart: baseDay.Add(7 * time.Hour), HadBatteryHeating: true},
+			{TSHourStart: baseDay.AddDate(0, 0, 1).Add(7 * time.Hour), HadBatteryHeating: true},
+		}
+		hmNaN := LearnBatteryHeaterModel(ctx, hist, bm30, nanWeather, settings)
+		assert.True(t, hmNaN.Detected)
+		assert.Equal(t, batteryHeaterDefaultTriggerTempC, hmNaN.TriggerTempC)
+		assert.InDelta(t, batteryHeaterPeakPriorCapFrac*30.0, hmNaN.PeakPowerKW, 1e-6)
+	})
+}
+
+func TestHeaterPowerKW(t *testing.T) {
+	hm := BatteryHeaterModel{
+		Detected:     true,
+		TriggerTempC: 5.0,
+		PeakPowerKW:  0.80,
+		FlaggedHours: 10,
+	}
+
+	t.Run("NoDoubleFiringWhenActiveHeatingStartsAt0700", func(t *testing.T) {
+		loc := time.UTC
+		t0 := time.Date(2026, 11, 20, 7, 0, 0, 0, loc)
+		var st BatteryHeaterState
+		totalEnergyKWH := 0.0
+		stepHrs := 1.0 / 3.0 // 20-minute intervals
+
+		// 6 consecutive 20-min steps (07:00..09:00) with initialHeating=true and temp=1°C (< 5°C).
+		// Must consume exactly 0.50h * 0.80 kW = 0.40 kWh total, NOT double-fire a second burst!
+		for i := 0; i < 6; i++ {
+			ts := t0.Add(time.Duration(i*20) * time.Minute)
+			var kw float64
+			kw, st = hm.HeaterPowerKW(ts, stepHrs, float64(i)*stepHrs, true, 1.0, true, st)
+			totalEnergyKWH += kw * stepHrs
+			switch i {
+			case 0:
+				assert.InDelta(t, 0.80, kw, 1e-9, "step 0 (0..20m) gets full peak power")
+			case 1:
+				assert.InDelta(t, 0.40, kw, 1e-9, "step 1 (20..40m) gets prorated remaining 10m = 0.5 * peak")
+			default:
+				assert.Zero(t, kw, "steps >= 2 must be 0 kW (no second morning burst)")
+			}
+		}
+		assert.InDelta(t, 0.40, totalEnergyKWH, 1e-9)
+	})
+
+	t.Run("NonUTCTimezoneUsesLocalMorningWindow", func(t *testing.T) {
+		chicago, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		// 07:00 UTC is 01:00 CST (not morning) -> must NOT trigger morning burst.
+		t1amCST := time.Date(2026, 11, 20, 7, 0, 0, 0, time.UTC).In(chicago)
+		kw1, st := hm.HeaterPowerKW(t1amCST, 1.0/3.0, 2.0, false, 0.0, true, BatteryHeaterState{})
+		assert.Zero(t, kw1)
+
+		// 13:00 UTC is 07:00 CST (morning) -> MUST trigger morning burst.
+		t7amCST := time.Date(2026, 11, 20, 13, 0, 0, 0, time.UTC).In(chicago)
+		kw7, _ := hm.HeaterPowerKW(t7amCST, 1.0/3.0, 8.0, false, 0.0, true, st)
+		assert.InDelta(t, 0.80, kw7, 1e-9)
+	})
+
+	t.Run("MultiDayResetAcrossCalendarDays", func(t *testing.T) {
+		day1 := time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC)
+		day2 := time.Date(2026, 11, 21, 6, 0, 0, 0, time.UTC)
+
+		// Exhaust Day 1's 0.50h burst
+		kw1, st := hm.HeaterPowerKW(day1, 0.50, 1.0, false, 0.0, true, BatteryHeaterState{})
+		assert.InDelta(t, 0.80, kw1, 1e-9)
+		kw1After, st := hm.HeaterPowerKW(day1.Add(30*time.Minute), 0.50, 1.5, false, 0.0, true, st)
+		assert.Zero(t, kw1After)
+
+		// Day 2 morning resets budget and fires again
+		kw2, _ := hm.HeaterPowerKW(day2, 0.50, 25.0, false, 0.0, true, st)
+		assert.InDelta(t, 0.80, kw2, 1e-9, "morning burst budget must reset on Day 2")
+	})
+
+	t.Run("WarmTempMissingTempAndInvalidDurationGuards", func(t *testing.T) {
+		tMorning := time.Date(2026, 11, 20, 7, 0, 0, 0, time.UTC)
+
+		// Warm temp (>= TriggerTempC) -> 0
+		kwWarm, _ := hm.HeaterPowerKW(tMorning, 1.0/3.0, 1.0, false, 10.0, true, BatteryHeaterState{})
+		assert.Zero(t, kwWarm)
+
+		// Missing temp -> morning burst is 0, but active initialHeating still works
+		kwNoTemp, _ := hm.HeaterPowerKW(tMorning, 1.0/3.0, 1.0, false, 0.0, false, BatteryHeaterState{})
+		assert.Zero(t, kwNoTemp)
+		kwActiveNoTemp, _ := hm.HeaterPowerKW(tMorning, 1.0/3.0, 0.0, true, 0.0, false, BatteryHeaterState{})
+		assert.InDelta(t, 0.80, kwActiveNoTemp, 1e-9)
+
+		// NaN temp / zero duration / NaN duration -> 0
+		kwNaNTemp, _ := hm.HeaterPowerKW(tMorning, 1.0/3.0, 1.0, false, math.NaN(), true, BatteryHeaterState{})
+		assert.Zero(t, kwNaNTemp)
+		kwZeroDur, _ := hm.HeaterPowerKW(tMorning, 0.0, 0.0, true, 0.0, true, BatteryHeaterState{})
+		assert.Zero(t, kwZeroDur)
+		kwNaNDur, _ := hm.HeaterPowerKW(tMorning, math.NaN(), 0.0, true, 0.0, true, BatteryHeaterState{})
+		assert.Zero(t, kwNaNDur)
 	})
 }
