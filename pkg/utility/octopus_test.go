@@ -37,6 +37,17 @@ func newMockHTTPClient(handler http.HandlerFunc) *http.Client {
 	}
 }
 
+func isTransientOctopusAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	return strings.Contains(err.Error(), "octopus api error status 5") ||
+		strings.Contains(err.Error(), "octopus api error status 429") ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
+}
+
 func TestOctopusUtility(t *testing.T) {
 	t.Run("Provider Metadata and RatesNotice", func(t *testing.T) {
 		info := octopusUtilityInfo()
@@ -1506,6 +1517,45 @@ func TestOctopusUtility(t *testing.T) {
 		assert.Equal(t, int32(1), httpHits.Load())
 	})
 
+	t.Run("Transient API Error Detection", func(t *testing.T) {
+		dayStart := time.Date(2026, time.October, 12, 0, 0, 0, 0, lonLocation)
+		dayEnd := dayStart.Add(24 * time.Hour)
+
+		var statusCode int
+		mockClient := newMockHTTPClient(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(statusCode)
+			_, _ = w.Write([]byte(`{"detail":"upstream error"}`))
+		})
+
+		newTestBase := func() *baseOctopus {
+			return &baseOctopus{
+				apiURL:          defaultOctopusAPIURL,
+				client:          mockClient,
+				cachedPrices:    make(map[string]map[int64]types.Price),
+				lastFutureFetch: make(map[string]time.Time),
+				nowFunc:         func() time.Time { return dayEnd },
+			}
+		}
+
+		statusCode = http.StatusServiceUnavailable
+		_, err503 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
+		assert.ErrorContains(t, err503, "octopus api error status 503")
+		assert.True(t, isTransientOctopusAPIError(err503))
+
+		statusCode = http.StatusTooManyRequests
+		_, err429 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
+		assert.ErrorContains(t, err429, "octopus api error status 429")
+		assert.True(t, isTransientOctopusAPIError(err429))
+
+		statusCode = http.StatusNotFound
+		_, err404 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
+		assert.ErrorContains(t, err404, "octopus api error status 404")
+		assert.False(t, isTransientOctopusAPIError(err404))
+
+		assert.True(t, isTransientOctopusAPIError(fmt.Errorf("wrapped: %w", context.DeadlineExceeded)))
+		assert.False(t, isTransientOctopusAPIError(nil))
+	})
+
 	t.Run("Integration Real API", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping live Octopus API integration test in short mode")
@@ -1535,11 +1585,7 @@ func TestOctopusUtility(t *testing.T) {
 				time.Sleep(1 * time.Second)
 			}
 		}
-		var netErr net.Error
-		if err != nil && (strings.Contains(err.Error(), "octopus api returned status: 5") ||
-			strings.Contains(err.Error(), "octopus api returned status: 429") ||
-			errors.Is(err, context.DeadlineExceeded) ||
-			(errors.As(err, &netErr) && netErr.Timeout())) {
+		if isTransientOctopusAPIError(err) {
 			t.Skipf("octopus API transiently unavailable: %v", err)
 		}
 		require.NoError(t, err)
