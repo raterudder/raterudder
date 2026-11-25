@@ -33,6 +33,10 @@ resource "google_artifact_registry_repository" "raterudder" {
   location      = "us-central1"
   repository_id = "raterudder"
   format        = "DOCKER"
+
+  docker_config {
+    immutable_tags = true
+  }
 }
 
 resource "google_artifact_registry_repository_iam_member" "raterudder_build" {
@@ -59,44 +63,42 @@ resource "google_cloudbuild_trigger" "github" {
   }
 
   build {
-    images = [
-      "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA",
-      "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:latest",
-    ]
-
     step {
       name = "gcr.io/cloud-builders/docker"
       args = [
         "build",
         "-t",
-        "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA",
-        "-t",
-        "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:latest",
+        "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA-$BUILD_ID",
         ".",
       ]
     }
-
 
     step {
       name = "gcr.io/cloud-builders/docker"
       args = [
         "push",
-        "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA",
+        "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA-$BUILD_ID",
       ]
     }
 
     step {
       name       = "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
-      entrypoint = "gcloud"
+      entrypoint = "bash"
       args = [
-        "run",
-        "services",
-        "update",
-        "raterudder",
-        "--platform=managed",
-        "--image=${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA",
-        "--region=us-central1",
-        "--quiet",
+        "-c",
+        <<-EOT
+          set -euo pipefail
+          DIGEST="$$(gcloud artifacts docker images describe "${google_artifact_registry_repository.raterudder.registry_uri}/raterudder:$COMMIT_SHA-$BUILD_ID" --format="value(image_summary.digest)")"
+          if ! printf '%s\n' "$$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$$'; then
+            echo "Failed to resolve sha256 digest for tag $COMMIT_SHA-$BUILD_ID (got: $$DIGEST)" >&2
+            exit 1
+          fi
+          gcloud run services update raterudder \
+            --platform=managed \
+            --image="${google_artifact_registry_repository.raterudder.registry_uri}/raterudder@$$DIGEST" \
+            --region=us-central1 \
+            --quiet
+        EOT
       ]
     }
 

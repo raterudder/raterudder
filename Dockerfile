@@ -21,6 +21,7 @@ COPY --from=vite-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o raterudder ./cmd/raterudder
 
 # Final image
-FROM gcr.io/distroless/static-debian13
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=go-builder /app/raterudder /
+USER 65532:65532
 ENTRYPOINT ["/raterudder"]
