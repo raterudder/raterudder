@@ -33,10 +33,10 @@ jobs:
           "${RUNNER_TEMP}/gitleaks-bin/gitleaks" version
 
       - name: Scan git history with Gitleaks
-        run: gitleaks git --config .gitleaks.toml --redact
+        run: gitleaks git --log-opts="HEAD" --config .gitleaks.toml --redact --no-banner --verbose
 
       - name: Scan working directory with Gitleaks
-        run: gitleaks dir --config .gitleaks.toml --redact
+        run: gitleaks dir --config .gitleaks.toml --redact --no-banner --verbose
 
   test-go:
     name: Run Go Tests

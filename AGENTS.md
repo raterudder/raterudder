@@ -95,8 +95,8 @@
 - **Install Pre-Commit Hook**: Configure Git to run the versioned pre-commit secret and PII check (`gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --verbose`):
   `./scripts/setup-hooks.sh`
 - **Local Gitleaks Scans**:
-  - Scan full git commit history (matches CI `secret-scan` job):
-    `gitleaks git --config .gitleaks.toml --redact`
+  - Scan full git commit history of current HEAD (matches CI `secret-scan` job):
+    `gitleaks git --log-opts="HEAD" --config .gitleaks.toml --redact`
   - Scan working tree files (including untracked files not ignored by `.gitignore`):
     `gitleaks dir --config .gitleaks.toml --redact`
   - Scan staged changes manually before committing:
