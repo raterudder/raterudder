@@ -11,4 +11,5 @@ type ControllerHistoryDataset struct {
 	EnergyHistory []DailyEnergyStats `json:"energyHistory"`
 	ActionHistory []Action           `json:"actionHistory"`
 	PriceHistory  []Price            `json:"priceHistory"`
+	Weather       []Weather          `json:"weather,omitempty"`
 }

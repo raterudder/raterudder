@@ -24,9 +24,17 @@ import (
 var errESSRateLimited = errors.New("ESS rate limited")
 
 const (
-	maxInteractiveESSBackoff = 15 * time.Minute
-	essFailurePauseThreshold = 40
+	maxInteractiveESSBackoff   = 15 * time.Minute
+	essFailurePauseThreshold   = 40
+	defaultSettingsSyncTimeout = 30 * time.Second
 )
+
+func (s *Server) getSettingsSyncTimeout() time.Duration {
+	if s.settingsSyncTimeout > 0 {
+		return s.settingsSyncTimeout
+	}
+	return defaultSettingsSyncTimeout
+}
 
 func getInteractiveESSBackoff(failures int) time.Duration {
 	if failures <= 1 {
@@ -535,10 +543,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			updatedWeather = true
 			wg.Go(func() {
 				log.Ctx(ctx).InfoContext(ctx, "fetching initial weather for new location")
-				ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 				defer done()
 				if err := s.updateWeatherHistory(ctx, siteID, loc); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to sync weather history after settings update", slog.Any("error", err))
+					log.Ctx(ctx).WarnContext(ctx, "failed to sync weather history after settings update", slog.Any("error", err))
 				}
 			})
 		} else {
@@ -707,10 +715,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				updatedEnergy = true
 				wg.Go(func() {
 					log.Ctx(ctx).InfoContext(ctx, "backfilling energy history for new credentials")
-					ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+					ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 					defer done()
 					if err := s.updateEnergyHistory(ctx, siteID, essSystem); err != nil {
-						log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history after settings update", slog.Any("error", err))
+						log.Ctx(ctx).WarnContext(ctx, "failed to sync energy history after settings update", slog.Any("error", err))
 					}
 				})
 			}
@@ -744,10 +752,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				slog.String("utilityProvider", newSettings.UtilityProvider),
 				slog.String("utilityRate", newSettings.UtilityRate),
 			)
-			ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 			defer done()
 			if err := s.updatePriceHistory(ctx, siteID, u, true); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
+				log.Ctx(ctx).WarnContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
 			}
 		})
 	}
@@ -788,6 +796,39 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		slog.Any("before", beforeSettings),
 		slog.Any("after", savedSettings),
 	)
+
+	if beforeSettings.ESS == "" && savedSettings.ESS != "" {
+		log.Ctx(ctx).InfoContext(ctx, "ess connected",
+			slog.String("event", eventESSConnected),
+			slog.String("siteID", siteID),
+			slog.String("userID", user.ID),
+			slog.String("ess", savedSettings.ESS),
+		)
+	}
+	if beforeSettings.UtilityProvider == "" && savedSettings.UtilityProvider != "" {
+		log.Ctx(ctx).InfoContext(ctx, "utility configured",
+			slog.String("event", eventUtilityConfigured),
+			slog.String("siteID", siteID),
+			slog.String("userID", user.ID),
+			slog.String("utilityProvider", savedSettings.UtilityProvider),
+			slog.String("utilityRate", savedSettings.UtilityRate),
+		)
+	}
+	if savedSettings.ESS != "" {
+		if !beforeSettings.Pause && savedSettings.Pause {
+			log.Ctx(ctx).InfoContext(ctx, "site automation paused",
+				slog.String("event", eventSiteAutomationPaused),
+				slog.String("siteID", siteID),
+				slog.String("userID", user.ID),
+			)
+		} else if beforeSettings.Pause && !savedSettings.Pause {
+			log.Ctx(ctx).InfoContext(ctx, "site automation resumed",
+				slog.String("event", eventSiteAutomationResumed),
+				slog.String("siteID", siteID),
+				slog.String("userID", user.ID),
+			)
+		}
+	}
 
 	if !beforeSettings.Pause && savedSettings.Pause && savedSettings.ManageTOUSchedules {
 		credsForPause := existingCreds
@@ -1324,8 +1365,13 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 	}
 
 	if isNameBased {
+		for _, p := range newSettings.MinBatterySOCPeriods {
+			if p.UtilityPeriodName == "" {
+				return 0, errors.New("all reserve SOC periods must specify a utility period name for rate-based minimum SOC")
+			}
+		}
 		if newSettings.UtilityProvider != "" && s.utilities != nil {
-			u, err := s.utilities.Site(ctx, siteID, newSettings)
+			u, err := s.utilities.PreviewSite(ctx, newSettings)
 			if err != nil || u == nil {
 				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
 			}
@@ -1339,16 +1385,16 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 					configuredNames[p.UtilityPeriodName] = true
 				}
 			}
-			hasNamedPeriods := false
+			var namedPeriods []types.TimePeriod
 			for _, p := range periods {
 				if p.Name != "" {
-					hasNamedPeriods = true
+					namedPeriods = append(namedPeriods, p)
 					if !configuredNames[p.Name] {
 						return 0, fmt.Errorf("missing minimum battery SOC for utility period name: %s", p.Name)
 					}
 				}
 			}
-			if !hasNamedPeriods {
+			if len(namedPeriods) == 0 {
 				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
 			}
 		}

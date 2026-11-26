@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "${REPO_ROOT}"
+
+# Include common user/local binary locations when invoked from GUI git clients.
+export PATH="${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "Error: gitleaks is required for pre-commit secret and privacy checks but is not installed." >&2
+  echo "Install gitleaks v8 (https://github.com/gitleaks/gitleaks#installing) and re-run git commit." >&2
+  exit 1
+fi
+
+exec gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --verbose

@@ -258,12 +258,18 @@ func TestDeleteHandlers(t *testing.T) {
 			store.On("DeleteSite", mock.Anything, siteID).Return(nil).Once()
 
 			req := httptest.NewRequest(http.MethodPost, "/api/delete/site", nil)
+			ctx, logBuf := captureJSONLogs(req.Context())
+			req = req.WithContext(ctx)
 			req = withUser(req, types.User{ID: "user1", Admin: true})
 			req = withSiteID(req, siteID)
 			w := httptest.NewRecorder()
 
 			s.handleDeleteSite(w, req)
 			assert.Equal(t, http.StatusOK, w.Code)
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventSiteDeleted); assert.True(t, ok) {
+				assert.Equal(t, siteID, entry["siteID"])
+				assert.Equal(t, "user1", entry["deletedBy"])
+			}
 			store.AssertExpectations(t)
 		})
 	})
@@ -313,11 +319,16 @@ func TestDeleteHandlers(t *testing.T) {
 			store.On("DeleteUser", mock.Anything, "user1").Return(nil).Once()
 
 			req := httptest.NewRequest(http.MethodPost, "/api/delete/user", nil)
+			ctx, logBuf := captureJSONLogs(req.Context())
+			req = req.WithContext(ctx)
 			req = withUser(req, user)
 			w := httptest.NewRecorder()
 
 			s.handleDeleteUser(w, req)
 			assert.Equal(t, http.StatusOK, w.Code)
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventUserDeleted); assert.True(t, ok) {
+				assert.Equal(t, "user1", entry["userID"])
+			}
 
 			var resp map[string]string
 			err := json.NewDecoder(w.Body).Decode(&resp)
@@ -351,11 +362,16 @@ func TestDeleteHandlers(t *testing.T) {
 			store.On("DeleteInterest", mock.Anything, "user1@example.com").Return(nil).Once()
 
 			req := httptest.NewRequest(http.MethodPost, "/api/delete/user", nil)
+			ctx, logBuf := captureJSONLogs(req.Context())
+			req = req.WithContext(ctx)
 			req = withUser(req, user)
 			w := httptest.NewRecorder()
 
 			s.handleDeleteUser(w, req)
 			assert.Equal(t, http.StatusOK, w.Code)
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventUserDeleted); assert.True(t, ok) {
+				assert.Equal(t, "user1", entry["userID"])
+			}
 			store.AssertExpectations(t)
 		})
 	})

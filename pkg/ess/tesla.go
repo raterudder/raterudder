@@ -64,6 +64,7 @@ func configuredBaseTesla() *baseTesla {
 	lflag.JSON(&teslaBaseURLs, "tesla-base-urls", teslaBaseURLs, "JSON map of Region to Base URL for the Tesla API")
 
 	b := baseTesla{
+		baseURLs: teslaBaseURLs,
 		tokenURL: "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token",
 		authURL:  "https://auth.tesla.com/oauth2/v3/authorize",
 		client:   common.HTTPClient(10 * time.Second),
@@ -386,7 +387,7 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 			if len(body) > 256 {
 				body = body[:256]
 			}
-			log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
+			log.Ctx(req.Context()).WarnContext(req.Context(), "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
 			return fmt.Errorf("failed to decode tesla response: %w", err)
 		}
 	}
@@ -442,6 +443,7 @@ type Tesla struct {
 	base                  *baseTesla
 	settings              types.Settings
 	mu                    sync.Mutex
+	credMu                sync.RWMutex
 	token                 string
 	cachedRefreshToken    string
 	cachedExpiry          time.Time
@@ -529,7 +531,9 @@ func (b *Tesla) applyRedeemedRefreshToken(creds *types.TeslaCredentials) bool {
 }
 
 func (b *Tesla) cacheRedeemedRefresh(prevRefreshToken string, creds *types.TeslaCredentials) {
+	b.credMu.Lock()
 	b.token = creds.AccessToken
+	b.credMu.Unlock()
 	b.cachedRefreshToken = creds.RefreshToken
 	b.cachedExpiry = creds.Expiry
 	b.cachedRegion = creds.Region
@@ -574,9 +578,11 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		creds.Tesla.Expiry = b.currentTime().Add(time.Duration(res.ExpiresIn) * time.Second)
 		creds.Tesla.AuthCode = "" // clear it so we don't try again
 		creds.Tesla.Region = region
+		b.credMu.Lock()
 		b.baseURL = baseURL
-		b.redeemedRefreshTokens = nil
 		b.token = res.AccessToken
+		b.credMu.Unlock()
+		b.redeemedRefreshTokens = nil
 		b.cachedRefreshToken = res.RefreshToken
 		b.cachedExpiry = creds.Tesla.Expiry
 		b.cachedRegion = region
@@ -589,7 +595,9 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		if err != nil {
 			return creds, false, fmt.Errorf("failed to get base URL: %w", err)
 		}
+		b.credMu.Lock()
 		b.baseURL = baseURL
+		b.credMu.Unlock()
 
 		if b.applyRedeemedRefreshToken(creds.Tesla) {
 			log.Ctx(ctx).DebugContext(ctx, "reusing cached rotated tesla credentials for already-redeemed refresh token")
@@ -618,7 +626,9 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			refreshed = true
 		} else {
 			// use the existing token
+			b.credMu.Lock()
 			b.token = creds.Tesla.AccessToken
+			b.credMu.Unlock()
 			b.cachedRefreshToken = creds.Tesla.RefreshToken
 			b.cachedExpiry = creds.Tesla.Expiry
 			b.cachedRegion = creds.Tesla.Region
@@ -638,7 +648,9 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			changed = true
 		}
 
+		b.credMu.Lock()
 		b.energySiteID = creds.Tesla.EnergySiteID
+		b.credMu.Unlock()
 
 		// Verify token works by fetching site info and live status
 		if _, err := b.getSiteInfoWithCache(ctx, true); err != nil {
@@ -698,7 +710,11 @@ func (b *Tesla) refreshToken(ctx context.Context, baseURL, refreshToken string) 
 }
 
 func (b *Tesla) getCalendarHistory(ctx context.Context, kind string, start, end time.Time, loc *time.Location, tz string, dest any) error {
-	path := fmt.Sprintf("api/1/energy_sites/%d/calendar_history", b.energySiteID)
+	b.credMu.RLock()
+	energySiteID := b.energySiteID
+	b.credMu.RUnlock()
+
+	path := fmt.Sprintf("api/1/energy_sites/%d/calendar_history", energySiteID)
 	params := url.Values{}
 	params.Set("kind", kind)
 	params.Set("period", "day")
@@ -709,7 +725,12 @@ func (b *Tesla) getCalendarHistory(ctx context.Context, kind string, start, end 
 }
 
 func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values, dest any) error {
-	req, err := b.base.newGETRequest(ctx, "GET", path, b.token, b.baseURL)
+	b.credMu.RLock()
+	token := b.token
+	baseURL := b.baseURL
+	b.credMu.RUnlock()
+
+	req, err := b.base.newGETRequest(ctx, "GET", path, token, baseURL)
 	if err != nil {
 		return err
 	}
@@ -736,7 +757,7 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 		if len(body) > 256 {
 			body = body[:256]
 		}
-		log.Ctx(ctx).ErrorContext(ctx, "failed to decode tesla envelope", slog.Any("error", err), slog.String("body", string(body)))
+		log.Ctx(ctx).WarnContext(ctx, "failed to decode tesla envelope", slog.Any("error", err), slog.String("body", string(body)))
 		return fmt.Errorf("failed to decode tesla envelope: %w", err)
 	}
 
@@ -749,7 +770,7 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 			if len(body) > 512 {
 				body = body[:512]
 			}
-			log.Ctx(ctx).ErrorContext(ctx, "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
+			log.Ctx(ctx).WarnContext(ctx, "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
 			return fmt.Errorf("failed to decode tesla response: %w", err)
 		}
 	}
@@ -780,7 +801,11 @@ func (b *Tesla) getDefaultSiteID(ctx context.Context, serialNumber string) (int6
 	return 0, fmt.Errorf("no energy site found")
 }
 func (b *Tesla) getSiteInfo(ctx context.Context) (teslaSiteInfoResponse, error) {
-	siteInfoPath := fmt.Sprintf("api/1/energy_sites/%d/site_info", b.energySiteID)
+	b.credMu.RLock()
+	energySiteID := b.energySiteID
+	b.credMu.RUnlock()
+
+	siteInfoPath := fmt.Sprintf("api/1/energy_sites/%d/site_info", energySiteID)
 	var siteInfo teslaSiteInfoResponse
 	for attempt := 1; attempt <= 3; attempt++ {
 		err := b.doGETRequest(ctx, siteInfoPath, nil, &siteInfo)
@@ -2158,11 +2183,11 @@ func (b *Tesla) verifyBackupReserve(
 			slog.Any("liveStatus", liveStatus),
 		)
 
-		b.mu.Lock()
+		b.credMu.RLock()
 		energySiteID := b.energySiteID
 		token := b.token
 		baseURL := b.baseURL
-		b.mu.Unlock()
+		b.credMu.RUnlock()
 
 		path := fmt.Sprintf("api/1/energy_sites/%d/backup", energySiteID)
 		payload := map[string]float64{"backup_reserve_percent": expectedReserve}
@@ -2183,12 +2208,28 @@ func (b *Tesla) verifyBackupReserve(
 // GetEnergyHistory returns the energy history for the specified period.
 func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting tesla energy history", slog.Time("start", start), slog.Time("end", end))
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	b.mu.Lock()
+	var siteInfo teslaSiteInfoResponse
+	hasCachedSiteInfo := time.Now().Before(b.siteInfoExpiry)
+	if hasCachedSiteInfo {
+		siteInfo = b.siteInfoCache
+	}
+	b.mu.Unlock()
+
+	if !hasCachedSiteInfo {
+		var err error
+		siteInfo, err = b.getSiteInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+		b.mu.Lock()
+		b.siteInfoCache = siteInfo
+		b.siteInfoExpiry = time.Now().Add(time.Minute)
+		b.mu.Unlock()
 	}
 
 	tz := siteInfo.InstallationTimeZone
@@ -2277,6 +2318,9 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 		if !current.After(endDay) {
 			var soeRes teslaSOEResponse
 			if err := b.getCalendarHistory(ctx, "soe", current, dayEnd, loc, tz, &soeRes); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
 			} else {
 				// Merge SOE data into hourly buckets

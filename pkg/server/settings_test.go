@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -3164,7 +3165,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
 			return c.Enphase != nil && c.Enphase.SessionID == "enphase-sess-1" && c.Enphase.Code == "" && c.Franklin == nil
 		})).Return(redeemedEnphase, false, nil).Once()
-		mockEnphase.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockEnphase.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
 		mockS.On("UpsertEnergyHistories", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentEnergyStatsVersion).Return(nil).Maybe()
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
@@ -4093,6 +4094,488 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, "bg-rotated-access", decFinal.Tesla.AccessToken, "background rotated access token must be preserved")
 		assert.Equal(t, "bg-rotated-refresh", decFinal.Tesla.RefreshToken, "background rotated refresh token must be preserved")
 	})
+
+	t.Run("EmitsStructuredEventsForESSUtilityAndPauseTransitions", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Franklin: &types.FranklinCredentials{Username: "u", Password: "p"},
+		}, true, nil).Once()
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+
+		mockU := &mockUtility{}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		// 1. First time ESS + Utility configured
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		expectUpdateSettings(mockS, mock.Anything, types.SiteIDNone, types.Settings{}, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummaries", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+		utilMap := utility.NewMap(mockS)
+		utilMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			utilities:     utilMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		body1, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                "franklin",
+				UtilityProvider:    "comed",
+				UtilityRate:        "comed_bes",
+				SolarTrendRatioMax: 1.5,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{Username: "u", Password: "p"},
+			},
+		})
+		require.NoError(t, err)
+
+		ctx1, logBuf1 := captureJSONLogs(context.Background())
+		req1 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(body1)).WithContext(ctx1), "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusOK, w1.Result().StatusCode, w1.Body.String())
+
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventESSConnected); assert.True(t, ok) {
+			assert.Equal(t, "franklin", entry["ess"])
+		}
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventUtilityConfigured); assert.True(t, ok) {
+			assert.Equal(t, "comed", entry["utilityProvider"])
+			assert.Equal(t, "comed_bes", entry["utilityRate"])
+		}
+
+		// 2. Subsequent settings save with Pause=true should emit site_automation_paused and NOT re-emit ess_connected or utility_configured
+		existingConnected := types.Settings{
+			ESS:                "franklin",
+			UtilityProvider:    "comed",
+			UtilityRate:        "comed_bes",
+			SolarTrendRatioMax: 1.5,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingConnected, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		expectUpdateSettings(mockS, mock.Anything, types.SiteIDNone, existingConnected, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		pausedSettings := existingConnected
+		pausedSettings.Pause = true
+		body2, err := json.Marshal(pausedSettings)
+		require.NoError(t, err)
+
+		ctx2, logBuf2 := captureJSONLogs(context.Background())
+		req2 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(body2)).WithContext(ctx2), "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		_, hasESS := findLoggedEvent(t, logBuf2.String(), eventESSConnected)
+		assert.False(t, hasESS, "ess_connected should only emit on first ESS connection")
+		_, hasUtil := findLoggedEvent(t, logBuf2.String(), eventUtilityConfigured)
+		assert.False(t, hasUtil, "utility_configured should only emit on first utility configuration")
+		_, hasPaused := findLoggedEvent(t, logBuf2.String(), eventSiteAutomationPaused)
+		assert.True(t, hasPaused, "expected site_automation_paused event")
+	})
+
+	t.Run("Windowed Backfill Saves Completed 5Day Windows Within Settings Sync Timeout", func(t *testing.T) {
+		now := time.Now().UTC()
+		const testSyncTimeout = 2600 * time.Millisecond
+
+		origTransport := http.DefaultTransport
+		t.Cleanup(func() {
+			http.DefaultTransport = origTransport
+		})
+
+		teslaHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"nameplate_energy":       13500.0,
+						"installation_time_zone": "UTC",
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 80.0,
+						"grid_status":        "Active",
+					},
+				})
+			case "/api/1/energy_sites/1234/calendar_history":
+				// 120ms per Tesla call + rate.Limit(4) burst 4: Window 1 (11 calls) finishes in ~1.58s (< 2.6s), while 3 windows (31 calls > 3.7s) times out.
+				select {
+				case <-time.After(120 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				startParam := r.URL.Query().Get("start_date")
+				parsedStart, err := time.Parse(time.RFC3339, startParam)
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if r.URL.Query().Get("kind") == "energy" {
+					ts := parsedStart.Add(time.Hour)
+					if ts.After(now) {
+						ts = parsedStart
+					}
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"time_series": []map[string]any{
+								{
+									"timestamp":                           ts.Format(time.RFC3339),
+									"solar_energy_exported":               1000.0,
+									"consumer_energy_imported_from_solar": 1000.0,
+								},
+							},
+						},
+					})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"time_series": []any{}}})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+
+		franklinHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/getDeviceCompositeInfo":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":  80.0,
+							"mode": 20.0,
+						},
+					},
+				})
+			case "/hes-gateway/terminal/getDeviceInfoV2":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"zoneInfo": "UTC"}})
+			case "/api-energy/power/getFhpPowerByDay":
+				// 220ms per Franklin call + rate.Limit(4) burst 4: Window 1 (6 calls) finishes in ~1.32s (< 2.6s), while 15 days (17 calls > 3.7s) times out.
+				select {
+				case <-time.After(220 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				dayTime := r.URL.Query().Get("dayTime")
+				dayParsed, err := time.Parse("2006-01-02", dayTime)
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				nextDay := dayParsed.AddDate(0, 0, 1).Format("2006-01-02")
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"deviceTimeArray":     []string{dayTime + " 00:00:00", dayTime + " 00:05:00", dayTime + " 23:55:00", nextDay + " 00:00:00"},
+						"socArray":            []float64{50.0, 52.0, 58.0, 60.0},
+						"powerSolarHomeArray": []float64{12.0, 12.0, 12.0, 12.0},
+						"powerFhpHomeArray":   []float64{0.0, 0.0, 0.0, 0.0},
+						"powerSolarGirdArray": []float64{0.0, 0.0, 0.0, 0.0},
+						"powerSolarFhpArray":  []float64{0.0, 0.0, 0.0, 0.0},
+						"powerGirdFhpArray":   []float64{0.0, 0.0, 0.0, 0.0},
+						"powerGirdHomeArray":  []float64{0.0, 0.0, 0.0, 0.0},
+						"powerFhpGirdArray":   []float64{0.0, 0.0, 0.0, 0.0},
+					},
+				})
+			default:
+				http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			}
+		})
+
+		http.DefaultTransport = syncTestRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.Host {
+			case "fleet-api.prd.na.vn.cloud.tesla.com":
+				rec := httptest.NewRecorder()
+				teslaHandler.ServeHTTP(rec, r)
+				if err := r.Context().Err(); err != nil {
+					return nil, err
+				}
+				return rec.Result(), nil
+			case "energy.franklinwh.com":
+				rec := httptest.NewRecorder()
+				franklinHandler.ServeHTTP(rec, r)
+				if err := r.Context().Err(); err != nil {
+					return nil, err
+				}
+				return rec.Result(), nil
+			default:
+				return origTransport.RoundTrip(r)
+			}
+		})
+
+		configuredESS := ess.Configured()
+
+		var wg sync.WaitGroup
+		var teslaSavedBatches [][]types.DailyEnergyStats
+		var franklinSavedBatches [][]types.DailyEnergyStats
+		var teslaWarnBuf, franklinWarnBuf bytes.Buffer
+		var teslaStatus, franklinStatus int
+
+		wg.Add(2)
+
+		// Run Tesla and Franklin settings backfills concurrently under testSyncTimeout
+		go func() {
+			defer wg.Done()
+			var mu sync.Mutex
+			mockS := &mockStorage{}
+			mockS.On("GetSettings", mock.Anything, "site-tesla-30s").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			expectUpdateSettings(mockS, mock.Anything, "site-tesla-30s", types.Settings{}, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-tesla-30s").Return(time.Time{}, 0, nil).Once()
+			mockS.On("UpsertEnergyHistories", mock.Anything, "site-tesla-30s", mock.Anything, types.CurrentEnergyStatsVersion).Run(func(args mock.Arguments) {
+				mu.Lock()
+				defer mu.Unlock()
+				batch := append([]types.DailyEnergyStats(nil), args.Get(2).([]types.DailyEnergyStats)...)
+				teslaSavedBatches = append(teslaSavedBatches, batch)
+			}).Return(nil)
+			mockS.On("GetEnergyHistory", mock.Anything, "site-tesla-30s", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+			mockS.On("GetWeather", mock.Anything, "site-tesla-30s", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+			mockS.On("GetActionHistory", mock.Anything, "site-tesla-30s", mock.Anything, mock.Anything).Return([]types.Action{}, nil).Maybe()
+			mockS.On("UpdateHistorySummary", mock.Anything, "site-tesla-30s", mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+			srv := &Server{
+				storage:             mockS,
+				ess:                 configuredESS,
+				utilities:           utility.NewMap(mockS),
+				bypassAuth:          true,
+				encryptionKey:       "test-secret-key-1234567890123456",
+				nowFunc:             func() time.Time { return now },
+				settingsSyncTimeout: testSyncTimeout,
+			}
+
+			bodyBytes, _ := json.Marshal(struct {
+				types.Settings
+				Credentials *types.Credentials `json:"credentials"`
+			}{
+				Settings: types.Settings{
+					ESS:                      "tesla",
+					MinBatterySOC:            20,
+					SolarTrendRatioMax:       3,
+					SolarBellCurveMultiplier: 1,
+					CustomGridSettings:       true,
+				},
+				Credentials: &types.Credentials{
+					Tesla: &types.TeslaCredentials{
+						Region:       "NA",
+						AccessToken:  "valid-tesla-access",
+						RefreshToken: "valid-tesla-refresh",
+						Expiry:       now.Add(2 * time.Hour),
+						EnergySiteID: 1234,
+					},
+				},
+			})
+
+			ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&teslaWarnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			ctx = context.WithValue(ctx, siteIDContextKey, "site-tesla-30s")
+			ctx = context.WithValue(ctx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(ctx)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSettings(w, req)
+			teslaStatus = w.Result().StatusCode
+		}()
+
+		go func() {
+			defer wg.Done()
+			var mu sync.Mutex
+			mockS := &mockStorage{}
+			mockS.On("GetSettings", mock.Anything, "site-franklin-30s").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			expectUpdateSettings(mockS, mock.Anything, "site-franklin-30s", types.Settings{}, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-franklin-30s").Return(time.Time{}, 0, nil).Once()
+			mockS.On("UpsertEnergyHistories", mock.Anything, "site-franklin-30s", mock.Anything, types.CurrentEnergyStatsVersion).Run(func(args mock.Arguments) {
+				mu.Lock()
+				defer mu.Unlock()
+				batch := append([]types.DailyEnergyStats(nil), args.Get(2).([]types.DailyEnergyStats)...)
+				franklinSavedBatches = append(franklinSavedBatches, batch)
+			}).Return(nil)
+			mockS.On("GetEnergyHistory", mock.Anything, "site-franklin-30s", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+			mockS.On("GetWeather", mock.Anything, "site-franklin-30s", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+			mockS.On("GetActionHistory", mock.Anything, "site-franklin-30s", mock.Anything, mock.Anything).Return([]types.Action{}, nil).Maybe()
+			mockS.On("UpdateHistorySummary", mock.Anything, "site-franklin-30s", mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+			srv := &Server{
+				storage:             mockS,
+				ess:                 configuredESS,
+				utilities:           utility.NewMap(mockS),
+				bypassAuth:          true,
+				encryptionKey:       "test-secret-key-1234567890123456",
+				nowFunc:             func() time.Time { return now },
+				settingsSyncTimeout: testSyncTimeout,
+			}
+
+			bodyBytes, _ := json.Marshal(struct {
+				types.Settings
+				Credentials *types.Credentials `json:"credentials"`
+			}{
+				Settings: types.Settings{
+					ESS:                      "franklin",
+					MinBatterySOC:            20,
+					SolarTrendRatioMax:       3,
+					SolarBellCurveMultiplier: 1,
+					CustomGridSettings:       true,
+				},
+				Credentials: &types.Credentials{
+					Franklin: &types.FranklinCredentials{
+						Username:    "owner@example.com",
+						MD5Password: "md5password",
+						GatewayID:   "gw-1",
+						Token:       "valid-franklin-token",
+					},
+				},
+			})
+
+			ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&franklinWarnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			ctx = context.WithValue(ctx, siteIDContextKey, "site-franklin-30s")
+			ctx = context.WithValue(ctx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(ctx)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSettings(w, req)
+			franklinStatus = w.Result().StatusCode
+		}()
+
+		wg.Wait()
+
+		assert.Equal(t, http.StatusOK, teslaStatus)
+		assert.GreaterOrEqual(t, len(teslaSavedBatches), 1, "Tesla must persist at least one 5-day window before settingsSyncTimeout")
+		if len(teslaSavedBatches) > 0 {
+			assert.Len(t, teslaSavedBatches[0], 5)
+		}
+		teslaLogs := strings.Split(strings.TrimSpace(teslaWarnBuf.String()), "\n")
+		if assert.Len(t, teslaLogs, 1, "Tesla settings backfill timeout must emit 1 WARN and 0 ERROR logs") {
+			assert.Contains(t, teslaLogs[0], `"level":"WARN"`)
+			assert.NotContains(t, teslaLogs[0], `"level":"ERROR"`)
+		}
+
+		assert.Equal(t, http.StatusOK, franklinStatus)
+		assert.GreaterOrEqual(t, len(franklinSavedBatches), 1, "Franklin must persist at least one 5-day window before settingsSyncTimeout")
+		if len(franklinSavedBatches) > 0 {
+			assert.Len(t, franklinSavedBatches[0], 5, "Franklin 5-day window must filter out lookahead day beyond endDay")
+		}
+		franklinLogs := strings.Split(strings.TrimSpace(franklinWarnBuf.String()), "\n")
+		if assert.NotEmpty(t, franklinLogs, "Franklin settings backfill timeout must emit WARN and 0 ERROR logs") {
+			for _, line := range franklinLogs {
+				assert.Contains(t, line, `"level":"WARN"`)
+				assert.NotContains(t, line, `"level":"ERROR"`)
+			}
+			assert.Contains(t, franklinWarnBuf.String(), "failed to sync energy history after settings update")
+		}
+	})
+
+	t.Run("NonFatal Weather Energy And Price Sync Failures In HandleUpdateSettings Emit Warn And Zero Error Logs", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSettings", mock.Anything, "site-settings-warn").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		expectUpdateSettings(mockS, mock.Anything, "site-settings-warn", types.Settings{}, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Maybe()
+		mockS.On("GetLatestWeatherTime", mock.Anything, "site-settings-warn").Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-settings-warn").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-settings-warn").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, "site-settings-warn", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, "site-settings-warn", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetActionHistory", mock.Anything, "site-settings-warn", mock.Anything, mock.Anything).Return([]types.Action{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, "site-settings-warn", mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+		mockW := &mockWeather{}
+		mockW.On("Location", mock.Anything, "US", "90210").Return(types.SiteLocation{
+			PostalCode:  "90210",
+			CountryCode: "US",
+			Latitude:    34.07,
+			Longitude:   -118.40,
+			TimeZone:    "America/Los_Angeles",
+		}, nil).Once()
+		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, fmt.Errorf("weather api returned status 503")).Times(2)
+
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Franklin: &types.FranklinCredentials{Username: "u@example.com", Token: "tok"},
+		}, false, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, fmt.Errorf("upstream 502")).Once()
+
+		essMap := ess.NewMap()
+		essMap.SetSystem("site-settings-warn", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, fmt.Errorf("utility 503")).Once()
+
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider("site-settings-warn", mockU)
+
+		srv := &Server{
+			storage:           mockS,
+			weather:           mockW,
+			ess:               essMap,
+			utilities:         uMap,
+			bypassAuth:        true,
+			encryptionKey:     "test-secret-key-1234567890123456",
+			weatherRetryDelay: time.Millisecond,
+		}
+
+		bodyBytes, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                      "franklin",
+				UtilityProvider:          "mock",
+				CountryCode:              "US",
+				PostalCode:               "90210",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username: "u@example.com",
+					Password: "secret",
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		ctx = context.WithValue(ctx, siteIDContextKey, "site-settings-warn")
+		ctx = context.WithValue(ctx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(ctx)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+		if assert.Len(t, lines, 4, "weather (retry + final), energy, and price non-fatal sync failures must emit 4 WARNs and 0 ERRORs") {
+			for _, line := range lines {
+				assert.Contains(t, line, `"level":"WARN"`)
+				assert.NotContains(t, line, `"level":"ERROR"`)
+			}
+		}
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {
@@ -4983,5 +5466,66 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 		}
 		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
 		assert.ErrorContains(t, err, "missing minimum battery SOC for utility period name:")
+	})
+
+	t.Run("RateBasedMinSOC_PartialDaySiteFees_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.Configured(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod: types.TimePeriod{
+						Name:  "Peak",
+						Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+					},
+					DollarsPerKWH: 0.15,
+				},
+			},
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "configured utility has no TOU rate periods for rate-based minimum SOC")
+	})
+
+	t.Run("RateBasedMinSOC_MixedNamedAndUnnamed_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.NewMap(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_e_tou_c",
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+				{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}}, MinBatterySOC: 20.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "all reserve SOC periods must specify a utility period name")
+	})
+
+	t.Run("RateBasedMinSOC_AmerenMOOptionB_Valid", func(t *testing.T) {
+		mockUMap := utility.Configured(nil)
+		sTest := &Server{
+			utilities: mockUMap,
+			nowFunc:   func() time.Time { return time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC) },
+		}
+		s := types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_mo_overnight",
+			UtilityRateOptions: types.UtilityRateOptions{
+				PeakPeriodOption: "option_b",
+			},
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 15.0},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 30.0},
+				{UtilityPeriodName: "Anytime", MinBatterySOC: 20.0},
+			},
+		}
+		minSOC, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		require.NoError(t, err)
+		assert.Equal(t, 15.0, minSOC)
 	})
 }

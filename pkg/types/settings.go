@@ -383,7 +383,7 @@ func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.L
 				return p.MinBatterySOC
 			}
 		}
-		log.Ctx(ctx).ErrorContext(
+		log.Ctx(ctx).WarnContext(
 			ctx,
 			"no min battery SOC period found matching utility period name",
 			slog.Any("price", price),

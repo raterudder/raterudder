@@ -818,7 +818,7 @@ func redirectURIMatches(ctx context.Context, registeredURIs []string, requestedU
 
 func isLoopbackRedirectURI(rawURI string) bool {
 	u, err := url.Parse(rawURI)
-	if err != nil || u.Scheme != "http" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
@@ -859,7 +859,7 @@ func (s *Server) validateOAuthAuthorizeParams(ctx context.Context, clientID, red
 	if client.Verified && client.ClientDomain != "" {
 		expectedOrigin := "https://" + client.ClientDomain
 		if !isLoopbackRedirectURI(redirectURI) && normalizedOrigin(redirectURI) != expectedOrigin {
-			log.Ctx(ctx).WarnContext(
+			log.Ctx(ctx).DebugContext(
 				ctx,
 				"oauth cimd redirect_uri origin differs from client domain",
 				slog.String("clientID", clientID),
@@ -1358,7 +1358,14 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "redeemed oauth authorization code", slog.String("userID", codeData.UserID), slog.String("siteID", redeemedApp.SiteID), slog.String("appID", redeemedApp.ID))
+	log.Ctx(ctx).InfoContext(ctx, "redeemed oauth authorization code",
+		slog.String("event", eventAppConnected),
+		slog.String("userID", codeData.UserID),
+		slog.String("siteID", redeemedApp.SiteID),
+		slog.String("appID", redeemedApp.ID),
+		slog.String("appName", redeemedApp.Name),
+		slog.String("appType", "oauth"),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

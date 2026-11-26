@@ -240,7 +240,7 @@ textarea:focus-visible,
   color: var(--on-surface);
 }
 
-.auth-card p:first-of-type {
+.auth-card > p:first-of-type {
   color: var(--on-surface-variant);
   margin-bottom: 2.5rem;
   font-size: 1rem;

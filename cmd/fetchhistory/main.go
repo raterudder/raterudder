@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,7 +18,6 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"slices"
 )
 
 func main() {
@@ -266,6 +267,8 @@ func fetchAndSaveEnergyDataset(ctx context.Context, db storage.Database, sID str
 		tz = "America/Chicago"
 	}
 
+	anonymizeWeatherCoordinates(dedupWeather)
+
 	dataset := controller.EnergyHistoryDataset{
 		SiteID:            fmt.Sprintf("site%d", siteNum),
 		Period:            period,
@@ -361,4 +364,15 @@ func getOrAssignSiteNumber(ctx context.Context, client *firestore.Client, siteID
 		return 0, err
 	}
 	return siteNum, nil
+}
+
+func roundCoordinate(coord float64) float64 {
+	return math.Round(coord*100) / 100
+}
+
+func anonymizeWeatherCoordinates(weather []types.Weather) {
+	for i := range weather {
+		weather[i].Latitude = roundCoordinate(weather[i].Latitude)
+		weather[i].Longitude = roundCoordinate(weather[i].Longitude)
+	}
 }

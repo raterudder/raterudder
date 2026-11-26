@@ -1326,6 +1326,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		directEnergyUtilityInfo(),
 		austinEnergyUtilityInfo(),
 		smudUtilityInfo(),
+		dteUtilityInfo(),
+		nvEnergyUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)

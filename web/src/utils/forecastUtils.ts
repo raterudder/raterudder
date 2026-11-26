@@ -33,6 +33,8 @@ export function isSolarPoweredFlatPeriod(p: PlanPeriod): boolean {
     return (p.startSoc >= 98 && p.endSoc >= 98) || (solarKWH > 0 && solarKWH >= loadKWH);
 }
 
+const MIN_SOLAR_CHARGE_RUN_SOC_GAIN = 2;
+
 export function classifyPlanPeriod(p: PlanPeriod): ZoneConfig {
     // 1. Forced grid charge
     if (p.batteryMode === BatteryMode.ChargeAny) {
@@ -49,16 +51,58 @@ export function classifyPlanPeriod(p: PlanPeriod): ZoneConfig {
     // 4. Solar export: solar exporting while battery covers load (direct export)
     const isSolarExport =
         (p.solarMode === SolarMode.Export || p.reason === ActionReason.DirectExport) &&
-        (p.batteryMode === BatteryMode.Load || p.endSoc < p.startSoc - 0.1);
+        p.batteryMode === BatteryMode.Load;
     if (isSolarExport) {
         return ALL_ZONES.find((z) => z.key === 'solarExport')!;
     }
-    // 5. Discharging to power home or running on solar while battery is full/steady in Load mode
-    if (p.endSoc < p.startSoc - 0.1 || isSolarPoweredFlatPeriod(p)) {
+    // 5. Discharging to power home or running on solar while battery is full/steady in Load mode.
+    //    Standby periods with falling SOC (e.g., cold-morning battery heater warmup or self-discharge)
+    //    are passive effects rather than discharging to power the home, so they remain Standby.
+    if (
+        (p.batteryMode === BatteryMode.Load && p.endSoc < p.startSoc - 0.1) ||
+        isSolarPoweredFlatPeriod(p)
+    ) {
         return ALL_ZONES.find((z) => z.key === 'poweringHome')!;
     }
-    // 6. Standby (includes holding at reserve or flat SOC)
+    // 6. Standby (includes holding at reserve, flat SOC, or passive standby/heater drain)
     return ALL_ZONES.find((z) => z.key === 'standby')!;
+}
+
+/**
+ * Classifies a sequence of plan periods and demotes negligible solar-charge runs
+ * (contiguous solarCharge stretches gaining less than MIN_SOLAR_CHARGE_RUN_SOC_GAIN%)
+ * back to their underlying action mode (Standby, or Powering Home when in Load mode)
+ * so tiny solar trickles do not create spurious blips on the chart or summary beats.
+ */
+export function classifyPlanPeriods(periods: PlanPeriod[]): ZoneConfig[] {
+    const zones = periods.map((p) => classifyPlanPeriod(p));
+    const standbyZone = ALL_ZONES.find((z) => z.key === 'standby')!;
+    const poweringHomeZone = ALL_ZONES.find((z) => z.key === 'poweringHome')!;
+
+    let i = 0;
+    while (i < zones.length) {
+        if (zones[i].key !== 'solarCharge') {
+            i++;
+            continue;
+        }
+        let j = i;
+        while (j + 1 < zones.length && zones[j + 1].key === 'solarCharge') {
+            j++;
+        }
+        const totalGain = periods[j].endSoc - periods[i].startSoc;
+        if (totalGain < MIN_SOLAR_CHARGE_RUN_SOC_GAIN) {
+            for (let k = i; k <= j; k++) {
+                const p = periods[k];
+                const isLoadActive =
+                    p.batteryMode === BatteryMode.Load &&
+                    p.reason !== ActionReason.BatteryAtReserve;
+                zones[k] = isLoadActive ? poweringHomeZone : standbyZone;
+            }
+        }
+        i = j + 1;
+    }
+
+    return zones;
 }
 
 export function truncateIsoHour(isoStr: string): string {
@@ -401,10 +445,13 @@ export function buildPlanSummaryBeats(
         return result;
     };
 
-    const rawPhases: RawPlanPhase[] = periods.map((p) => {
-        const z = classifyPlanPeriod(p);
+    const periodZones = classifyPlanPeriods(periods);
+    const rawPhases: RawPlanPhase[] = periods.map((p, idx) => {
+        const z = periodZones[idx];
         const category = zoneKeyToSummaryCategory(z.key);
-        const solarPoweredFlat = isSolarPoweredFlatPeriod(p);
+        const solarPoweredFlat =
+            isSolarPoweredFlatPeriod(p) ||
+            (z.key === 'poweringHome' && p.endSoc >= p.startSoc - 0.1);
         const durHours =
             p.durationHours > 0
                 ? p.durationHours

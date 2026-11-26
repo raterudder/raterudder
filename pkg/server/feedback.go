@@ -70,6 +70,13 @@ func (s *Server) handleSubmitFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Ctx(ctx).InfoContext(ctx, "feedback submitted",
+		slog.String("event", eventFeedbackSubmitted),
+		slog.String("userID", user.ID),
+		slog.String("siteID", siteID),
+		slog.String("sentiment", req.Sentiment),
+	)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {

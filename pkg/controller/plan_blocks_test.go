@@ -1512,6 +1512,55 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		assert.False(t, isBlockActionAllowed(0, blockCheap, blockActionChoice{actionType: blockActionCharge, targetSOC: 100.0}, blocks, state98, nil, 0.40, settings, types.SystemStatus{}, baseTimeline, nil),
 			"98.0%% SOC on a 20%% reserve block must still be pruned by almostFullSOC")
 	})
+
+	t.Run("Charge_LearnedBatteryOverheadTriggersDeficitGate", func(t *testing.T) {
+		t.Parallel()
+		// Configure an arbitrage hurdle ($0.10) higher than the $0.06 price spread ($0.20 -> $0.26),
+		// while the deficit-avoidance gate (gridChargePerKWH = $0.02) IS cleared by $0.06.
+		// Battery has 45% SOC on 30 kWh with 20% reserve -> 7.5 kWh usable nominal.
+		// Downstream 8h peak block has netSolarKWH = -6.8 kWh:
+		// - Baseline (sqrt(0.90)=0.9487, 0W overhead): usable AC = 7.5 * 0.9487 = 7.115 kWh > 6.8 kWh -> no deficit -> pruned!
+		// - Learned (DischargeEff=0.85, DischargeFixedKW=0.15 kW): usable AC = (7.5 - 8*0.15) * 0.85 = 5.355 kWh < 6.8 kWh -> deficit -> allowed!
+		defSettings := settings
+		defSettings.MinArbitrageDifferenceDollarsPerKWH = 0.10
+		bOff := timelineBlock{
+			startIdx:      0,
+			endIdx:        2,
+			durationHours: 1.0,
+			minSOC:        20.0,
+			minImportRate: 0.20,
+			maxImportRate: 0.20,
+			netSolarKWH:   0.0,
+		}
+		bPeak := timelineBlock{
+			startIdx:             3,
+			endIdx:               26,
+			durationHours:        8.0,
+			minSOC:               20.0,
+			minImportRate:        0.26,
+			maxImportRate:        0.26,
+			maxBatteryExportRate: 0.05,
+			netSolarKWH:          -6.8,
+			isHighestPrice:       true,
+		}
+		pairBlocks := []timelineBlock{bOff, bPeak}
+		cand := blockActionChoice{actionType: blockActionCharge, targetSOC: 80.0}
+
+		baseState := planState{soc: 45.0, capacityKWH: 30.0, time: now}
+		assert.False(t, isBlockActionAllowed(0, bOff, cand, pairBlocks, baseState, nil, 0.20, defSettings, types.SystemStatus{}, baseTimeline, nil),
+			"baseline efficiency should not hit deficit and must be pruned by $0.10 arbitrage gate")
+
+		learnedState := baseState
+		learnedState.batteryModel = BatteryModel{
+			EffectiveCapacityKWH: 30.0,
+			DischargeEff:         0.85,
+			DischargeFixedKW:     0.15,
+			ChargeEff:            0.90,
+			Source:               "learned",
+		}
+		assert.True(t, isBlockActionAllowed(0, bOff, cand, pairBlocks, learnedState, nil, 0.20, defSettings, types.SystemStatus{}, baseTimeline, nil),
+			"learned discharge overhead must flip willHitDeficit=true and unlock deficit-avoidance charging")
+	})
 }
 
 func TestValidateCandidateTrajectory(t *testing.T) {
@@ -3289,7 +3338,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				DollarsPerKWH: 0.20754,
 			},
 		}
-		postHorizon := c.buildPostHorizonValuation(ctx, timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil, nil)
+		postHorizon := c.buildPostHorizonValuation(timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
 		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil, nil)
 		require.NotNil(t, pathStandby)
 		require.Len(t, pathStandby.actions, 72)
@@ -4691,7 +4740,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			BatterySOC:         30.0,
 		}
 		vppEvents := extractVPPAnchors(t0100, status0100, settings)
-		postHorizon := c.buildPostHorizonValuation(ctx, timeline, nil, settings, status0100, nil, nil)
+		postHorizon := c.buildPostHorizonValuation(timeline, nil, settings, status0100, nil)
 		pathAtStart := c.searchOptimalPlanBlocks(ctx, timeline, initial, vppEvents, postHorizon, settings, status0100, nil, nil)
 		if assert.Len(t, pathAtStart.actions, 4) {
 			assert.Equal(t, types.BatteryModeChargeAny, pathAtStart.actions[1].batteryMode,

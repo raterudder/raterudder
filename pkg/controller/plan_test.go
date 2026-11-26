@@ -887,7 +887,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		expectedEnd1600 := time.Date(2026, 6, 16, 20, 0, 0, 0, chicagoLoc)
 		assert.Equal(t, expectedEnd1600, tl1600[len(tl1600)-1].endTime,
 			"When 24h lands mid-peak (16:00 Day 2), horizon must extend to 1 hour after Peak (20:00 Day 2 = 28h)")
-		ph1600 := c.buildPostHorizonValuation(ctx, tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600, nil)
+		ph1600 := c.buildPostHorizonValuation(tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600)
 		assert.InDelta(t, 0.10, ph1600.knownPostHorizonRate, 0.001,
 			"Post-horizon valuation after extending past Day 2 Peak must see purely Off-Peak ($0.10/kWh) rates")
 
@@ -947,219 +947,6 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		assert.Equal(t, 24, plan1600.HorizonHours, "Returned Plan.HorizonHours must be truncated to 24 hours")
 		assert.Equal(t, t1600.Add(24*time.Hour), plan1600.Periods[len(plan1600.Periods)-1].TSEnd,
 			"Returned Plan.Periods must be truncated at now + 24h (16:00 Day 2)")
-	})
-
-	t.Run("PeakP75Load_ElevatesTruePeakIntervalsOnBalancedAndConservative", func(t *testing.T) {
-		t.Parallel()
-
-		runNow := time.Date(2026, 6, 15, 12, 0, 0, 0, chicagoLoc)
-
-		// Build 20 days of realistic multi-day history (1.0 to 2.8 kWh/hr across days) so
-		// P50 < P55 < P70 < P75 < P80 are strictly separated without triggering EV outlier filtering.
-		var history []types.EnergyStats
-		for d := 1; d <= 20; d++ {
-			day := runNow.AddDate(0, 0, -d)
-			load := 1.0 + 0.2*float64((d-1)%10)
-			for h := 0; h < 24; h++ {
-				history = append(history, types.EnergyStats{
-					TSHourStart: time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, chicagoLoc),
-					HomeKWH:     load,
-					SolarKWH:    0.0,
-				})
-			}
-		}
-
-		// 3-tier TOU schedule: Off-Peak $0.10, Mid-Peak 14:00-16:00 $0.25, Peak 16:00-20:00 $0.45
-		touPriceAt := func(ts time.Time) types.Price {
-			h := ts.Hour()
-			rate := 0.10
-			if h >= 16 && h < 20 {
-				rate = 0.45
-			} else if h >= 14 && h < 16 {
-				rate = 0.25
-			}
-			return types.Price{
-				TSStart:       ts,
-				TSEnd:         ts.Add(time.Hour),
-				DollarsPerKWH: rate,
-			}
-		}
-
-		currentPrice := touPriceAt(runNow)
-		var futurePrices []types.Price
-		for i := 1; i < 24; i++ {
-			futurePrices = append(futurePrices, touPriceAt(runNow.Add(time.Duration(i)*time.Hour)))
-		}
-
-		status := types.SystemStatus{
-			Timestamp:          runNow,
-			BatteryCapacityKWH: 20.0,
-			BatterySOC:         20.0,
-			TimeLocation:       "America/Chicago",
-		}
-
-		balSettings := types.Settings{
-			MinBatterySOC:              20,
-			GridChargeBatteries:        true,
-			OptimizationProfile:        "balanced",
-			HomeLoadPredictionStrategy: "default",
-		}
-		findIntervalAt := func(tl []planInterval, hour int) *planInterval {
-			for i := range tl {
-				if tl[i].startTime.Day() == 15 && tl[i].startTime.Hour() == hour && tl[i].startTime.Minute() == 0 {
-					return &tl[i]
-				}
-			}
-			return nil
-		}
-
-		// With ffPeakP75Load disabled by default, Balanced peak intervals keep P55 AvgHomeLoadKWH
-		tlDefault, _, modelDefault, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, balSettings, status, nil)
-		require.NoError(t, err)
-		defaultPeak := findIntervalAt(tlDefault, 17)
-		require.NotNil(t, defaultPeak)
-		assert.InDelta(t, findTimeProfile(modelDefault, defaultPeak.startTime).AvgHomeLoadKWH*defaultPeak.durationHours, defaultPeak.loadKWH, 1e-6,
-			"Balanced peak interval must stay on P55 AvgHomeLoadKWH when peakP75Load flag is disabled")
-
-		peakCtx := ffPeakP75Load.With(ctx, true)
-		tlBal, _, modelBal, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, balSettings, status, nil)
-		require.NoError(t, err)
-
-		prof13 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 13, 0, 0, 0, chicagoLoc))
-		prof15 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 15, 0, 0, 0, chicagoLoc))
-		prof17 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 17, 0, 0, 0, chicagoLoc))
-		require.Greater(t, prof17.P75HomeLoadKWH, prof17.AvgHomeLoadKWH+0.2,
-			"test history must produce P75 materially higher than P55")
-
-		balOff := findIntervalAt(tlBal, 13)
-		balMid := findIntervalAt(tlBal, 15)
-		balPeak := findIntervalAt(tlBal, 17)
-		require.NotNil(t, balOff)
-		require.NotNil(t, balMid)
-		require.NotNil(t, balPeak)
-
-		assert.InDelta(t, prof13.AvgHomeLoadKWH*balOff.durationHours, balOff.loadKWH, 1e-6,
-			"Balanced off-peak interval must remain on P55 AvgHomeLoadKWH")
-		assert.InDelta(t, prof15.AvgHomeLoadKWH*balMid.durationHours, balMid.loadKWH, 1e-6,
-			"Balanced mid-peak/shoulder interval (> $0.03 below peak) must remain on P55 AvgHomeLoadKWH")
-		assert.InDelta(t, prof17.P75HomeLoadKWH*balPeak.durationHours, balPeak.loadKWH, 1e-6,
-			"Balanced peak interval must elevate to P75HomeLoadKWH")
-		assert.True(t, balPeak.hasBaselineLoad)
-		assert.InDelta(t, prof17.AvgHomeLoadKWH*balPeak.durationHours, balPeak.baselineLoadKWH, 1e-6,
-			"Balanced peak interval must preserve P55 baselineLoadKWH for user-facing Plan presentation")
-
-		// Conservative also elevates peak to P75 while keeping P70 off-peak
-		consSettings := balSettings
-		consSettings.OptimizationProfile = "conservative"
-		consSettings.HomeLoadPredictionStrategy = "conservative"
-		tlCons, _, modelCons, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, consSettings, status, nil)
-		require.NoError(t, err)
-		consOff := findIntervalAt(tlCons, 13)
-		consPeak := findIntervalAt(tlCons, 17)
-		require.NotNil(t, consOff)
-		require.NotNil(t, consPeak)
-		assert.InDelta(t, findTimeProfile(modelCons, consOff.startTime).AvgHomeLoadKWH*consOff.durationHours, consOff.loadKWH, 1e-6)
-		assert.InDelta(t, findTimeProfile(modelCons, consPeak.startTime).P75HomeLoadKWH*consPeak.durationHours, consPeak.loadKWH, 1e-6)
-
-		// Aggressive stays on P55 even during Peak
-		aggSettings := balSettings
-		aggSettings.OptimizationProfile = "aggressive"
-		tlAgg, _, modelAgg, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, aggSettings, status, nil)
-		require.NoError(t, err)
-		aggPeak := findIntervalAt(tlAgg, 17)
-		require.NotNil(t, aggPeak)
-		assert.InDelta(t, findTimeProfile(modelAgg, aggPeak.startTime).AvgHomeLoadKWH*aggPeak.durationHours, aggPeak.loadKWH, 1e-6,
-			"Aggressive profile must keep P55 AvgHomeLoadKWH during peak")
-
-		// Narrow spread ($0.10 vs $0.15 < $0.10 minDeficitPriceSpread) and negative midday (-$0.05 vs $0.07) must NOT trigger Peak P75
-		var negFuture []types.Price
-		negCur := types.Price{TSStart: runNow, TSEnd: runNow.Add(time.Hour), DollarsPerKWH: -0.05}
-		for i := 1; i < 24; i++ {
-			ts := runNow.Add(time.Duration(i) * time.Hour)
-			r := 0.04
-			if ts.Hour() >= 16 && ts.Hour() < 20 {
-				r = 0.07 // Only $0.07 above $0.00 (< $0.10 spread), even though $0.12 above -$0.05
-			}
-			negFuture = append(negFuture, types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: r})
-		}
-		tlNeg, _, modelNeg, err := c.buildPlanningTimeline(peakCtx, runNow, negCur, negFuture, history, nil, balSettings, status, nil)
-		require.NoError(t, err)
-		neg17 := findIntervalAt(tlNeg, 17)
-		require.NotNil(t, neg17)
-		assert.InDelta(t, findTimeProfile(modelNeg, neg17.startTime).AvgHomeLoadKWH*neg17.durationHours, neg17.loadKWH, 1e-6,
-			"Negative midday price must not cause an ordinary $0.07 evening rate to be treated as a true TOU peak")
-
-		// End-to-end Plan check at 15:00 (last $0.10 Off-Peak hour before 16:00-20:00 $0.45 Peak on a 2-tier TOU):
-		// Balanced with peakP75Load enabled must grid-charge to a higher target SOC than flag-disabled Balanced and Aggressive (P55).
-		twoTierPriceAt := func(ts time.Time) types.Price {
-			rate := 0.10
-			if ts.Hour() >= 16 && ts.Hour() < 20 {
-				rate = 0.45
-			}
-			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
-		}
-		chargeNow := time.Date(2026, 6, 15, 15, 0, 0, 0, chicagoLoc)
-		var chargeFuture []types.Price
-		for i := 1; i < 24; i++ {
-			chargeFuture = append(chargeFuture, twoTierPriceAt(chargeNow.Add(time.Duration(i)*time.Hour)))
-		}
-		chargeStatus := status
-		chargeStatus.Timestamp = chargeNow
-		chargeStatus.MaxBatteryChargeKW = 12.0
-
-		decBalOff, _, err := c.Plan(ctx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, balSettings, nil)
-		require.NoError(t, err)
-		decBal, planBal, err := c.Plan(peakCtx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, balSettings, nil)
-		require.NoError(t, err)
-		decAgg, _, err := c.Plan(peakCtx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, aggSettings, nil)
-		require.NoError(t, err)
-
-		assert.Equal(t, types.BatteryModeChargeAny, decBal.Action.BatteryMode)
-		assert.Equal(t, types.BatteryModeChargeAny, decAgg.Action.BatteryMode)
-		assert.Greater(t, decBal.Action.ChargeToSOC, decBalOff.Action.ChargeToSOC,
-			"Enabling peakP75Load must pre-charge Balanced Plan to a higher SOC than flag-disabled Balanced")
-		assert.Greater(t, decBal.Action.ChargeToSOC, decAgg.Action.ChargeToSOC,
-			"Balanced Plan must pre-charge to a higher SOC than Aggressive to cover Peak P75 home load")
-
-		// Even though planning buffered ChargeToSOC for P75, the returned Plan.Periods must present P55 baseline
-		// home load and a matching P55 SOC trajectory so the Forecast page shows realistic peak headroom.
-		var checkedPeakPeriods int
-		var endOfPeakSOC float64
-		for _, p := range planBal.Periods {
-			ts := p.TSStart.In(chicagoLoc)
-			if ts.Day() == 15 && ts.Hour() >= 16 && ts.Hour() < 20 {
-				prof := findTimeProfile(modelBal, ts)
-				assert.InDelta(t, prof.AvgHomeLoadKWH*p.DurationHours, p.LoadKWH, 1e-3,
-					"Peak PlanPeriod.LoadKWH must display P55 baseline rather than elevated P75 planning load at %s", ts.Format("15:04"))
-				assert.Less(t, p.LoadKWH, prof.P75HomeLoadKWH*p.DurationHours-0.05)
-				checkedPeakPeriods++
-				endOfPeakSOC = p.EndSOC
-			}
-		}
-		assert.Positive(t, checkedPeakPeriods)
-		assert.Greater(t, endOfPeakSOC, 22.0,
-			"Re-simulating P55 load against P75 pre-charge must display healthy end-of-peak cushion above 20%% reserve")
-
-		// Sparse history (< minPeakP75HistoryHours, e.g. single 24h day where neighbor-hour blending would distort P75)
-		// must keep AvgHomeLoadKWH even when peakP75Load is enabled.
-		var singleDayHistory []types.EnergyStats
-		prevDay := runNow.AddDate(0, 0, -1)
-		for h := 0; h < 24; h++ {
-			load := 1.0
-			if h == 16 || h == 18 {
-				load = 3.2 // Neighbor-hour loads around 17:00 on a single-day history
-			}
-			singleDayHistory = append(singleDayHistory, types.EnergyStats{
-				TSHourStart: time.Date(prevDay.Year(), prevDay.Month(), prevDay.Day(), h, 0, 0, 0, chicagoLoc),
-				HomeKWH:     load,
-			})
-		}
-		tlSparse, _, modelSparse, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, singleDayHistory, nil, balSettings, status, nil)
-		require.NoError(t, err)
-		sparse17 := findIntervalAt(tlSparse, 17)
-		require.NotNil(t, sparse17)
-		assert.InDelta(t, findTimeProfile(modelSparse, sparse17.startTime).AvgHomeLoadKWH*sparse17.durationHours, sparse17.loadKWH, 1e-6,
-			"Single-day history (< 72h) must stay on AvgHomeLoadKWH rather than elevating via neighbor-hour blending")
 	})
 
 	t.Run("StepZeroEVStandbyEvaluationCachedAndAdaptiveFallback", func(t *testing.T) {
@@ -1366,7 +1153,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			},
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil, nil)
+		ph := c.buildPostHorizonValuation(timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil)
 		// First hour import rate: 0.22 + 0.03 = 0.25
 		// Second hour import rate: 0.28 + 0.07 = 0.35
 		// Average over post-horizon rollup window: (0.25 + 0.35) / 2 = 0.30
@@ -1383,7 +1170,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 		}
 
 		// No future prices after horizon
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil, nil)
+		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
 		assert.InDelta(t, 0.14, ph.knownPostHorizonRate, 0.001, "must fall back to latest timeline rate")
 	})
 
@@ -1400,7 +1187,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5}
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel, nil)
+		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel)
 		// 4 hours * 1.5 kWh/hour = 6.0 kWh
 		if assert.Len(t, ph.postHorizonSlices, 4) {
 			var totalLoad float64
@@ -1424,7 +1211,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{TSStart: tEnd.Add(time.Hour), TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.30},     // 07:00-08:00: $0.30, netLoad 1.0
 			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(8 * time.Hour), DollarsPerKWH: 0.30}, // 08:00-14:00: $0.30, netLoad <= 0 (sunny)
 		}
-		solarPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel, nil)
+		solarPH := c.buildPostHorizonValuation(timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel)
 		if assert.Len(t, solarPH.postHorizonSlices, 2, "sunny post-horizon hours with net solar surplus must not create net load slices") {
 			assert.InDelta(t, 0.30, solarPH.postHorizonSlices[0].importRate, 1e-6, "highest-rate post-horizon net load hour must be ordered first")
 			assert.InDelta(t, 1.0, solarPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1435,7 +1222,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 		// Verify brand-new site with no energy history (BuildHourlyEnergyModel returns 24 profiles at the 0.09 kWh standby floor)
 		// falls back to defaultPostHorizonLoadKWH (6.0 kWh / 4h = 1.5 kWh/hr) paired with post-horizon rates
 		emptyModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
-		coldStartPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel, nil)
+		coldStartPH := c.buildPostHorizonValuation(timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel)
 		if assert.Len(t, coldStartPH.postHorizonSlices, 4, "brand-new site with empty energy history must still populate 4 default load slices") {
 			assert.InDelta(t, 0.30, coldStartPH.postHorizonSlices[0].importRate, 1e-6)
 			assert.InDelta(t, 1.5, coldStartPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1454,51 +1241,8 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{startTime: t0.Add(6 * time.Hour), endTime: t0.Add(8 * time.Hour), durationHours: 2.0, importRate: -0.03, loadKWH: 2.0},
 		}
 
-		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil, nil)
+		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
 		assert.Equal(t, 0.0, ph.knownPostHorizonRate, "Negative post-horizon rate must be floored at 0.0")
-	})
-
-	t.Run("PeakP75Load_ElevatesPeakPostHorizonSlicesOnBalanced", func(t *testing.T) {
-		t.Parallel()
-
-		tEnd := time.Date(2026, 7, 10, 16, 0, 0, 0, chicagoLoc)
-		timeline := []planInterval{
-			{startTime: tEnd.Add(-16 * time.Hour), endTime: tEnd.Add(-8 * time.Hour), durationHours: 8.0, importRate: 0.10},
-			{startTime: tEnd.Add(-8 * time.Hour), endTime: tEnd, durationHours: 8.0, importRate: 0.45},
-		}
-		mockModel := make([]TimeProfile, 24)
-		for h := 0; h < 24; h++ {
-			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.0, P75HomeLoadKWH: 2.2}
-		}
-		postPrices := []types.Price{
-			{TSStart: tEnd, TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.45},                    // 16:00-18:00 Peak
-			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(4 * time.Hour), DollarsPerKWH: 0.10}, // 18:00-20:00 Off-Peak
-		}
-
-		history := make([]types.EnergyStats, minPeakP75HistoryHours)
-		phBalOff := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history)
-		if assert.Len(t, phBalOff.postHorizonSlices, 4) {
-			assert.InDelta(t, 1.0, phBalOff.postHorizonSlices[0].loadKWH, 1e-6, "Flag-disabled Balanced post-horizon slices must keep AvgHomeLoadKWH")
-		}
-
-		peakCtx := ffPeakP75Load.With(ctx, true)
-		phBal := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history)
-		if assert.Len(t, phBal.postHorizonSlices, 4) {
-			assert.InDelta(t, 2.2, phBal.postHorizonSlices[0].loadKWH, 1e-6, "Balanced peak post-horizon slice must use P75HomeLoadKWH")
-			assert.InDelta(t, 2.2, phBal.postHorizonSlices[1].loadKWH, 1e-6)
-			assert.InDelta(t, 1.0, phBal.postHorizonSlices[2].loadKWH, 1e-6, "Balanced off-peak post-horizon slice must keep AvgHomeLoadKWH")
-			assert.InDelta(t, 1.0, phBal.postHorizonSlices[3].loadKWH, 1e-6)
-		}
-
-		phSparse := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel, history[:minPeakP75HistoryHours-1])
-		if assert.Len(t, phSparse.postHorizonSlices, 4) {
-			assert.InDelta(t, 1.0, phSparse.postHorizonSlices[0].loadKWH, 1e-6, "Sparse history (< 72h) Balanced post-horizon slices must keep AvgHomeLoadKWH")
-		}
-
-		phAgg := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "aggressive"}, types.SystemStatus{}, mockModel, history)
-		if assert.Len(t, phAgg.postHorizonSlices, 4) {
-			assert.InDelta(t, 1.0, phAgg.postHorizonSlices[0].loadKWH, 1e-6, "Aggressive post-horizon slices must keep AvgHomeLoadKWH")
-		}
 	})
 }
 
@@ -2312,6 +2056,251 @@ func TestStepPhysics(t *testing.T) {
 		assert.InDelta(t, 9.0, sunnyMetrics.gridChargeKWH, 1e-6, "Solar charges behind the meter while grid import uses full 9 kW cap")
 		assert.InDelta(t, 9.0, sunnyMetrics.gridImportKWH, 1e-6)
 	})
+
+	t.Run("LearnedBatteryModelAppliesDischargeOverheadAndAsymmetricEff", func(t *testing.T) {
+		bm := BatteryModel{
+			EffectiveCapacityKWH: 30.0,
+			DischargeEff:         0.85,
+			DischargeFixedKW:     0.15,
+			ChargeEff:            0.92,
+			Source:               "learned",
+		}
+		state := planState{
+			energyKWH:      18.0, // 60% SOC
+			soc:            60.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		settings := types.Settings{MinBatterySOC: 20.0}
+
+		// 1. Active BatteryModeLoad discharge subtracts load/DischargeEff + DischargeFixedKW*dHours.
+		loadInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.70, solarKWH: 0.0, minSOC: 20.0}
+		nextLoad, loadMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 1.70, loadMet.batSuppliedHomeKWH, 1e-6)
+		// Expected drain: 1.70 / 0.85 + 0.15 = 2.15 kWh -> 18.0 - 2.15 = 15.85 kWh
+		assert.InDelta(t, 15.85, nextLoad.energyKWH, 1e-6)
+		assert.Equal(t, bm, nextLoad.batteryModel, "batteryModel must propagate across simulation steps")
+
+		// 2. Solar-covered BatteryModeLoad (no active discharge) does NOT subtract DischargeFixedKW.
+		sunnyInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.0, solarKWH: 1.0, minSOC: 20.0}
+		nextSunny, sunnyMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, sunnyInt, settings, 0.90)
+		assert.Zero(t, sunnyMet.batSuppliedHomeKWH)
+		assert.InDelta(t, 18.0, nextSunny.energyKWH, 1e-6, "idle solar-covered load must not incur active-discharge fixed overhead")
+
+		// 3. Standby does NOT subtract DischargeFixedKW.
+		nextStandby, _ := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 18.0, nextStandby.energyKWH, 1e-6, "standby must not incur active-discharge fixed overhead")
+
+		// 4. BatteryModeExport with both load and grid export subtracts DischargeFixedKW once (not twice).
+		exportState := state
+		exportState.maxGridExportKW = 2.0
+		nextExp, expMet := stepPhysics(exportState, actionCandidate{
+			batteryMode: types.BatteryModeExport,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 1.70, expMet.batSuppliedHomeKWH, 1e-6)
+		assert.InDelta(t, 2.0, expMet.batExportKWH, 1e-6)
+		expectedExpDrain := (1.70+2.0)/0.85 + 0.15
+		assert.InDelta(t, 18.0-expectedExpDrain, nextExp.energyKWH, 1e-6)
+
+		// 5. BatteryModeChargeAny uses ChargeEff (0.92), distinct from DischargeEff (0.85).
+		chgInt := planInterval{durationHours: 1.0, importRate: 0.10, loadKWH: 0.0, solarKWH: 0.0, minSOC: 20.0}
+		nextChg, chgMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, chgInt, settings, 0.90)
+		assert.InDelta(t, 10.0, chgMet.gridChargeKWH, 1e-6)
+		assert.InDelta(t, 18.0+10.0*0.92, nextChg.energyKWH, 1e-6)
+	})
+
+	t.Run("LearnedBatteryModelNearReserveAndSolarCharge", func(t *testing.T) {
+		bm := BatteryModel{
+			EffectiveCapacityKWH: 30.0,
+			DischargeEff:         0.85,
+			DischargeFixedKW:     0.15,
+			ChargeEff:            0.92,
+			Source:               "learned",
+		}
+		settings := types.Settings{MinBatterySOC: 20.0} // reserve = 6.0 kWh
+
+		// 1. Usable energy (0.10 kWh) <= fixedOverheadKWH (0.15 kWh): must deliver 0 and never drop below reserve.
+		nearReserve := planState{
+			energyKWH:      6.10,
+			soc:            6.10 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		loadInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.0, solarKWH: 0.0, minSOC: 20.0}
+		nextNear, nearMet := stepPhysics(nearReserve, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.Zero(t, nearMet.batSuppliedHomeKWH)
+		assert.InDelta(t, 1.0, nearMet.gridImportKWH, 1e-6)
+		assert.InDelta(t, 6.10, nextNear.energyKWH, 1e-6, "battery must not discharge or dip below reserve when usable <= fixedOverheadKWH")
+
+		// 2. Solar charging (solarToBatKWH) uses ChargeEff (0.92) rather than DischargeEff (0.85).
+		nearFull := planState{
+			energyKWH:      28.16, // 1.84 kWh room -> requires 1.84 / 0.92 = 2.0 kWh solar to reach 30.0 kWh
+			soc:            28.16 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		solarChgInt := planInterval{durationHours: 1.0, importRate: 0.20, exportRate: 0.10, loadKWH: 1.0, solarKWH: 5.0, minSOC: 20.0}
+		nextSolChg, solChgMet := stepPhysics(nearFull, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, solarChgInt, settings, 0.90)
+		assert.InDelta(t, 30.0, nextSolChg.energyKWH, 1e-6)
+		// 5.0 solar - 1.0 home - 2.0 solarToBat = 2.0 solarExport
+		assert.InDelta(t, 2.0, solChgMet.solarExportKWH, 1e-6)
+
+		// 3. Direct solar export (BatteryModeLoad + SolarModeExport) respects fixedOverheadKWH in Kirchhoff split:
+		// usable = 1.0 kWh, usableForDelivery = 1.0 - 0.15 = 0.85 kWh -> maxBatDischarge = 0.85 * 0.85 = 0.7225 kWh.
+		// With 1.0 kWh load and 1.0 kWh solar, solar must cover the remaining 0.2775 kWh of home load and export 0.7225 kWh.
+		tightState := planState{
+			energyKWH:      7.0, // 1.0 kWh above 6.0 kWh reserve
+			soc:            7.0 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		directExpInt := planInterval{durationHours: 1.0, importRate: 0.30, exportRate: 0.25, loadKWH: 1.0, solarKWH: 1.0, minSOC: 20.0}
+		nextDirect, directMet := stepPhysics(tightState, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeExport,
+		}, directExpInt, settings, 0.90)
+		assert.InDelta(t, 0.7225, directMet.batSuppliedHomeKWH, 1e-6)
+		assert.InDelta(t, 0.7225, directMet.solarExportKWH, 1e-6)
+		assert.Zero(t, directMet.gridImportKWH)
+		assert.InDelta(t, 6.0, nextDirect.energyKWH, 1e-6, "battery drains right to 6.0 kWh reserve including 0.15 kWh overhead")
+	})
+
+	t.Run("LearnedHeaterModelAppliesMorningBurstAndActiveHeating", func(t *testing.T) {
+		hm := BatteryHeaterModel{
+			Detected:     true,
+			TriggerTempC: 5.0,
+			PeakPowerKW:  0.80,
+			FlaggedHours: 10,
+		}
+		t0 := time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC)
+		state := planState{
+			time:           t0,
+			energyKWH:      18.0, // 60% SOC on 30 kWh
+			soc:            60.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			heaterModel:    hm,
+			planStartTime:  t0,
+		}
+		settings := types.Settings{MinBatterySOC: 20.0}
+
+		// 1. Cold morning (06:00, 1°C < 5°C) standby drains 0.80 * 0.50h = 0.40 kWh from battery SOC.
+		coldInt := planInterval{
+			startTime:     t0,
+			endTime:       t0.Add(30 * time.Minute),
+			durationHours: 0.50,
+			importRate:    0.20,
+			loadKWH:       0.5,
+			minSOC:        20.0,
+			tempC:         1.0,
+			hasTemp:       true,
+		}
+		nextStby, _ := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 17.60, nextStby.energyKWH, 1e-6, "cold morning standby must deduct 0.40 kWh warmup burst")
+		assert.InDelta(t, 0.50, nextStby.heaterState.MorningBurstUsedHours, 1e-6)
+
+		// 2. Subsequent cold morning step (06:30) has exhausted the 0.50h burst -> 0 heater drain.
+		coldInt2 := coldInt
+		coldInt2.startTime = t0.Add(30 * time.Minute)
+		coldInt2.endTime = t0.Add(60 * time.Minute)
+		nextStby2, _ := stepPhysics(nextStby, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt2, settings, 0.90)
+		assert.InDelta(t, 17.60, nextStby2.energyKWH, 1e-6, "exhausted morning burst must not double-fire")
+
+		// 3. Charging during cold morning burst diverts heaterEnergyKWH (0.40 kWh) before storing at chargeEff,
+		// and keeps heaterFromGridKWH separate from gridChargeKWH (no bogus battery wear on blanket power).
+		chgInt := coldInt
+		chgInt.loadKWH = 0.0
+		nextChg, chgMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, chgInt, settings, 0.90)
+		oneWayEff := math.Sqrt(0.90)
+		// Max grid pull in 0.5h at 10 kW is 5.0 kWh: 0.40 kWh powers blanket, 4.60 kWh charges battery cells.
+		assert.InDelta(t, 4.60, chgMet.gridChargeKWH, 1e-6, "gridChargeKWH must exclude resistive blanket power")
+		assert.InDelta(t, 5.0, chgMet.gridImportKWH, 1e-6, "gridImportKWH includes both battery charge and blanket power")
+		assert.InDelta(t, 18.0+4.60*oneWayEff, nextChg.energyKWH, 1e-6)
+
+		// 4. Grid-connected battery sitting AT reserve (20% = 6.0 kWh) must NOT drain below reserve
+		// to power the heater — remainder routes to gridImportKWH (preventing false reserve deficits).
+		atReserve := state
+		atReserve.energyKWH = 6.0
+		atReserve.soc = 20.0
+		nextResStby, resStbyMet := stepPhysics(atReserve, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 6.0, nextResStby.energyKWH, 1e-6, "grid-connected heater must not drain battery below reserve")
+		assert.InDelta(t, 0.5+0.40, resStbyMet.gridImportKWH, 1e-6, "heater power at reserve pulls from AC grid")
+
+		// 5. Off-grid (ActionReasonGridUnavailable) drains battery SOC even at reserve.
+		nextOffGrid, offGridMet := stepPhysics(atReserve, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+			reason:      types.ActionReasonGridUnavailable,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 5.60, nextOffGrid.energyKWH, 1e-6, "off-grid heater must draw from battery")
+		assert.InDelta(t, 0.5, offGridMet.gridImportKWH, 1e-6)
+
+		// 6. ChargeAny already at targetSOC (roomInBatKWH == 0) must report gridChargeKWH == 0
+		// while still routing blanket energy to gridImportKWH.
+		nextAtTarget, atTargetMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   60.0,
+		}, chgInt, settings, 0.90)
+		assert.Zero(t, atTargetMet.gridChargeKWH, "ChargeAny at targetSOC must not report bogus gridChargeKWH for heater")
+		assert.InDelta(t, 0.40, atTargetMet.gridImportKWH, 1e-6)
+		assert.InDelta(t, 18.0, nextAtTarget.energyKWH, 1e-6)
+
+		// 7. VPP event lowering overrideReserveSOC below minSOC (10% = 3.0 kWh < 20% = 6.0 kWh):
+		// heater uses the lower effectiveLoadReserveKWH floor instead of stranding energy and double-importing.
+		vppState := state
+		vppState.energyKWH = 3.40 // 0.40 kWh above 10% VPP floor, below 20% normal reserve
+		vppState.soc = 3.40 / 30.0 * 100.0
+		nextVPP, vppMet := stepPhysics(vppState, actionCandidate{
+			batteryMode:        types.BatteryModeExport,
+			solarMode:          types.SolarModeAny,
+			overrideReserveSOC: 10.0,
+		}, chgInt, settings, 0.90)
+		assert.InDelta(t, 3.0, nextVPP.energyKWH, 1e-6, "VPP overrideReserveSOC allows battery to cover heater down to 10% floor")
+		assert.InDelta(t, 0.0, vppMet.gridImportKWH, 1e-9, "must not double-import heater energy when battery covers it down to VPP floor")
+	})
 }
 
 // TestCalculateTerminalValuation tests ending battery valuation (replacement cost vs banked credit).
@@ -2356,6 +2345,29 @@ func TestCalculateTerminalValuation(t *testing.T) {
 
 		valuation := calculateTerminalValuation(finalState, postHorizon, settings, nil, capacityKWH, roundTripEff)
 		assert.True(t, valuation < 0, "ending above reserve must produce a negative cost (credit)")
+	})
+
+	t.Run("UsesLearnedBatteryModelEfficienciesToPreserveAntiHoarding", func(t *testing.T) {
+		t.Parallel()
+		// With learned DischargeEff = 0.82 (< sqrt(0.90)*0.95 = 0.901), terminal Tier 1 credit
+		// must use 0.82 * 0.95 * R (strictly less than in-horizon discharge saving 0.82 * R),
+		// preserving the 5% anti-hoarding invariant.
+		bm := BatteryModel{
+			EffectiveCapacityKWH: capacityKWH,
+			DischargeEff:         0.82,
+			ChargeEff:            0.91,
+			Source:               "learned",
+		}
+		targetEnergy := capacityKWH * 0.20
+		finalState := planState{
+			energyKWH:    targetEnergy + 1.0, // 1.0 kWh DC banked above reserve
+			soc:          (targetEnergy + 1.0) / capacityKWH * 100.0,
+			batteryModel: bm,
+		}
+		val := calculateTerminalValuation(finalState, postHorizon, settings, nil, capacityKWH, roundTripEff)
+		expectedCredit := 1.0 * postHorizon.knownPostHorizonRate * 0.82 * terminalTier1DiscountFactor
+		assert.InDelta(t, -expectedCredit, val, 1e-6)
+		assert.Less(t, -val, 1.0*postHorizon.knownPostHorizonRate*0.82, "terminal credit must stay strictly below in-horizon discharge saving")
 	})
 
 	t.Run("TerminalValuation_StrictConcavityAndPenalty", func(t *testing.T) {
@@ -3314,382 +3326,6 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 		assert.Equal(t, "Charging battery to target reserve.", decision.Action.Description)
-	})
-
-	t.Run("PeakP75PlanningPresentsBaselineLoadAndConsistentSOC", func(t *testing.T) {
-		p75Timeline := []planInterval{
-			{
-				startTime:       now,
-				endTime:         now.Add(time.Hour),
-				durationHours:   1.0,
-				importRate:      0.10,
-				loadKWH:         0.5,
-				baselineLoadKWH: 0.5,
-				hasBaselineLoad: true,
-				minSOC:          20.0,
-			},
-			{
-				startTime:       now.Add(time.Hour),
-				endTime:         now.Add(2 * time.Hour),
-				durationHours:   1.0,
-				importRate:      0.45,
-				loadKWH:         2.9, // P75 drains 10 kWh battery from 50% down to 20% reserve during step 1
-				baselineLoadKWH: 0.9, // P55 baseline
-				hasBaselineLoad: true,
-				minSOC:          20.0,
-			},
-			{
-				startTime:       now.Add(2 * time.Hour),
-				endTime:         now.Add(3 * time.Hour),
-				durationHours:   1.0,
-				importRate:      0.45,
-				loadKWH:         2.9, // Under P75, step 2 starts at 20% reserve and imports from grid
-				baselineLoadKWH: 0.9, // Under P55, battery still covers step 2 and stays above reserve
-				hasBaselineLoad: true,
-				minSOC:          20.0,
-			},
-		}
-
-		// 10 kWh battery starting at 30% (3.0 kWh), ChargeAny to 50% in step 0 then Load across 2 peak hours.
-		testStatus := types.SystemStatus{
-			Timestamp:             now,
-			BatteryCapacityKWH:    10.0,
-			BatterySOC:            30.0,
-			MaxBatteryChargeKW:    5.0,
-			MaxBatteryDischargeKW: 5.0,
-		}
-		testSettings := types.Settings{
-			MinBatterySOC:       20,
-			GridChargeBatteries: true,
-		}
-		roundTripEff := 0.90
-		initState := planState{
-			time:           now,
-			energyKWH:      3.0,
-			soc:            30.0,
-			capacityKWH:    10.0,
-			maxChargeKW:    5.0,
-			maxDischargeKW: 5.0,
-		}
-		actions := []actionCandidate{
-			{batteryMode: types.BatteryModeChargeAny, solarMode: types.SolarModeAny, targetSOC: 50.0},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-		}
-		states := []planState{initState}
-		var metrics []intervalMetrics
-		st := initState
-		for i, a := range actions {
-			var m intervalMetrics
-			st, m = stepPhysics(st, a, p75Timeline[i], testSettings, roundTripEff)
-			metrics = append(metrics, m)
-			states = append(states, st)
-		}
-		// Sanity: under P75, step 2 entered at reserve (~20%) with grid import
-		require.InDelta(t, 20.0, states[2].soc, 1e-6)
-		require.Greater(t, metrics[2].gridImportKWH, 0.5)
-
-		winningPath := &planPath{
-			actions:  actions,
-			states:   states,
-			metrics:  metrics,
-			timeline: p75Timeline,
-		}
-		decision, plan := finalizeDecisionAndPlan(ctx, winningPath, p75Timeline, testStatus, types.Price{DollarsPerKWH: 0.10}, now, testSettings, nil, nil)
-
-		// Hardware dispatch retains P75 planning decision and ChargeToSOC (50%).
-		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
-		assert.Equal(t, 50, decision.Action.ChargeToSOC)
-		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
-		// Under P55 baseline, battery never hits 20% reserve during the horizon.
-		assert.True(t, decision.Action.HitDeficitAt.IsZero(),
-			"HitDeficitAt must reflect baseline P55 display trajectory rather than P75 planning buffer")
-
-		if assert.Len(t, plan.Periods, 3) {
-			// Step 0 displays P55 baseline (same as step 0 load 0.5).
-			assert.InDelta(t, 0.5, plan.Periods[0].LoadKWH, 1e-6)
-			// Peak periods display P55 baseline (0.9 kWh) instead of P75 (2.9 kWh).
-			assert.InDelta(t, 0.9, plan.Periods[1].LoadKWH, 1e-6)
-			assert.InDelta(t, 0.9, plan.Periods[2].LoadKWH, 1e-6)
-			// Re-simulated SOC stays healthy (~31% after peak instead of hitting 20% reserve).
-			assert.Greater(t, plan.Periods[2].StartSOC, 39.0)
-			assert.Greater(t, plan.Periods[2].EndSOC, 29.0)
-			// Step 2 reason must reflect discharging at peak rather than P75's batteryAtReserve.
-			assert.Equal(t, types.ActionReasonDischargeAtPeak, plan.Periods[2].Reason)
-			// No peak grid import under P55, so peak interval cost & total cost match step 0 grid import only.
-			assert.InDelta(t, 0.0, plan.Periods[2].GridImportKWH, 1e-6)
-			assert.InDelta(t, plan.Periods[0].CostDollars, plan.TotalProjectedCost, 1e-6)
-		}
-	})
-
-	t.Run("PeakP75DownstreamNoOpChargeDemotedAndContiguousChargeReasonPreserved", func(t *testing.T) {
-		// Steps 0-1: contiguous off-peak ChargeAny(60%) episode (1.5 kW maxChargeKW so both steps grid-charge).
-		// Step 2: sunny peak interval ($0.45 import, $0.30 solar export) where P75 load (3.5 kWh) > solar (1.2 kWh)
-		//         forces battery discharge (so P75 reason for steps 0-1 is DeficitChargeNow), whereas P55 load (0.8 kWh)
-		//         < solar (1.2 kWh) leaves 0 battery discharge and surplus solar (plus step 3 solar export at $0.30).
-		// Step 4: downstream overnight ChargeAny(45%) scheduled because P75 drained battery to ~36%, whereas P55
-		//         enters step 4 above 60% so 0 kWh of grid charging occurs and step 4 must demote to Standby.
-		tl := []planInterval{
-			{
-				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
-				importRate: 0.10, exportRate: 0.05, loadKWH: 0.5, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
-				importRate: 0.10, exportRate: 0.05, loadKWH: 0.5, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0,
-				price: types.Price{DollarsPerKWH: 0.45}, importRate: 0.45, exportRate: 0.30,
-				solarKWH: 1.2, loadKWH: 3.5, baselineLoadKWH: 0.8, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0,
-				price: types.Price{DollarsPerKWH: 0.45}, importRate: 0.45, exportRate: 0.30,
-				solarKWH: 1.0, loadKWH: 0.8, baselineLoadKWH: 0.8, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(4 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 1.0,
-				importRate: 0.10, exportRate: 0.05, loadKWH: 0.4, baselineLoadKWH: 0.4, hasBaselineLoad: true, minSOC: 20.0,
-			},
-		}
-
-		testStatus := types.SystemStatus{
-			Timestamp:             now,
-			BatteryCapacityKWH:    10.0,
-			BatterySOC:            35.0,
-			MaxBatteryChargeKW:    1.5,
-			MaxBatteryDischargeKW: 5.0,
-		}
-		testSettings := types.Settings{
-			MinBatterySOC:       20,
-			GridChargeBatteries: true,
-			GridExportSolar:     true,
-		}
-		initSt := planState{
-			time: now, energyKWH: 3.5, soc: 35.0, capacityKWH: 10.0, maxChargeKW: 1.5, maxDischargeKW: 5.0,
-		}
-		acts := []actionCandidate{
-			{batteryMode: types.BatteryModeChargeAny, solarMode: types.SolarModeAny, targetSOC: 60.0},
-			{batteryMode: types.BatteryModeChargeAny, solarMode: types.SolarModeAny, targetSOC: 60.0},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeExport},
-			{batteryMode: types.BatteryModeChargeAny, solarMode: types.SolarModeAny, targetSOC: 45.0},
-		}
-		sts := []planState{initSt}
-		var mets []intervalMetrics
-		cur := initSt
-		for i, a := range acts {
-			var m intervalMetrics
-			cur, m = stepPhysics(cur, a, tl[i], testSettings, 0.90)
-			mets = append(mets, m)
-			sts = append(sts, cur)
-		}
-		// Under P75, step 4 genuinely grid-charges because SOC dropped below 45%.
-		require.Less(t, sts[4].soc, 40.0)
-		require.Greater(t, mets[4].gridChargeKWH, 0.5)
-
-		wp := &planPath{actions: acts, states: sts, metrics: mets, timeline: tl}
-		dec, plan := finalizeDecisionAndPlan(ctx, wp, tl, testStatus, types.Price{DollarsPerKWH: 0.10}, now, testSettings, nil, nil)
-
-		assert.Equal(t, types.ActionReasonDeficitChargeNow, dec.Action.Reason)
-		if assert.Len(t, plan.Periods, 5) {
-			// Contiguous step-0..1 ChargeAny episode preserves step 0's DeficitChargeNow reason on step 1
-			// instead of splitting to ArbitrageChargeExport when P55 step-2 battery discharge becomes 0.
-			assert.Equal(t, types.BatteryModeChargeAny, plan.Periods[0].BatteryMode)
-			assert.Equal(t, types.BatteryModeChargeAny, plan.Periods[1].BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitChargeNow, plan.Periods[0].Reason)
-			assert.Equal(t, types.ActionReasonDeficitChargeNow, plan.Periods[1].Reason)
-
-			// Step 4 enters above 45% under P55, so 0 kWh grid-charges and it must demote to Standby.
-			assert.Greater(t, plan.Periods[4].StartSOC, 55.0)
-			assert.Equal(t, types.BatteryModeStandby, plan.Periods[4].BatteryMode,
-				"Downstream ChargeAny with 0 grid charge under P55 must demote to Standby")
-			assert.NotEqual(t, types.ActionReasonDeficitChargeNow, plan.Periods[4].Reason)
-		}
-	})
-
-	t.Run("PeakP75ResimUpdatesVPPPrepAndVPPActiveTransitions", func(t *testing.T) {
-		// 1. Mandatory VPPPrep: step 0 is peak Load (P75=2.5 drains 100%->~73.6% < 99%; P55=0.5 matched by 0.5 solar keeps 100%).
-		//    Step 1 is inside mandatory 2h VPPPrep takeover window; under P55 it must switch from ChargeAny(100) to Standby.
-		vppPrepEvent := vppAnchor{
-			eventStart: now.Add(2 * time.Hour),
-			eventEnd:   now.Add(3 * time.Hour),
-			vppSoc:     20.0,
-			mandatory:  true,
-		}
-		prepTL := []planInterval{
-			{
-				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
-				importRate: 0.45, solarKWH: 0.5, loadKWH: 2.5, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
-				importRate: 0.10, loadKWH: 0.4, baselineLoadKWH: 0.4, hasBaselineLoad: true, minSOC: 20.0,
-			},
-		}
-		prepStatus := types.SystemStatus{Timestamp: now, BatteryCapacityKWH: 10.0, BatterySOC: 100.0, MaxBatteryChargeKW: 5.0, MaxBatteryDischargeKW: 5.0}
-		prepSettings := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
-		prepInit := planState{time: now, energyKWH: 10.0, soc: 100.0, capacityKWH: 10.0, maxChargeKW: 5.0, maxDischargeKW: 5.0}
-		prepActs := []actionCandidate{
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-			{batteryMode: types.BatteryModeChargeAny, solarMode: types.SolarModeAny, reason: types.ActionReasonVPPPrep, description: "VPP Prep emergency top-up.", targetSOC: 100},
-		}
-		s1, m0 := stepPhysics(prepInit, prepActs[0], prepTL[0], prepSettings, 0.90)
-		s2, m1 := stepPhysics(s1, prepActs[1], prepTL[1], prepSettings, 0.90)
-		prepPath := &planPath{
-			actions:   prepActs,
-			states:    []planState{prepInit, s1, s2},
-			metrics:   []intervalMetrics{m0, m1},
-			timeline:  prepTL,
-			vppEvents: []vppAnchor{vppPrepEvent},
-		}
-		_, prepPlan := finalizeDecisionAndPlan(ctx, prepPath, prepTL, prepStatus, types.Price{DollarsPerKWH: 0.45}, now, prepSettings, nil, nil)
-		if assert.Len(t, prepPlan.Periods, 2) {
-			assert.Equal(t, types.BatteryModeStandby, prepPlan.Periods[1].BatteryMode,
-				"VPPPrep interval entering at >=99% SOC under P55 must switch from ChargeAny to Standby")
-			assert.Equal(t, types.ActionReasonVPPPrep, prepPlan.Periods[1].Reason)
-		}
-
-		// 2. Mandatory VPPActive: step 0 and step 1 are inside an active VPP window (target 20%).
-		//    Under P75 (load=3.0), step 0 drains 50%->20% so step 1 was Standby; under P55 (load=0.5), step 0 ends ~44.7% > 20%
-		//    so step 1 must re-evaluate getHardOverride and export/discharge instead of holding Standby at 44.7%.
-		vppActiveEvent := vppAnchor{
-			eventStart: now,
-			eventEnd:   now.Add(2 * time.Hour),
-			vppSoc:     20.0,
-			price:      1.00,
-			mandatory:  true,
-		}
-		actTL := []planInterval{
-			{
-				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
-				importRate: 0.45, exportRate: 1.00, batteryExportRate: 1.00,
-				loadKWH: 3.0, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
-				importRate: 0.45, exportRate: 1.00, batteryExportRate: 1.00,
-				loadKWH: 3.0, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-		}
-		actStatus := types.SystemStatus{Timestamp: now, BatteryCapacityKWH: 10.0, BatterySOC: 50.0, MaxBatteryChargeKW: 5.0, MaxBatteryDischargeKW: 2.5}
-		actSettings := types.Settings{MinBatterySOC: 20, GridExportBatteries: true}
-		actInit := planState{time: now, energyKWH: 5.0, soc: 50.0, capacityKWH: 10.0, maxChargeKW: 5.0, maxDischargeKW: 2.5}
-		actActs := []actionCandidate{
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny, reason: types.ActionReasonVPPActive, description: "VPP Event Active.", targetSOC: 20, overrideReserveSOC: 20},
-			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny, reason: types.ActionReasonVPPActive, description: "Mandatory VPP Target SOC reached. Preserving reserve in standby.", overrideReserveSOC: 20},
-		}
-		a1, am0 := stepPhysics(actInit, actActs[0], actTL[0], actSettings, 0.90)
-		a2, am1 := stepPhysics(a1, actActs[1], actTL[1], actSettings, 0.90)
-		require.InDelta(t, 20.0, a1.soc, 5.0)
-		actPath := &planPath{
-			actions:   actActs,
-			states:    []planState{actInit, a1, a2},
-			metrics:   []intervalMetrics{am0, am1},
-			timeline:  actTL,
-			vppEvents: []vppAnchor{vppActiveEvent},
-		}
-		_, actPlan := finalizeDecisionAndPlan(ctx, actPath, actTL, actStatus, types.Price{DollarsPerKWH: 0.45}, now, actSettings, nil, nil)
-		if assert.Len(t, actPlan.Periods, 2) {
-			assert.Greater(t, actPlan.Periods[1].StartSOC, 40.0)
-			assert.Equal(t, types.BatteryModeExport, actPlan.Periods[1].BatteryMode,
-				"VPPActive interval still above targetSOC under P55 must export instead of staying in P75 Standby")
-			assert.Equal(t, types.ActionReasonVPPActive, actPlan.Periods[1].Reason)
-		}
-	})
-
-	t.Run("PeakP75StepZeroInPeakSolarRechargeExportsCapacityAndHelperGuards", func(t *testing.T) {
-		// Step 0: peak Load starting at 20.0% reserve where P75 (1.5) == solar (1.5) keeps SOC at 20.0%,
-		//         whereas P55 (0.4) < solar (1.5) solar-charges SOC to ~30.4%.
-		// Step 1: peak Load starting at 20.0% under P75 (P75=1.5, solar=1.5 -> stays 20.0% BatteryAtReserve),
-		//         whereas under P55 (P55=0.4, solar=1.5) SOC rises ~30.4%->~40.8% (and even if started at 20.0%,
-		//         solar recharge lifts EndSOC above reserve so BatteryAtReserve is not reported).
-		// Step 2: DirectSolarExport (Load + SolarModeExport, solar=8.0, load=0.5) + Step 3 solar charge to 100%
-		//         testing export credits, StrategyBenefitDollars, and HitCapacityAt shifting under P55.
-		tl := []planInterval{
-			{
-				startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0,
-				importRate: 0.45, exportRate: 0.25, batteryExportRate: 0.25,
-				solarKWH: 1.5, loadKWH: 1.5, baselineLoadKWH: 0.4, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0,
-				importRate: 0.45, exportRate: 0.25, batteryExportRate: 0.25,
-				solarKWH: 1.5, loadKWH: 1.5, baselineLoadKWH: 0.4, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0,
-				importRate: 0.45, exportRate: 0.30, batteryExportRate: 0.30,
-				solarKWH: 3.0, loadKWH: 2.0, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-			{
-				startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0,
-				importRate: 0.10, exportRate: 0.08, batteryExportRate: 0.08,
-				solarKWH: 7.0, loadKWH: 0.5, baselineLoadKWH: 0.5, hasBaselineLoad: true, minSOC: 20.0,
-			},
-		}
-		stStatus := types.SystemStatus{Timestamp: now, BatteryCapacityKWH: 10.0, BatterySOC: 20.0, MaxBatteryChargeKW: 8.0, MaxBatteryDischargeKW: 5.0}
-		stSettings := types.Settings{MinBatterySOC: 20, GridExportSolar: true, GridExportBatteries: true}
-		initSt := planState{time: now, energyKWH: 2.0, soc: 20.0, capacityKWH: 10.0, maxChargeKW: 8.0, maxDischargeKW: 5.0}
-		acts := []actionCandidate{
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-			{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny, targetSOC: 20.0},
-			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
-		}
-		sts := []planState{initSt}
-		var mets []intervalMetrics
-		cur := initSt
-		for i, a := range acts {
-			var m intervalMetrics
-			cur, m = stepPhysics(cur, a, tl[i], stSettings, 0.90)
-			mets = append(mets, m)
-			sts = append(sts, cur)
-		}
-		// Under P75, battery never reaches 100% (starts step 3 at 20%, +6.5*sqrt(0.9) = +6.17 kWh -> ~81.7%).
-		require.Less(t, sts[4].soc, 85.0)
-
-		// Also test solar recharge starting right at 20% reserve in resolvePlanActionReason:
-		rechargeTL := []planInterval{tl[1]}
-		rechargeTL[0].loadKWH = 0.4
-		rs1, rm0 := stepPhysics(initSt, acts[1], rechargeTL[0], stSettings, 0.90)
-		rechargeReason, _, _ := resolvePlanActionReason(&planPath{
-			actions: []actionCandidate{acts[1]},
-			states:  []planState{initSt, rs1},
-			metrics: []intervalMetrics{rm0},
-		}, 0, rechargeTL, stSettings, 0.45, 0.10)
-		assert.Equal(t, types.ActionReasonDischargeAtPeak, rechargeReason,
-			"Interval starting at 20% reserve that solar-charges above reserve must not report BatteryAtReserve")
-
-		wp := &planPath{actions: acts, states: sts, metrics: mets, timeline: tl}
-		dec, plan := finalizeDecisionAndPlan(ctx, wp, tl, stStatus, types.Price{DollarsPerKWH: 0.45}, now, stSettings, nil, nil)
-
-		// Step 0 started at 20% and stayed at 20% under P75, so immediate hardware reason is preserved.
-		assert.Equal(t, types.ActionReasonBatteryAtReserve, dec.Action.Reason)
-		assert.Equal(t, 20, dec.Action.ChargeToSOC)
-		if assert.Len(t, plan.Periods, 4) {
-			assert.InDelta(t, 0.4, plan.Periods[0].LoadKWH, 1e-6)
-			assert.Equal(t, types.ActionReasonDischargeAtPeak, plan.Periods[1].Reason)
-			assert.Greater(t, plan.TotalExportCredits, 1.0)
-			assert.InDelta(t, plan.TotalExportCredits-plan.TotalProjectedCost, plan.NetEconomicBenefit, 1e-6)
-			assert.InDelta(t, plan.NetEconomicBenefit, dec.Action.StrategyBenefitDollars, 1e-6)
-		}
-
-		// Verify HitCapacityAt shifts onto step 3 when step 2 keeps energy instead of exporting to 20%.
-		actsCap := []actionCandidate{acts[0], acts[1], {batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny}, acts[3]}
-		wpCap := &planPath{actions: actsCap, timeline: tl} // empty states exercises initialStatus fallback
-		decCap, _ := finalizeDecisionAndPlan(ctx, wpCap, tl, stStatus, types.Price{DollarsPerKWH: 0.45}, now, stSettings, nil, nil)
-		assert.False(t, decCap.Action.HitCapacityAt.IsZero(), "Higher post-peak SOC under P55 must record HitCapacityAt when step 3 hits 100%")
-
-		// Direct helper guard checks (nil/empty/no-baseline)
-		assert.False(t, timelineNeedsBaselineResim(nil, tl))
-		assert.False(t, timelineNeedsBaselineResim(&planPath{actions: acts}, []planInterval{{loadKWH: 2.0}}))
-		emptyTL, emptyPath := resimulatePathWithBaselineLoad(nil, nil, stStatus, stSettings)
-		assert.Empty(t, emptyTL)
-		assert.Empty(t, emptyPath.actions)
-		_, costPath := resimulatePathWithBaselineLoad(&planPath{actions: acts[:1]}, tl[:1], stStatus, stSettings)
-		assert.InDelta(t, costPath.metrics[0].costDollars, costPath.totalCost, 1e-9)
 	})
 }
 
@@ -6350,6 +5986,168 @@ func TestPlanScenarios(t *testing.T) {
 				assert.LessOrEqual(t, pp.GridExportKWH/pp.DurationHours, 11.0+1e-6, "Planned grid export rate must not exceed MaxGridExportKW")
 			}
 		}
+	})
+
+	t.Run("LearnedBatteryOverheadIncreasesPrePeakChargeTarget", func(t *testing.T) {
+		// 30 kWh site at 11:00 (last off-peak hour at $0.10 before an 8-hour 12:00-20:00 peak at $0.45)
+		// with 54% SOC and 35% reserve (~5.7 kWh nominal above reserve) and 0.65 kWh/hr home load (5.2 kWh peak load).
+		// Under static baseline (sqrt(0.90)=0.949, 0W overhead), 5.2 / 0.949 = 5.48 kWh < 5.7 kWh -> no grid charge needed.
+		// Under learned Franklin-style overhead (DischargeEff=0.86, DischargeFixedKW=0.15 kW),
+		// 5.2 / 0.86 + 8*0.15 = 7.25 kWh > 5.7 kWh -> planner must grid-charge before peak!
+		loc := time.UTC
+		now := time.Date(2026, 11, 23, 11, 0, 0, 0, loc)
+		priceAt := func(ts time.Time) types.Price {
+			rate := 0.10
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				rate = 0.45
+			}
+			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
+		}
+		currP := priceAt(now)
+		var futP []types.Price
+		for i := 1; i <= 24; i++ {
+			futP = append(futP, priceAt(now.Add(time.Duration(i)*time.Hour)))
+		}
+
+		// Build 20 days of identical 0.65 kWh/hr home load history, comparing:
+		// (A) no SOC telemetry (baseline battery model) vs
+		// (B) clean discharge/charge SOC telemetry reflecting DischargeEff=0.86, FixedKW=0.15, ChargeEff=0.90.
+		var baseHist, learnedHist []types.EnergyStats
+		for d := 20; d >= 1; d-- {
+			day := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			disLoad := 0.65
+			// Vary discharge load on non-peak hours (20:00-23:00) so OLS separates slope & intercept
+			// while keeping 12:00-19:00 home load identical at 0.65 kWh/hr across both histories.
+			altLoad := 0.5 + 0.5*float64(d%6)
+			soc := 90.0
+			for h := 0; h < 24; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				home := disLoad
+				if h >= 20 {
+					home = altLoad
+				}
+				baseHist = append(baseHist, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     home,
+				})
+				if h >= 12 && h < 16 {
+					deltaKWH := home/0.86 + 0.15
+					endSOC := soc - (deltaKWH/30.0)*100.0
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart:    ts,
+						HomeKWH:        home,
+						BatteryUsedKWH: home,
+						MinBatterySOC:  endSOC,
+						MaxBatterySOC:  soc,
+					})
+					soc = endSOC
+				} else if h >= 20 {
+					deltaKWH := home/0.86 + 0.15
+					endSOC := soc - (deltaKWH/30.0)*100.0
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart:    ts,
+						HomeKWH:        home,
+						BatteryUsedKWH: home,
+						MinBatterySOC:  endSOC,
+						MaxBatterySOC:  soc,
+					})
+					soc = endSOC
+				} else {
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart: ts,
+						HomeKWH:     home,
+					})
+				}
+			}
+		}
+
+		st := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 30.0,
+			BatterySOC:         54.0,
+			MaxBatteryChargeKW: 10.0,
+			HomeKW:             0.65,
+		}
+		cfg := types.Settings{
+			MinBatterySOC:       35.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+
+		decBase, planBase, err := c.Plan(ctx, st, currP, futP, baseHist, nil, cfg, nil)
+		require.NoError(t, err)
+		decLearned, planLearned, err := c.Plan(ctx, st, currP, futP, learnedHist, nil, cfg, nil)
+		require.NoError(t, err)
+
+		assert.Zero(t, decBase.SimulationParams.BatteryDischargeEfficiency, "baseline model omits learned efficiency params")
+		assert.Greater(t, decLearned.SimulationParams.BatteryDischargeEfficiency, 0.80)
+		assert.Less(t, decLearned.SimulationParams.BatteryDischargeEfficiency, 0.92)
+		assert.Greater(t, decLearned.SimulationParams.BatteryDischargeFixedKW, 0.08)
+
+		require.NotEmpty(t, planBase.Periods)
+		require.NotEmpty(t, planLearned.Periods)
+		assert.Equal(t, types.BatteryModeChargeAny, decLearned.Action.BatteryMode,
+			"learned discharge overhead must trigger pre-peak grid charging at 11:00")
+		assert.Greater(t, planLearned.Periods[0].EndSOC, planBase.Periods[0].EndSOC,
+			"learned discharge overhead must produce a higher pre-peak SOC than static baseline")
+	})
+
+	t.Run("LearnedHeaterModelPopulatesParamsAndAccountsForColdMorning", func(t *testing.T) {
+		loc := time.UTC
+		now := time.Date(2026, 11, 20, 6, 0, 0, 0, loc)
+		priceAt := func(ts time.Time) types.Price {
+			rate := 0.20
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				rate = 0.45
+			}
+			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
+		}
+		currP := priceAt(now)
+		var futP []types.Price
+		for i := 1; i <= 24; i++ {
+			futP = append(futP, priceAt(now.Add(time.Duration(i)*time.Hour)))
+		}
+
+		// 10 days of cold history with 5 flagged morning heating hours (~0.80 kW extra drain on 30 kWh).
+		var hist []types.EnergyStats
+		var weather []types.Weather
+		for d := 10; d >= 1; d-- {
+			day := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			weather = append(weather, makeWeatherDay(day, 1.0))
+			for h := 0; h < 24; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				es := types.EnergyStats{TSHourStart: ts, HomeKWH: 0.70}
+				if d <= 5 && h == 7 {
+					es.HadBatteryHeating = true
+					es.MinBatterySOC = 57.3
+					es.MaxBatterySOC = 60.0
+				}
+				hist = append(hist, es)
+			}
+		}
+		weather = append(weather, makeWeatherDay(now.Truncate(24*time.Hour), 0.0), makeWeatherDay(now.Truncate(24*time.Hour).AddDate(0, 0, 1), 0.0))
+
+		st := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 30.0,
+			BatterySOC:         60.0,
+			MaxBatteryChargeKW: 10.0,
+			HomeKW:             0.70,
+			BatteryHeating:     true,
+		}
+		cfg := types.Settings{
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+
+		dec, plan, err := c.Plan(ctx, st, currP, futP, hist, weather, cfg, nil)
+		require.NoError(t, err)
+		assert.Greater(t, dec.SimulationParams.BatteryHeaterPowerKW, 0.5)
+		assert.InDelta(t, 2.0, dec.SimulationParams.BatteryHeaterTriggerTempC, 0.5)
+		require.NotEmpty(t, plan.Periods)
 	})
 }
 

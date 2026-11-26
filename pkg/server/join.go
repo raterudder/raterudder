@@ -131,6 +131,11 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "failed to create site", http.StatusInternalServerError)
 			return
 		}
+		log.Ctx(ctx).InfoContext(ctx, "site created",
+			slog.String("event", eventSiteCreated),
+			slog.String("siteID", req.JoinSiteID),
+			slog.String("userID", userID),
+		)
 	} else {
 		// Look up the site
 		var err error
@@ -206,7 +211,11 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "failed to create user", http.StatusInternalServerError)
 			return
 		}
-		log.Ctx(ctx).InfoContext(ctx, "user created", slog.String("userID", userID), slog.String("email", email))
+		log.Ctx(ctx).InfoContext(ctx, "user created",
+			slog.String("event", eventUserCreated),
+			slog.String("userID", userID),
+			slog.String("email", email),
+		)
 
 		// Note: The session cookie does not need to be updated or re-issued here because
 		// the userID was already deterministically determined during login (from the OIDC
@@ -260,7 +269,16 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "user joined site", slog.String("siteID", req.JoinSiteID), slog.String("userID", userID), slog.String("email", email))
+	if !req.Create && !alreadyJoined {
+		log.Ctx(ctx).InfoContext(ctx, "user joined site",
+			slog.String("event", eventUserJoinedSite),
+			slog.String("siteID", req.JoinSiteID),
+			slog.String("userID", userID),
+			slog.String("email", email),
+		)
+	} else {
+		log.Ctx(ctx).InfoContext(ctx, "user joined site", slog.String("siteID", req.JoinSiteID), slog.String("userID", userID), slog.String("email", email))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	err := json.NewEncoder(w).Encode(map[string]any{
