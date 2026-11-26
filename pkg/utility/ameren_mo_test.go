@@ -224,10 +224,28 @@ func TestAmerenMOPeriods(t *testing.T) {
 		pOptBJan, err := u.priceForTime(time.Date(2026, time.January, 15, 2, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.1062+0.009681, pOptBJan.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Anytime", pOptBJan.PeriodName)
 
 		pOptBOct, err := u.priceForTime(time.Date(2026, time.October, 15, 2, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.1062+0.009995, pOptBOct.DollarsPerKWH, 1e-6)
+		assert.Equal(t, "Anytime", pOptBOct.PeriodName)
+
+		for _, optBRate := range []string{"ameren_mo_overnight", "ameren_mo_smart_saver", "ameren_mo_ultimate_saver"} {
+			require.NoError(t, u.ApplySettings(context.Background(), types.Settings{
+				UtilityProvider: "ameren",
+				UtilityRate:     optBRate,
+				UtilityRateOptions: types.UtilityRateOptions{
+					PeakPeriodOption: "option_b",
+				},
+			}))
+			pWinter, err := u.priceForTime(time.Date(2026, time.November, 15, 14, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.Equal(t, "Anytime", pWinter.PeriodName, "rate %s winter option_b should have Anytime PeriodName", optBRate)
+			pSummer, err := u.priceForTime(time.Date(2026, time.July, 15, 16, 0, 0, 0, ctLocation))
+			require.NoError(t, err)
+			assert.NotEmpty(t, pSummer.PeriodName, "rate %s summer option_b should have non-empty PeriodName", optBRate)
+		}
 	})
 
 	t.Run("Smart Savers TOU (ameren_mo_smart_saver)", func(t *testing.T) {

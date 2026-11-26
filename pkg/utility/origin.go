@@ -612,7 +612,7 @@ func originUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Origin Battery Maximiser",
 				Options: originOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return originPeriods("origin_battery_maximiser", opts, []int{2026})
+					return originPeriods("origin_battery_maximiser", opts, []int{2026, 2027})
 				},
 			},
 			{
@@ -620,7 +620,7 @@ func originUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Origin Battery Starter",
 				Options: originOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return originPeriods("origin_battery_starter", opts, []int{2026})
+					return originPeriods("origin_battery_starter", opts, []int{2026, 2027})
 				},
 			},
 			{
@@ -628,7 +628,7 @@ func originUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Origin Go Solar Variable",
 				Options: originOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return originPeriods("origin_go_solar_variable", opts, []int{2026})
+					return originPeriods("origin_go_solar_variable", opts, []int{2026, 2027})
 				},
 			},
 			{
@@ -636,7 +636,7 @@ func originUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Origin Go Variable",
 				Options: originOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return originPeriods("origin_go_variable", opts, []int{2026})
+					return originPeriods("origin_go_variable", opts, []int{2026, 2027})
 				},
 			},
 			{
@@ -644,7 +644,7 @@ func originUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Origin Solar Boost",
 				Options: originOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return originPeriods("origin_solar_boost", opts, []int{2026})
+					return originPeriods("origin_solar_boost", opts, []int{2026, 2027})
 				},
 			},
 		},

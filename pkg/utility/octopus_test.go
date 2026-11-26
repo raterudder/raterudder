@@ -3,12 +3,10 @@ package utility
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,17 +33,6 @@ func newMockHTTPClient(handler http.HandlerFunc) *http.Client {
 			return rec.Result(), nil
 		}),
 	}
-}
-
-func isTransientOctopusAPIError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var netErr net.Error
-	return strings.Contains(err.Error(), "octopus api error status 5") ||
-		strings.Contains(err.Error(), "octopus api error status 429") ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		(errors.As(err, &netErr) && netErr.Timeout())
 }
 
 func TestOctopusUtility(t *testing.T) {
@@ -1540,25 +1527,28 @@ func TestOctopusUtility(t *testing.T) {
 		statusCode = http.StatusServiceUnavailable
 		_, err503 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
 		assert.ErrorContains(t, err503, "octopus api error status 503")
-		assert.True(t, isTransientOctopusAPIError(err503))
+		assert.True(t, isTransientLiveAPIErr(err503))
 
 		statusCode = http.StatusTooManyRequests
 		_, err429 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
 		assert.ErrorContains(t, err429, "octopus api error status 429")
-		assert.True(t, isTransientOctopusAPIError(err429))
+		assert.True(t, isTransientLiveAPIErr(err429))
 
 		statusCode = http.StatusNotFound
 		_, err404 := newTestBase().GetConfirmedPrices(context.Background(), "london", dayStart, dayEnd)
 		assert.ErrorContains(t, err404, "octopus api error status 404")
-		assert.False(t, isTransientOctopusAPIError(err404))
+		assert.False(t, isTransientLiveAPIErr(err404))
 
-		assert.True(t, isTransientOctopusAPIError(fmt.Errorf("wrapped: %w", context.DeadlineExceeded)))
-		assert.False(t, isTransientOctopusAPIError(nil))
+		assert.True(t, isTransientLiveAPIErr(fmt.Errorf("wrapped: %w", context.DeadlineExceeded)))
+		assert.False(t, isTransientLiveAPIErr(nil))
 	})
 
 	t.Run("Integration Real API", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping live Octopus API integration test in short mode")
+		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("skipping live Octopus API integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
 		}
 		targetNow := time.Date(2026, time.April, 10, 12, 15, 0, 0, lonLocation)
 		dayStart := time.Date(2026, time.April, 10, 0, 0, 0, 0, lonLocation)
@@ -1572,26 +1562,12 @@ func TestOctopusUtility(t *testing.T) {
 			nowFunc:         func() time.Time { return targetNow },
 		}
 
-		var confirmed []types.Price
-		var err error
-		for attempt := range 3 {
-			attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			confirmed, err = base.GetConfirmedPrices(attemptCtx, "london", dayStart, dayEnd)
-			attemptCancel()
-			if err == nil {
-				break
-			}
-			if attempt < 2 {
-				time.Sleep(1 * time.Second)
-			}
-		}
-		if isTransientOctopusAPIError(err) {
-			t.Skipf("octopus API transiently unavailable: %v", err)
-		}
+		confirmed, err := retryLiveAPIIntegration(t, "octopus", func() ([]types.Price, error) {
+			reqCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return base.GetConfirmedPrices(reqCtx, "london", dayStart, dayEnd)
+		})
 		require.NoError(t, err)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
 		if assert.Len(t, confirmed, 48) {
 			assert.Equal(t, dayStart, confirmed[0].TSStart)
 			assert.Equal(t, dayEnd, confirmed[len(confirmed)-1].TSEnd)
@@ -1615,7 +1591,7 @@ func TestOctopusUtility(t *testing.T) {
 		// Verify end-to-end SiteFees layering with Intelligent Octopus Go + Agile Outgoing against the real API data
 		m := NewMap(nil)
 		m.baseOctopus = base
-		siteUtil, err := m.Site(ctx, "site-live-uk", types.Settings{
+		siteUtil, err := m.Site(context.Background(), "site-live-uk", types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_intelligent_go",
 			UtilityRateOptions: types.UtilityRateOptions{
@@ -1625,7 +1601,11 @@ func TestOctopusUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		curr, err := siteUtil.GetCurrentPrice(ctx)
+		curr, err := retryLiveAPIIntegration(t, "octopus", func() (types.Price, error) {
+			reqCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return siteUtil.GetCurrentPrice(reqCtx)
+		})
 		require.NoError(t, err)
 		// 12:15 London time on 2026-04-10 (pre-2026-11-04) is Intelligent Octopus Go Peak (£0.2802/kWh)
 		assert.InDelta(t, 0.2802, curr.DollarsPerKWH, 1e-4)

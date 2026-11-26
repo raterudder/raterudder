@@ -374,7 +374,7 @@ func globirdUtilityInfo() types.UtilityProviderInfo {
 				Name:    "FOUR4FREE",
 				Options: four4FreeOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return globirdPeriods("globird_four4free", opts, []int{2026})
+					return globirdPeriods("globird_four4free", opts, []int{2026, 2027})
 				},
 			},
 			{
@@ -382,7 +382,7 @@ func globirdUtilityInfo() types.UtilityProviderInfo {
 				Name:    "SOLARPLUS",
 				Options: solarPlusOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return globirdPeriods("globird_solarplus", opts, []int{2026})
+					return globirdPeriods("globird_solarplus", opts, []int{2026, 2027})
 				},
 			},
 		},

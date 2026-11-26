@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     classifyPlanPeriod,
+    classifyPlanPeriods,
     ALL_ZONES,
     reconstructFuturePricesFromPlan,
     buildPlanSolarLoadSeries,
@@ -8,7 +9,7 @@ import {
     computePlanSummaryStats,
     buildPlanSummaryBeats,
 } from './forecastUtils';
-import { BatteryMode, ActionReason } from '../api';
+import { BatteryMode, ActionReason, SolarMode } from '../api';
 import type { PlanPeriod } from '../api';
 
 function makePeriod(overrides: Partial<PlanPeriod> = {}): PlanPeriod {
@@ -170,6 +171,105 @@ describe('classifyPlanPeriod', () => {
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
         expect(result.color).toBe('#38bdf8');
+    });
+
+    it('keeps Standby period with falling SOC (e.g. battery heater warmup) as Standby', () => {
+        const period = makePeriod({
+            batteryMode: BatteryMode.Standby,
+            reason: ActionReason.WaitingToCharge,
+            startSoc: 15.5,
+            endSoc: 14.7,
+            solarKWH: 0,
+            loadKWH: 0.56,
+        });
+        const result = classifyPlanPeriod(period);
+        expect(result.key).toBe('standby');
+        expect(result.label).toBe('Standby');
+    });
+
+    it('keeps Standby period with SolarMode.Export and falling SOC as Standby', () => {
+        const period = makePeriod({
+            batteryMode: BatteryMode.Standby,
+            solarMode: SolarMode.Export,
+            reason: ActionReason.DirectExport,
+            startSoc: 35.0,
+            endSoc: 34.2,
+        });
+        const result = classifyPlanPeriod(period);
+        expect(result.key).toBe('standby');
+    });
+});
+
+describe('classifyPlanPeriods', () => {
+    it('demotes tiny (<2%) contiguous solarCharge trickles in Standby back to Standby', () => {
+        const periods: PlanPeriod[] = [
+            makePeriod({
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 14.2,
+                endSoc: 14.5,
+                solarKWH: 0.77,
+                loadKWH: 0.7,
+            }),
+            makePeriod({
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 14.5,
+                endSoc: 14.7,
+                solarKWH: 0.77,
+                loadKWH: 0.7,
+            }),
+            makePeriod({
+                batteryMode: BatteryMode.ChargeAny,
+                reason: ActionReason.ArbitrageChargeExport,
+                startSoc: 14.7,
+                endSoc: 32.0,
+            }),
+        ];
+
+        const zones = classifyPlanPeriods(periods);
+        expect(zones.map((z) => z.key)).toEqual(['standby', 'standby', 'gridCharge']);
+    });
+
+    it('preserves multi-period slow solarCharge runs gaining at least 2% SOC', () => {
+        const periods: PlanPeriod[] = [
+            makePeriod({ batteryMode: BatteryMode.Standby, startSoc: 40.0, endSoc: 40.6 }),
+            makePeriod({ batteryMode: BatteryMode.Standby, startSoc: 40.6, endSoc: 41.2 }),
+            makePeriod({ batteryMode: BatteryMode.Standby, startSoc: 41.2, endSoc: 41.8 }),
+            makePeriod({ batteryMode: BatteryMode.Standby, startSoc: 41.8, endSoc: 42.4 }),
+        ];
+
+        const zones = classifyPlanPeriods(periods);
+        expect(zones.map((z) => z.key)).toEqual([
+            'solarCharge',
+            'solarCharge',
+            'solarCharge',
+            'solarCharge',
+        ]);
+    });
+
+    it('demotes tiny (<2%) solarCharge trickle in Load mode to Powering Home', () => {
+        const periods: PlanPeriod[] = [
+            makePeriod({
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.SufficientBattery,
+                startSoc: 60.0,
+                endSoc: 60.4,
+                solarKWH: 0.8,
+                loadKWH: 0.7,
+            }),
+            makePeriod({
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.SufficientBattery,
+                startSoc: 60.4,
+                endSoc: 60.8,
+                solarKWH: 0.8,
+                loadKWH: 0.7,
+            }),
+        ];
+
+        const zones = classifyPlanPeriods(periods);
+        expect(zones.map((z) => z.key)).toEqual(['poweringHome', 'poweringHome']);
     });
 });
 
@@ -418,6 +518,98 @@ describe('buildPlanSummaryBeats', () => {
             timeLabel: '3:00 PM – 9:00 PM',
             socText: '100% → 50%',
             priceText: '$ 0.071/kWh',
+        });
+    });
+
+    it('omits standby battery-heater dips and tiny (<2%) standby solar trickles from schedule beats', () => {
+        const periods: PlanPeriod[] = [
+            makePeriod({
+                tsStart: '2026-11-25T05:00:00-05:00',
+                tsEnd: '2026-11-25T06:00:00-05:00',
+                durationHours: 1,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 15.5,
+                endSoc: 15.5,
+                importDollars: 0.2075,
+            }),
+            // Cold-morning battery heater warmup dip during Standby
+            makePeriod({
+                tsStart: '2026-11-25T06:00:00-05:00',
+                tsEnd: '2026-11-25T06:20:00-05:00',
+                durationHours: 1 / 3,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 15.5,
+                endSoc: 14.7,
+                importDollars: 0.2075,
+            }),
+            makePeriod({
+                tsStart: '2026-11-25T06:20:00-05:00',
+                tsEnd: '2026-11-25T06:40:00-05:00',
+                durationHours: 1 / 3,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 14.7,
+                endSoc: 14.2,
+                importDollars: 0.2075,
+            }),
+            // Tiny +0.5% solar trickle during Standby before grid charge
+            makePeriod({
+                tsStart: '2026-11-25T09:00:00-05:00',
+                tsEnd: '2026-11-25T09:20:00-05:00',
+                durationHours: 1 / 3,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 14.2,
+                endSoc: 14.5,
+                solarKWH: 0.77,
+                loadKWH: 0.7,
+                importDollars: 0.2075,
+            }),
+            makePeriod({
+                tsStart: '2026-11-25T09:20:00-05:00',
+                tsEnd: '2026-11-25T09:40:00-05:00',
+                durationHours: 1 / 3,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.WaitingToCharge,
+                startSoc: 14.5,
+                endSoc: 14.7,
+                solarKWH: 0.77,
+                loadKWH: 0.7,
+                importDollars: 0.2075,
+            }),
+            makePeriod({
+                tsStart: '2026-11-25T09:40:00-05:00',
+                tsEnd: '2026-11-25T11:20:00-05:00',
+                durationHours: 5 / 3,
+                batteryMode: BatteryMode.ChargeAny,
+                reason: ActionReason.ArbitrageChargeExport,
+                startSoc: 14.7,
+                endSoc: 94.0,
+                importDollars: 0.2075,
+            }),
+            makePeriod({
+                tsStart: '2026-11-25T12:00:00-05:00',
+                tsEnd: '2026-11-25T20:00:00-05:00',
+                durationHours: 8,
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.SufficientBattery,
+                startSoc: 94.0,
+                endSoc: 36.4,
+                importDollars: 0.2998,
+            }),
+        ];
+
+        const beats = buildPlanSummaryBeats(periods);
+        expect(beats).toHaveLength(2);
+        expect(beats[0]).toMatchObject({
+            category: 'charge',
+            socText: '15% → 94%',
+        });
+        expect(beats[1]).toMatchObject({
+            category: 'load',
+            socText: '94% → 36%',
         });
     });
 });

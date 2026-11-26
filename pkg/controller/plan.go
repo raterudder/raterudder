@@ -6,15 +6,11 @@ import (
 	"log/slog"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
-
-var ffPeakP75Load = feats.Bool("peakP75Load", false)
 
 const (
 	// minPlanningHorizonHours is the minimum lookahead required for accurate planning before erroring out.
@@ -37,12 +33,6 @@ const (
 
 	// minSolarGenerationKW is the threshold below which solar generation is treated as negligible.
 	minSolarGenerationKW = 0.05
-
-	// minPeakP75HistoryHours (72 hours, or 3 days of hourly telemetry) is the minimum history length
-	// required before elevating peak-rate load forecasts from baseline P55/P70 to P75. With fewer than
-	// 3 days of observations per hour-of-day, empirical P75 interpolates into 0.2x neighbor-hour weights
-	// rather than cross-day load variance.
-	minPeakP75HistoryHours = 72
 
 	// vppStandbyLeadTime is the duration prior to a VPP event during which the battery
 	// must be held in standby at 100% capacity to prevent the hardware ESS from taking over.
@@ -221,9 +211,7 @@ type planInterval struct {
 	importRate        float64 // Total delivered retail rate: supply + grid use/delivery fees ($/kWh)
 	exportRate        float64 // Total compensation for solar generation / exported solar energy ($/kWh)
 	batteryExportRate float64 // Total compensation for battery energy discharged to grid ($/kWh)
-	loadKWH           float64 // Projected total home load energy for this interval (kWh, may include peak P75 buffer)
-	baselineLoadKWH   float64 // Unbuffered baseline home load energy (P55/P70) preserved for user-facing Plan presentation
-	hasBaselineLoad   bool    // True when baselineLoadKWH is populated from buildPlanningTimeline
+	loadKWH           float64 // Projected total home load energy for this interval (kWh)
 	solarKWH          float64 // Projected total rooftop solar generation energy for this interval (kWh)
 	minSOC            float64 // Active reserve limit for this interval (%)
 	tempC             float64 // Forecasted ambient outdoor temperature (°C) for this interval
@@ -395,16 +383,6 @@ func isTruePeakRate(importRate, minImport, maxImport float64, settings types.Set
 		maxImport >= max(0.0, minImport)+minDeficitPriceSpread(settings)
 }
 
-// shouldUsePeakP75Load reports whether peak-rate intervals should use the 75th-percentile (P75)
-// home load forecast (instead of the baseline P55/P70 forecast) to buffer against peak load spikes.
-// Gated behind ffPeakP75Load and requires at least minPeakP75HistoryHours of history; when enabled,
-// applies to Balanced and Conservative optimization profiles.
-func shouldUsePeakP75Load(ctx context.Context, settings types.Settings, historyLen int) bool {
-	return ffPeakP75Load.Enabled(ctx) &&
-		historyLen >= minPeakP75HistoryHours &&
-		!strings.EqualFold(settings.OptimizationProfile, "aggressive")
-}
-
 // findUpcomingPeak finds the highest price interval in timeline strictly after stepIdx.
 func findUpcomingPeak(timeline []planInterval, stepIdx int) (peakIdx int, futPrice *types.Price) {
 	peakIdx = -1
@@ -530,7 +508,7 @@ func (c *Controller) Plan(
 		return Decision{}, types.Plan{}, fmt.Errorf("buildPlanningTimeline: %w", err)
 	}
 	vppEvents = filterVPPAnchorsToTimeline(vppEvents, timeline)
-	postHorizon := c.buildPostHorizonValuation(ctx, timeline, futurePrices, settings, currentStatus, model, history)
+	postHorizon := c.buildPostHorizonValuation(timeline, futurePrices, settings, currentStatus, model)
 
 	// 4. Initial battery state & per-site learned battery conversion and heater models
 	completedHistory := FilterCompletedHourlyStats(history, now)
@@ -1084,8 +1062,6 @@ func (c *Controller) buildPlanningTimeline(
 			exportRate:        exportRate,
 			batteryExportRate: batteryExportRate,
 			loadKWH:           loadKWH,
-			baselineLoadKWH:   loadKWH,
-			hasBaselineLoad:   true,
 			solarKWH:          solarKWH,
 			minSOC:            minSOC,
 			tempC:             tempC,
@@ -1095,22 +1071,6 @@ func (c *Controller) buildPlanningTimeline(
 		timeline = append(timeline, interval)
 		currentTime = stepEnd
 		idx++
-	}
-
-	// On Balanced and Conservative profiles, elevate forecasted home load during peak-rate intervals
-	// to the 75th percentile (P75) while keeping P55 elsewhere so peak survival buffers scale with each
-	// site's empirical load volatility and naturally taper down as peak hours pass.
-	if len(timeline) > 0 && shouldUsePeakP75Load(ctx, settings, len(history)) {
-		minImp, maxImp := calculateTimelinePriceRange(timeline)
-		for i := range timeline {
-			if isTruePeakRate(timeline[i].importRate, minImp, maxImp, settings) {
-				profile := findTimeProfile(model, timeline[i].startTime)
-				p75LoadKWH := max(profile.AvgHomeLoadKWH, profile.P75HomeLoadKWH) * timeline[i].durationHours
-				if p75LoadKWH > timeline[i].loadKWH {
-					timeline[i].loadKWH = p75LoadKWH
-				}
-			}
-		}
 	}
 
 	if len(timeline) > 0 && IsEVStandbyEligible(settings, timeline[0].startTime) {
@@ -1206,13 +1166,11 @@ func filterVPPAnchorsToTimeline(vppEvents []vppAnchor, timeline []planInterval) 
 // buildPostHorizonValuation computes the post-horizon replacement rate, net solar surplus, and
 // rate-sorted hourly net load slices across the 4 hours immediately following the planning horizon.
 func (c *Controller) buildPostHorizonValuation(
-	ctx context.Context,
 	timeline []planInterval,
 	futurePrices []types.Price,
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 	model []TimeProfile,
-	history []types.EnergyStats,
 ) postHorizonValuation {
 	var postHorizon postHorizonValuation
 	if len(timeline) == 0 {
@@ -1258,8 +1216,6 @@ func (c *Controller) buildPostHorizonValuation(
 			break
 		}
 	}
-	minImp, maxImp := calculateTimelinePriceRange(timeline)
-	usePeakP75 := shouldUsePeakP75Load(ctx, settings, len(history))
 	var postHorizonSolarSurplusKWH float64
 	lastHourRate := postHorizon.knownPostHorizonRate
 	defaultHourlyLoadKWH := defaultPostHorizonLoadKWH / float64(postHorizonLoadForecastHours)
@@ -1295,9 +1251,6 @@ func (c *Controller) buildPostHorizonValuation(
 		homeLoadKWH := defaultHourlyLoadKWH
 		if hasLoadModel {
 			homeLoadKWH = prof.AvgHomeLoadKWH
-			if usePeakP75 && isTruePeakRate(hourRate, minImp, maxImp, settings) {
-				homeLoadKWH = max(homeLoadKWH, prof.P75HomeLoadKWH)
-			}
 		}
 		netLoadKWH := homeLoadKWH - prof.AvgSolarKWH
 		if netLoadKWH <= 0 {
@@ -2077,102 +2030,6 @@ func resolvePlanActionReason(
 	return action.reason, action.description, nil
 }
 
-func timelineNeedsBaselineResim(winningPath *planPath, timeline []planInterval) bool {
-	if winningPath == nil {
-		return false
-	}
-	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
-		if timeline[i].hasBaselineLoad && math.Abs(timeline[i].baselineLoadKWH-timeline[i].loadKWH) > 1e-9 {
-			return true
-		}
-	}
-	return false
-}
-
-func resimulatePathWithBaselineLoad(
-	winningPath *planPath,
-	timeline []planInterval,
-	initialStatus types.SystemStatus,
-	settings types.Settings,
-) ([]planInterval, *planPath) {
-	displayTimeline := make([]planInterval, len(timeline))
-	copy(displayTimeline, timeline)
-	for i := range displayTimeline {
-		if displayTimeline[i].hasBaselineLoad {
-			displayTimeline[i].loadKWH = displayTimeline[i].baselineLoadKWH
-		}
-	}
-
-	if winningPath == nil || len(displayTimeline) == 0 {
-		return displayTimeline, &planPath{timeline: displayTimeline}
-	}
-	n := min(len(winningPath.actions), len(displayTimeline))
-	if n == 0 {
-		return displayTimeline, &planPath{timeline: displayTimeline}
-	}
-
-	var state planState
-	if len(winningPath.states) > 0 {
-		state = winningPath.states[0]
-	} else {
-		capKWH := initialStatus.BatteryCapacityKWH
-		state = planState{
-			time:             displayTimeline[0].startTime,
-			energyKWH:        capKWH * (initialStatus.BatterySOC / 100.0),
-			soc:              initialStatus.BatterySOC,
-			capacityKWH:      capKWH,
-			maxChargeKW:      resolveBatteryPowerKW(initialStatus.MaxBatteryChargeKW, capKWH),
-			maxDischargeKW:   resolveBatteryPowerKW(initialStatus.MaxBatteryDischargeKW, capKWH),
-			maxGridImportKW:  resolveGridLimitKW(initialStatus.MaxGridImportKW),
-			maxGridExportKW:  resolveGridLimitKW(initialStatus.MaxGridExportKW),
-			chargingDisabled: initialStatus.BatteryChargingDisabled,
-		}
-	}
-
-	roundTripEff := resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, initialStatus)
-	actions := make([]actionCandidate, len(winningPath.actions))
-	copy(actions, winningPath.actions)
-	states := make([]planState, 0, n+1)
-	states = append(states, state)
-	metrics := make([]intervalMetrics, 0, n)
-	var totalCost float64
-
-	for i := 0; i < n; i++ {
-		if i >= 1 && len(winningPath.vppEvents) > 0 &&
-			(actions[i].reason == types.ActionReasonVPPActive || actions[i].reason == types.ActionReasonVPPPrep) {
-			if ov, ok := getHardOverride(i, blockActionChoice{}, state, displayTimeline, winningPath.vppEvents, settings, initialStatus, actions[i].solarMode, nil); ok {
-				actions[i] = ov
-			}
-		}
-
-		nextState, m := stepPhysics(state, actions[i], displayTimeline[i], settings, roundTripEff)
-
-		// Demote future no-op ChargeAny intervals (where higher baseline SOC already reached targetSOC)
-		// to Standby so Forecast UI and overnight notifications do not report 0-kWh grid charges.
-		if i >= 1 && actions[i].batteryMode == types.BatteryModeChargeAny && m.gridChargeKWH <= 1e-6 {
-			actions[i].batteryMode = types.BatteryModeStandby
-			actions[i].targetSOC = 0
-			if actions[i].reason == types.ActionReasonVPPPrep {
-				actions[i].description = "VPP Standby Lock."
-			}
-		}
-
-		totalCost += m.costDollars
-		metrics = append(metrics, m)
-		states = append(states, nextState)
-		state = nextState
-	}
-
-	return displayTimeline, &planPath{
-		actions:   actions,
-		states:    states,
-		metrics:   metrics,
-		timeline:  displayTimeline,
-		vppEvents: winningPath.vppEvents,
-		totalCost: totalCost,
-	}
-}
-
 // finalizeDecisionAndPlan packages the winning path into Decision and types.Plan.
 func finalizeDecisionAndPlan(
 	ctx context.Context,
@@ -2226,36 +2083,6 @@ func finalizeDecisionAndPlan(
 		winningPath.actions[0].description = immediateAction.description
 	}
 
-	// If peak intervals were elevated to P75 for planning, re-simulate the chosen actions once against
-	// baselineLoadKWH (e.g. P55) so user-facing Plan periods, SOC curves, and hit-reserve times remain
-	// physically consistent with the displayed baseline load while still keeping P75 pre-charge/standby buffers.
-	displayTimeline := timeline
-	displayPath := winningPath
-	if timelineNeedsBaselineResim(winningPath, timeline) {
-		displayTimeline, displayPath = resimulatePathWithBaselineLoad(winningPath, timeline, initialStatus, settings)
-		dispMinRate, dispMaxRate := calculateTimelinePriceRange(displayTimeline)
-		displayPath.actions[0] = immediateAction
-		// Keep contiguous ChargeAny steps in the active step-0 charge window aligned with step 0's
-		// P75-planned reason so a single charge episode does not split reasons mid-window under P55.
-		inInitialChargeEpisode := immediateAction.batteryMode == types.BatteryModeChargeAny
-		for i := 1; i < len(displayPath.actions) && i < len(displayTimeline); i++ {
-			if inInitialChargeEpisode {
-				if displayPath.actions[i].batteryMode == types.BatteryModeChargeAny &&
-					i < len(winningPath.actions) && winningPath.actions[i].reason == winningPath.actions[0].reason {
-					displayPath.actions[i].reason = immediateAction.reason
-					displayPath.actions[i].description = immediateAction.description
-					displayPath.actions[i].futurePrice = immediateAction.futurePrice
-					continue
-				}
-				inInitialChargeEpisode = false
-			}
-			reason, desc, futPrice := resolvePlanActionReason(displayPath, i, displayTimeline, settings, dispMaxRate, dispMinRate)
-			displayPath.actions[i].reason = reason
-			displayPath.actions[i].description = desc
-			displayPath.actions[i].futurePrice = futPrice
-		}
-	}
-
 	// Resolve the integer ChargeToSOC target dispatched to the ESS hardware:
 	// 1. Standby mode always reports 0 (target SOC is N/A while holding in standby).
 	// 2. overrideReserveSOC takes precedence over targetSOC during active VPP events, where the
@@ -2275,28 +2102,28 @@ func finalizeDecisionAndPlan(
 		targetSOC = int(math.Round(immediateInterval.minSOC))
 	}
 
-	// Deficit and capacity hit times detection from display path trajectory
+	// Deficit and capacity hit times detection from winning path trajectory
 	var hitDeficitAt time.Time
 	var hitCapacityAt time.Time
 
 	minSOC := immediateInterval.minSOC
 	if initialStatus.BatterySOC <= minSOC+reserveFloorToleranceSOC {
-		hitDeficitAt = displayTimeline[0].startTime
+		hitDeficitAt = timeline[0].startTime
 	}
 	if initialStatus.BatterySOC >= 100.0-socTargetTolerancePct {
-		hitCapacityAt = displayTimeline[0].startTime
+		hitCapacityAt = timeline[0].startTime
 	}
 
 	planDisplayEnd := now.Add(time.Duration(maxPlanningHorizonHours) * time.Hour)
 
-	for i := 0; i < len(displayPath.actions) && i < len(displayTimeline); i++ {
-		if !displayTimeline[i].startTime.Before(planDisplayEnd) {
+	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
+		if !timeline[i].startTime.Before(planDisplayEnd) {
 			break
 		}
-		stepReserveSOC := displayTimeline[i].minSOC
-		if i < len(displayPath.states) && i+1 < len(displayPath.states) {
-			startSOC := displayPath.states[i].soc
-			endSOC := displayPath.states[i+1].soc
+		stepReserveSOC := timeline[i].minSOC
+		if i < len(winningPath.states) && i+1 < len(winningPath.states) {
+			startSOC := winningPath.states[i].soc
+			endSOC := winningPath.states[i+1].soc
 
 			if hitDeficitAt.IsZero() && endSOC <= stepReserveSOC+reserveFloorToleranceSOC {
 				if startSOC > stepReserveSOC+reserveFloorToleranceSOC && startSOC > endSOC {
@@ -2306,9 +2133,9 @@ func finalizeDecisionAndPlan(
 					} else if frac > 1 {
 						frac = 1
 					}
-					hitDeficitAt = displayTimeline[i].startTime.Add(time.Duration(frac * displayTimeline[i].durationHours * float64(time.Hour)))
+					hitDeficitAt = timeline[i].startTime.Add(time.Duration(frac * timeline[i].durationHours * float64(time.Hour)))
 				} else {
-					hitDeficitAt = displayTimeline[i].startTime
+					hitDeficitAt = timeline[i].startTime
 				}
 			}
 
@@ -2320,9 +2147,9 @@ func finalizeDecisionAndPlan(
 					} else if frac > 1 {
 						frac = 1
 					}
-					hitCapacityAt = displayTimeline[i].startTime.Add(time.Duration(frac * displayTimeline[i].durationHours * float64(time.Hour)))
+					hitCapacityAt = timeline[i].startTime.Add(time.Duration(frac * timeline[i].durationHours * float64(time.Hour)))
 				} else {
-					hitCapacityAt = displayTimeline[i].startTime
+					hitCapacityAt = timeline[i].startTime
 				}
 			}
 		}
@@ -2350,22 +2177,22 @@ func finalizeDecisionAndPlan(
 	var periods []types.PlanPeriod
 	var totalCostDollars, totalExportCredits float64
 
-	for i := 0; i < len(displayPath.actions) && i < len(displayTimeline); i++ {
-		action := displayPath.actions[i]
-		interval := displayTimeline[i]
+	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
+		action := winningPath.actions[i]
+		interval := timeline[i]
 		if !interval.startTime.Before(planDisplayEnd) {
 			break
 		}
 		var metrics intervalMetrics
-		if i < len(displayPath.metrics) {
-			metrics = displayPath.metrics[i]
+		if i < len(winningPath.metrics) {
+			metrics = winningPath.metrics[i]
 		}
 		var startState, endState planState
-		if i < len(displayPath.states) {
-			startState = displayPath.states[i]
+		if i < len(winningPath.states) {
+			startState = winningPath.states[i]
 		}
-		if i+1 < len(displayPath.states) {
-			endState = displayPath.states[i+1]
+		if i+1 < len(winningPath.states) {
+			endState = winningPath.states[i+1]
 		} else {
 			endState = startState
 		}

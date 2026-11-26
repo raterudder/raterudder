@@ -3338,7 +3338,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				DollarsPerKWH: 0.20754,
 			},
 		}
-		postHorizon := c.buildPostHorizonValuation(ctx, timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil, nil)
+		postHorizon := c.buildPostHorizonValuation(timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
 		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil, nil)
 		require.NotNil(t, pathStandby)
 		require.Len(t, pathStandby.actions, 72)
@@ -4740,7 +4740,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			BatterySOC:         30.0,
 		}
 		vppEvents := extractVPPAnchors(t0100, status0100, settings)
-		postHorizon := c.buildPostHorizonValuation(ctx, timeline, nil, settings, status0100, nil, nil)
+		postHorizon := c.buildPostHorizonValuation(timeline, nil, settings, status0100, nil)
 		pathAtStart := c.searchOptimalPlanBlocks(ctx, timeline, initial, vppEvents, postHorizon, settings, status0100, nil, nil)
 		if assert.Len(t, pathAtStart.actions, 4) {
 			assert.Equal(t, types.BatteryModeChargeAny, pathAtStart.actions[1].batteryMode,

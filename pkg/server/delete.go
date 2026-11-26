@@ -93,6 +93,11 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to delete site", http.StatusInternalServerError)
 		return
 	}
+	log.Ctx(ctx).InfoContext(ctx, "site deleted",
+		slog.String("event", eventSiteDeleted),
+		slog.String("siteID", siteID),
+		slog.String("deletedBy", user.ID),
+	)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "success"})
@@ -120,6 +125,10 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to delete user", http.StatusInternalServerError)
 		return
 	}
+	log.Ctx(ctx).InfoContext(ctx, "user deleted",
+		slog.String("event", eventUserDeleted),
+		slog.String("userID", user.ID),
+	)
 
 	if user.Email != "" {
 		if err := s.storage.DeleteInterest(ctx, user.Email); err != nil {

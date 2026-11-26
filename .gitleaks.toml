@@ -1,0 +1,227 @@
+title = "RateRudder Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+# 1. Server lflag secret flags (pkg/server/server.go:L157-L174):
+#    admin-emails, credentials-encryption-key, session-encryption-key,
+#    apps-encryption-key, vapid-private-key
+[[rules]]
+id = "raterudder-server-secret-flags"
+description = "RateRudder server lflag encryption keys, VAPID private key, or admin emails"
+regex = '''(?:--?(?:admin-emails|credentials-encryption-key|session-encryption-key|apps-encryption-key|vapid-private-key)(?:=["']?|\s+["'])|"(?:admin-emails|credentials-encryption-key|session-encryption-key|apps-encryption-key|vapid-private-key|ADMIN_EMAILS|CREDENTIALS_ENCRYPTION_KEY|SESSION_ENCRYPTION_KEY|APPS_ENCRYPTION_KEY|VAPID_PRIVATE_KEY)"\s*:\s*"|\b(?:ADMIN_EMAILS|CREDENTIALS_ENCRYPTION_KEY|SESSION_ENCRYPTION_KEY|APPS_ENCRYPTION_KEY|VAPID_PRIVATE_KEY)\s*[:=]\s*["']?)([^"'\s#;\r\n][^"'\r\n]{2,})'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow shell/env variable substitutions and README documentation placeholders"
+  regexTarget = "secret"
+  regexes = [
+    '''^\$[A-Za-z_{]''',
+    '''^YOUR_[A-Z0-9_]+$''',
+  ]
+
+# 2. Tesla ESS lflag secret flags (pkg/ess/tesla.go:L55-L57):
+#    tesla-client-id, tesla-client-secret, tesla-key-pem
+[[rules]]
+id = "raterudder-tesla-secret-flags"
+description = "Tesla Fleet API lflag client ID, client secret, private key PEM, or OAuth tokens"
+regex = '''(?:--?(?:tesla-client-id|tesla-client-secret|tesla-key-pem)(?:=["']?|\s+["'])|"(?:tesla-client-id|tesla-client-secret|tesla-key-pem|TESLA_CLIENT_ID|TESLA_CLIENT_SECRET|TESLA_KEY_PEM)"\s*:\s*"|\b(?:TESLA_CLIENT_ID|TESLA_CLIENT_SECRET|TESLA_KEY_PEM)\s*[:=]\s*["']?|(?:AccessToken|RefreshToken)\s*:\s*")([^"'\s#;\r\n][^"'\r\n]{2,})'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow shell/env variable substitutions and synthetic mock tokens in unit tests"
+  regexTarget = "secret"
+  regexes = [
+    '''^\$[A-Za-z_{]''',
+    '''^(?:mock|test|fake|dummy|valid|invalid|expired|new|old|rotated|initial|updated|cached|bad|empty)[-_A-Za-z0-9]*$''',
+    '''^[A-Za-z0-9_-]*[-_](?:token|access|refresh|code)[-_A-Za-z0-9]*$''',
+  ]
+  [[rules.allowlists]]
+  description = "Allow synthetic Tesla OAuth token literals in pkg/server unit tests"
+  condition = "AND"
+  paths = [
+    '''^pkg/server/(?:settings|update)_test\.go$''',
+  ]
+  regexTarget = "secret"
+  regexes = [
+    '''^tok$''',
+    '''^ref$''',
+    '''^token$''',
+    '''^refreshed$''',
+  ]
+
+# 3. ComEd / PJM lflag secret flag (pkg/utility/comed.go:L135):
+#    pjm-api-key
+[[rules]]
+id = "raterudder-comed-pjm-api-key"
+description = "PJM Data Miner 2 API key configured via lflag or environment"
+regex = '''(?:--?pjm-api-key(?:=["']?|\s+["'])|"(?:pjm-api-key|PJM_API_KEY)"\s*:\s*"|\bPJM_API_KEY\s*[:=]\s*["']?)([^"'\s#;\r\n][^"'\r\n]{2,})'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow shell/env variable substitutions"
+  regexTarget = "secret"
+  regexes = ['''^\$[A-Za-z_{]''']
+
+# 4. ERCOT lflag secret flags (pkg/utility/ercot.go:L227-L231):
+#    ercot-api-key, ercot-username, ercot-password, ercot-token
+[[rules]]
+id = "raterudder-ercot-secret-flags"
+description = "ERCOT Developer Portal API key, username, password, or static token"
+regex = '''(?:--?(?:ercot-api-key|ercot-username|ercot-password|ercot-token)(?:=["']?|\s+["'])|"(?:ercot-api-key|ercot-username|ercot-password|ercot-token|ERCOT_API_KEY|ERCOT_USERNAME|ERCOT_PASSWORD|ERCOT_TOKEN)"\s*:\s*"|\b(?:ERCOT_API_KEY|ERCOT_USERNAME|ERCOT_PASSWORD|ERCOT_TOKEN)\s*[:=]\s*["']?)([^"'\s#;\r\n][^"'\r\n]{2,})'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow shell/env variable substitutions"
+  regexTarget = "secret"
+  regexes = ['''^\$[A-Za-z_{]''']
+
+# 5. Weather & Geocoding lflag secret flags (pkg/weather/weather.go:L26-L29):
+#    open-meteo-api-key, google-maps-api-key
+[[rules]]
+id = "raterudder-weather-api-keys"
+description = "Open-Meteo or Google Maps API key configured via lflag or environment"
+regex = '''(?:--?(?:open-meteo-api-key|google-maps-api-key)(?:=["']?|\s+["'])|"(?:open-meteo-api-key|google-maps-api-key|OPEN_METEO_API_KEY|GOOGLE_MAPS_API_KEY)"\s*:\s*"|\b(?:OPEN_METEO_API_KEY|GOOGLE_MAPS_API_KEY)\s*[:=]\s*["']?)([^"'\s#;\r\n][^"'\r\n]{2,})'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow shell/env variable substitutions"
+  regexTarget = "secret"
+  regexes = ['''^\$[A-Za-z_{]''']
+
+# 6. Non-synthetic customer email detection across repository files
+[[rules]]
+id = "raterudder-non-synthetic-email"
+description = "Non-synthetic email address that may expose customer PII"
+regex = '''(?:^|[\s"'`<,(;:=])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow RFC 2606 synthetic domains, RateRudder public contact addresses, and GCP IAM service account identifiers"
+  regexTarget = "secret"
+  regexes = [
+    '''(?i)@(?:example\.(?:com|org|net)|test\.(?:com|org|net)|localhost|invalid|raterudder\.com|[a-z0-9.-]*\.iam\.gserviceaccount\.com)$''',
+    '''^user%d@example\.com$''',
+  ]
+  [[rules.allowlists]]
+  description = "Allow synthetic Franklin login test address in web/src/pages/Settings.test.tsx"
+  condition = "AND"
+  paths = ['''^web/src/pages/Settings\.test\.tsx$''']
+  regexTarget = "secret"
+  regexes = ['''^test@franklin\.com$''']
+  [[rules.allowlists]]
+  description = "Allow URL basic-auth rejection test cases (https://user:pass@host) in unit tests"
+  condition = "AND"
+  paths = ['''_test\.go$''']
+  regexTarget = "line"
+  regexes = ['''https?://[^/\s"']+@[A-Za-z0-9.-]+''']
+
+# 7. Zero emails of any kind in controller testdata fixtures
+[[rules]]
+id = "raterudder-fixture-email"
+description = "Email address inside pkg/controller/testdata fixture"
+path = '''^pkg/controller/testdata/'''
+regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'''
+
+# 8. Credential and PII JSON keys in controller testdata fixtures
+[[rules]]
+id = "raterudder-fixture-credential-key"
+description = "Credential or PII JSON key inside pkg/controller/testdata fixture"
+path = '''^pkg/controller/testdata/'''
+regex = '''"(credentials|franklin|tesla|enphase|authCode|accessToken|refreshToken|energySiteID|serialNumber|username|password|md5Password|gatewayID|token|sessionID|managerToken|systemID|userID|privateKey|private_key|private_key_id|clientSecret|client_secret|client_email|apiKey|api_key|sessionSecret|email|adminEmails|customerName|postalCode|city|streetAddress)"\s*:'''
+secretGroup = 1
+
+# 9. Non-synthetic raw siteID in controller testdata fixtures
+[[rules]]
+id = "raterudder-fixture-raw-site-id"
+description = "Non-synthetic siteID/siteId value inside pkg/controller/testdata fixture (must match ^site[0-9]+$)"
+path = '''^pkg/controller/testdata/'''
+regex = '''"siteI[dD]"\s*:\s*"([^"]+)"'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Only synthetic site<N> IDs are allowed in testdata fixtures"
+  regexTarget = "secret"
+  regexes = ['''^site[0-9]+$''']
+
+# 10. Raw siteID passed via CLI --site flag in committed files
+[[rules]]
+id = "raterudder-cli-raw-site-id"
+description = "Raw non-synthetic siteID passed to --site flag"
+regex = '''--site(?:=|\s+)["']?([A-Za-z0-9._-]+)["']?'''
+secretGroup = 1
+  [[rules.allowlists]]
+  description = "Allow synthetic site<N>, test-site placeholders, and CLI help prose (--site flag)"
+  regexTarget = "secret"
+  regexes = [
+    '''^site[0-9]+$''',
+    '''^test[-_]?site$''',
+    '''^flag$''',
+  ]
+
+# Scoped global allowlists for synthetic unit-test credentials and known non-secrets
+[[allowlists]]
+description = "Ignore Gitleaks configuration file itself and local hook/CI documentation examples"
+paths = [
+  '''^\.gitleaks\.toml$''',
+]
+
+[[allowlists]]
+description = "Synthetic encryption keys and session secrets in pkg/server/apps_test.go, pkg/server/auth_test.go, and pkg/server/*_test.go"
+condition = "AND"
+paths = [
+  '''^pkg/server/apps_test\.go$''',
+  '''^pkg/server/auth_test\.go$''',
+  '''^pkg/server/(?:forecast|notifications|oauth|server|settings|update)_test\.go$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^0123456789abcdef0123456789abcdef$''',
+  '''^fedcba9876543210fedcba9876543210$''',
+  '''^12345678901234567890123456789012$''',
+  '''^test-secret-key-1234567890123456$''',
+  '''^secret-123$''',
+  '''^valid-secret-123$''',
+  '''^secret-cimd-123$''',
+]
+
+[[allowlists]]
+description = "Synthetic test secrets/keys prefixed with MOCK_, FAKE_, mock-, or fake- in unit tests"
+condition = "AND"
+paths = [
+  '''_test\.go$''',
+  '''\.test\.tsx?$''',
+  '''^web/src/test/''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^(?:MOCK_|FAKE_|mock-|fake-)[A-Za-z0-9_-]+$''',
+]
+
+[[allowlists]]
+description = "Synthetic Tesla site identifier in pkg/ess/tesla_test.go"
+condition = "AND"
+paths = [
+  '''^pkg/ess/tesla_test\.go$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^test-site$''',
+]
+
+[[allowlists]]
+description = "Non-secret IANA timezone default in pkg/ess/mock.go and chart series keys in web/src/pages/History.tsx"
+condition = "AND"
+paths = [
+  '''^pkg/ess/mock\.go$''',
+  '''^web/src/pages/History\.tsx$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^America/Chicago$''',
+  '''^solar1h(?:Improved|Unclipped)$''',
+]
+
+[[allowlists]]
+description = "Non-secret test env var flag in AGENTS.md"
+condition = "AND"
+paths = [
+  '''^AGENTS\.md$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^RATERUDDER_LIVE_API_TESTS(?:=1)?$''',
+]

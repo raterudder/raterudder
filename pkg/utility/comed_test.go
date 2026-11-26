@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -203,28 +204,24 @@ func TestComEd(t *testing.T) {
 	})
 
 	t.Run("Integration Real API", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping live ComEd API integration test in short mode")
+		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("skipping live ComEd API integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
+		}
+
 		c := &baseComEdHourly{
 			apiURL:           "https://hourlypricing.comed.com/api?",
 			client:           &http.Client{Timeout: 10 * time.Second},
 			historicalPrices: make(map[int64]types.Price),
 		}
 
-		var price types.Price
-		var err error
-
-		// Implement retry loop to mitigate intermittent network errors
-		for i := 0; i < 3; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			price, err = c.GetCurrentPrice(ctx)
-			cancel()
-			if err == nil {
-				break
-			}
-			time.Sleep(1 * time.Second)
-		}
-		if err != nil && strings.Contains(err.Error(), "comed api returned status: 5") {
-			t.Skipf("comed API returned 5xx error: %v", err)
-		}
+		price, err := retryLiveAPIIntegration(t, "comed", func() (types.Price, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return c.GetCurrentPrice(ctx)
+		})
 		require.NoError(t, err)
 
 		// Basic sanity checks
