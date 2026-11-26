@@ -7,9 +7,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
+
+var ffIntradayLoadMomentum = feats.Bool("intradayLoadMomentum", false)
 
 // homeLoadPredictionRecencyDecay represents the age decay factor applied exponentially
 // as Pow(recencyDecay, ageDays). A value of 0.95 weights a data point from 7 days ago
@@ -226,6 +229,29 @@ const vacationVolatilityDropFraction = 0.25
 // below which remaining hours today are capped down to the unboosted all-days percentile rather than keeping the 3x
 // same-weekday surge boost.
 const calmMorningRatioThreshold = 0.90
+
+const (
+	// intradayMomentumStartHour is the first local waking hour (06:00) included when building
+	// same-day hourly load residuals on todayStr.
+	intradayMomentumStartHour = 6
+
+	// intradayMomentumMinHours is the minimum number of completed non-spike waking hours on todayStr
+	// required before evaluating intraday load momentum conditioning.
+	intradayMomentumMinHours = 3
+
+	// intradayMomentumMinTStat is the minimum absolute one-sample consistency t-score required across
+	// completed waking-hour residuals before applying an intraday shift, rejecting isolated 1-hour spikes.
+	intradayMomentumMinTStat = 1.5
+
+	// intradayMomentumDecayTauHours is the exponential horizon decay time constant (in hours) applied
+	// as exp(-(h - currentHour) / tau) across remaining hours of todayStr.
+	intradayMomentumDecayTauHours = 4.0
+
+	// intradayMomentumMaxActiveWeight caps the active-load share multiplier applied to positive intraday
+	// shifts so waking hours match the observed waking residual without overshooting, while late-night
+	// standby hours stay near baseline.
+	intradayMomentumMaxActiveWeight = 1.0
+)
 
 // EnergyHistoryDataset defines the JSON structure for historical energy modeling test datasets.
 type EnergyHistoryDataset struct {
@@ -962,28 +988,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 		slog.Any("recentDiffDetails", recentDiffDetails),
 	)
 
-	var rawAvgLoadA [24]float64
-	var rawP75LoadA [24]float64
-	var rawSolar [24]float64
-	var hasHour [24]bool
-	var targetTimes [24]time.Time
-
-	// Predict hourly profile for each hour of the upcoming 24-hour cycle.
-	for h := 0; h < 24; h++ {
-		var targetTime time.Time
-		tCur := now.In(loc)
-		for i := 0; i < 24; i++ {
-			if tCur.Hour() == h {
-				targetTime = tCur.Truncate(time.Hour)
-				break
-			}
-			tCur = tCur.Add(time.Hour)
-		}
-		if targetTime.IsZero() {
-			continue
-		}
-		hasHour[h] = true
-		targetTimes[h] = targetTime
+	predictSingleHourRawLoad := func(h int, targetTime time.Time, includeToday bool, logNeighbor bool) (float64, float64) {
 		wd := targetTime.Weekday()
 
 		// Build the Option A (same-weekday) historical date pool for target weekday wd.
@@ -1032,8 +1037,10 @@ func (c *Controller) BuildHourlyEnergyModel(
 		for _, dateStr := range recentValidDates {
 			selectedDatesMap[dateStr] = true
 		}
-		if dToday := dayMap[todayStr]; dToday != nil && len(dToday.loads) > 0 {
-			selectedDatesMap[todayStr] = true
+		if includeToday {
+			if dToday := dayMap[todayStr]; dToday != nil && len(dToday.loads) > 0 {
+				selectedDatesMap[todayStr] = true
+			}
 		}
 
 		// Target weather time and temperature for current hour h
@@ -1178,7 +1185,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 			neighborMult := func(hpLocalHour int, loadKWH float64) float64 {
 				mult := computeNeighborMultiplier(h, hpLocalHour, loadKWH, standbyLoad, targetTemp, hasTargetTemp, hvac, seasonalMedians)
-				if mult == sharpHVACNeighborMultiplier && hpLocalHour >= 0 && hpLocalHour < 24 && !loggedDampenedNeighbor[hpLocalHour] {
+				if logNeighbor && mult == sharpHVACNeighborMultiplier && hpLocalHour >= 0 && hpLocalHour < 24 && !loggedDampenedNeighbor[hpLocalHour] {
 					loggedDampenedNeighbor[hpLocalHour] = true
 					log.Ctx(ctx).DebugContext(
 						ctx,
@@ -1305,21 +1312,51 @@ func (c *Controller) BuildHourlyEnergyModel(
 			hasEffectivePoolTemp,
 			avgLoadA,
 		); extraKWH > 0 {
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"applying extreme weather HVAC load adjustment",
-				slog.Int("hour", h),
-				slog.String("reason", reason),
-				slog.Float64("targetTempC", targetTemp),
-				slog.Float64("minHistTempC", minHistTemp),
-				slog.Float64("maxHistTempC", maxHistTemp),
-				slog.Float64("effectivePoolTempC", effectivePoolTempC),
-				slog.Float64("baseLoadKWH", avgLoadA),
-				slog.Float64("extraLoadKWH", extraKWH),
-			)
+			if logNeighbor {
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"applying extreme weather HVAC load adjustment",
+					slog.Int("hour", h),
+					slog.String("reason", reason),
+					slog.Float64("targetTempC", targetTemp),
+					slog.Float64("minHistTempC", minHistTemp),
+					slog.Float64("maxHistTempC", maxHistTemp),
+					slog.Float64("effectivePoolTempC", effectivePoolTempC),
+					slog.Float64("baseLoadKWH", avgLoadA),
+					slog.Float64("extraLoadKWH", extraKWH),
+				)
+			}
 			avgLoadA += extraKWH
 			p75LoadA += extraKWH
 		}
+
+		return avgLoadA, p75LoadA
+	}
+
+	var rawAvgLoadA [24]float64
+	var rawP75LoadA [24]float64
+	var rawSolar [24]float64
+	var hasHour [24]bool
+	var targetTimes [24]time.Time
+
+	// Predict hourly profile for each hour of the upcoming 24-hour cycle.
+	for h := 0; h < 24; h++ {
+		var targetTime time.Time
+		tCur := now.In(loc)
+		for i := 0; i < 24; i++ {
+			if tCur.Hour() == h {
+				targetTime = tCur.Truncate(time.Hour)
+				break
+			}
+			tCur = tCur.Add(time.Hour)
+		}
+		if targetTime.IsZero() {
+			continue
+		}
+		hasHour[h] = true
+		targetTimes[h] = targetTime
+
+		avgLoadA, p75LoadA := predictSingleHourRawLoad(h, targetTime, true, true)
 
 		// Solar prediction.
 		// WeatherSolar uses forecasted values (preferred), falling back to SmoothedSolar if forecast is absent.
@@ -1337,8 +1374,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		rawSolar[h] = avgSolar
 	}
 
+	var capCalmMorningHour func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64)
 	if detectedShift == "none" {
-		applyOutlierDayCalmMorningDampening(
+		capCalmMorningHour = applyOutlierDayCalmMorningDampening(
 			ctx,
 			&rawAvgLoadA,
 			&rawP75LoadA,
@@ -1372,33 +1410,120 @@ func (c *Controller) BuildHourlyEnergyModel(
 		dayMeanActiveLoadA = sumActiveLoadA / float64(activeHourCount)
 	}
 
+	applyOptionGShift := func(avgLoadA, p75LoadA float64) (float64, float64) {
+		// Apply the adaptive shift derived via Option G.
+		// Negative shifts subtract strictly from active load above standbyLoad to protect the empirical standby floor.
+		// Positive shifts are weighted proportionally to each hour's active load share so overnight sleeping hours
+		// are not artificially inflated by daytime/evening load shifts.
+		if appliedShift < 0 {
+			activeAvg := max(0.0, avgLoadA-standbyLoad)
+			activeP75 := max(0.0, p75LoadA-standbyLoad)
+			return standbyLoad + max(0.0, activeAvg+appliedShift), standbyLoad + max(0.0, activeP75+appliedShift)
+		}
+		shiftWeight := 1.0
+		if dayMeanActiveLoadA > 0.1 {
+			activeAvg := max(0.0, avgLoadA-standbyLoad)
+			shiftWeight = min(1.5, activeAvg/dayMeanActiveLoadA)
+		}
+		return max(0.9*standbyLoad, avgLoadA+appliedShift*shiftWeight), max(0.9*standbyLoad, p75LoadA+appliedShift*shiftWeight)
+	}
+
+	intradayShiftKWH := 0.0
+	obsMeanActiveBaseKWH := 0.0
+	obsMedianTempC := 0.0
+	hasObsMedianTemp := false
+	if ffIntradayLoadMomentum.Enabled(ctx) && detectedShift == "none" && currentHour >= intradayMomentumStartHour+intradayMomentumMinHours {
+		if todayPts := dayMap[todayStr]; todayPts != nil {
+			obsKWHByHr := make(map[int]float64)
+			for _, pt := range todayPts.points {
+				if pt.HomeKWH <= 0.0 {
+					continue
+				}
+				hr := pt.TSHourStart.In(loc).Hour()
+				if hr >= intradayMomentumStartHour && hr < currentHour && !ignoredOutlierHours[dayHourKey{date: todayStr, hour: hr}] {
+					obsKWHByHr[hr] = pt.HomeKWH
+				}
+			}
+			if len(obsKWHByHr) >= intradayMomentumMinHours {
+				nowLocal := now.In(loc)
+				residualsKWH := make([]float64, 0, len(obsKWHByHr))
+				obsTempsC := make([]float64, 0, len(obsKWHByHr))
+				var sumObsActiveBaseKWH float64
+				for hr := intradayMomentumStartHour; hr < currentHour; hr++ {
+					actualKWH, ok := obsKWHByHr[hr]
+					if !ok {
+						continue
+					}
+					hrTargetTime := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), hr, 0, 0, 0, loc)
+					if obsTempC, hasTemp := weatherByHour[hrTargetTime.Truncate(time.Hour).UTC()]; hasTemp {
+						obsTempsC = append(obsTempsC, obsTempC)
+					}
+					rawBaseAvgKWH, rawBaseP75KWH := predictSingleHourRawLoad(hr, hrTargetTime, false, false)
+					if capCalmMorningHour != nil {
+						rawBaseAvgKWH, rawBaseP75KWH = capCalmMorningHour(hr, hrTargetTime, rawBaseAvgKWH, rawBaseP75KWH)
+					}
+					baselineKWH, _ := applyOptionGShift(rawBaseAvgKWH, rawBaseP75KWH)
+					residualsKWH = append(residualsKWH, actualKWH-baselineKWH)
+					sumObsActiveBaseKWH += max(0.0, baselineKWH-standbyLoad)
+				}
+				if len(residualsKWH) >= intradayMomentumMinHours {
+					obsMeanActiveBaseKWH = sumObsActiveBaseKWH / float64(len(residualsKWH))
+					if len(obsTempsC) > 0 {
+						obsMedianTempC = medianSortedOrCopy(obsTempsC)
+						hasObsMedianTemp = true
+					}
+					meanResidualKWH := getMean(residualsKWH)
+					stdDevResidualKWH := getStdDev(residualsKWH)
+					tScore := meanResidualKWH / (stdDevResidualKWH / math.Sqrt(float64(len(residualsKWH))))
+					medianResidualKWH := medianSortedOrCopy(residualsKWH)
+					if math.Abs(tScore) >= intradayMomentumMinTStat && meanResidualKWH*medianResidualKWH > 0 {
+						intradayShiftKWH = medianResidualKWH
+					}
+					log.Ctx(ctx).DebugContext(
+						ctx,
+						"evaluated intraday load momentum residuals",
+						slog.String("date", todayStr),
+						slog.Int("currentHour", currentHour),
+						slog.Int("wakingHoursCount", len(residualsKWH)),
+						slog.Float64("meanResidualKWH", meanResidualKWH),
+						slog.Float64("medianResidualKWH", medianResidualKWH),
+						slog.Float64("stdDevResidualKWH", stdDevResidualKWH),
+						slog.Float64("tScore", tScore),
+						slog.Float64("appliedIntradayShiftKWH", intradayShiftKWH),
+					)
+				}
+			}
+		}
+	}
+
+	activeRefLoadKWH := max(dayMeanActiveLoadA, obsMeanActiveBaseKWH)
+
 	result := make([]TimeProfile, 24)
 	for h := 0; h < 24; h++ {
 		if !hasHour[h] {
 			result[h] = TimeProfile{Hour: h}
 			continue
 		}
-		avgLoadA := rawAvgLoadA[h]
-		p75LoadA := rawP75LoadA[h]
+		finalHomeLoadACAdj, finalP75HomeLoad := applyOptionGShift(rawAvgLoadA[h], rawP75LoadA[h])
 
-		// Apply the adaptive shift derived via Option G.
-		// Negative shifts subtract strictly from active load above standbyLoad to protect the empirical standby floor.
-		// Positive shifts are weighted proportionally to each hour's active load share so overnight sleeping hours
-		// are not artificially inflated by daytime/evening load shifts.
-		var finalHomeLoadACAdj, finalP75HomeLoad float64
-		if appliedShift < 0 {
-			activeAvg := max(0.0, avgLoadA-standbyLoad)
-			activeP75 := max(0.0, p75LoadA-standbyLoad)
-			finalHomeLoadACAdj = standbyLoad + max(0.0, activeAvg+appliedShift)
-			finalP75HomeLoad = standbyLoad + max(0.0, activeP75+appliedShift)
-		} else {
-			shiftWeight := 1.0
-			if dayMeanActiveLoadA > 0.1 {
-				activeAvg := max(0.0, avgLoadA-standbyLoad)
-				shiftWeight = min(1.5, activeAvg/dayMeanActiveLoadA)
+		if intradayShiftKWH != 0 && h >= currentHour && targetTimes[h].In(loc).Format("2006-01-02") == todayStr {
+			decayedShiftKWH := intradayShiftKWH * math.Exp(-float64(h-currentHour)/intradayMomentumDecayTauHours)
+			offsetKWH := decayedShiftKWH
+			if decayedShiftKWH > 0 {
+				activeWeight := 1.0
+				if activeRefLoadKWH > 0.1 {
+					activeAvg := max(0.0, rawAvgLoadA[h]-standbyLoad)
+					activeWeight = min(intradayMomentumMaxActiveWeight, activeAvg/activeRefLoadKWH)
+				}
+				if hasObsMedianTemp && obsMedianTempC < coldHeatingBaseTempC {
+					if targetTempC, ok := weatherByHour[targetTimes[h].Truncate(time.Hour).UTC()]; ok && targetTempC > obsMedianTempC+weatherDrivenSurgeTempDeltaC {
+						activeWeight *= math.Exp(-(targetTempC - obsMedianTempC) / tempSimilarityScale)
+					}
+				}
+				offsetKWH = decayedShiftKWH * activeWeight
 			}
-			finalHomeLoadACAdj = max(0.9*standbyLoad, avgLoadA+appliedShift*shiftWeight)
-			finalP75HomeLoad = max(0.9*standbyLoad, p75LoadA+appliedShift*shiftWeight)
+			finalHomeLoadACAdj = max(0.9*standbyLoad, finalHomeLoadACAdj+offsetKWH)
+			finalP75HomeLoad = max(0.9*standbyLoad, finalP75HomeLoad+offsetKWH)
 		}
 
 		result[h] = TimeProfile{
@@ -2580,11 +2705,11 @@ func identifyHistoricalVacationDays(
 }
 
 // applyOutlierDayCalmMorningDampening caps remaining hours of today down to the unboosted all-days
-// recency-weighted percentile when today is a historical weekday-outlier day (e.g. a Friday/weekend
-// chore day) whose observed morning load (07:00 up to min(12, currentHour)) is calmer than 90% of
-// the normal all-days P50 morning baseline across at least 2 observed hours.
-// This prevents a single outlier weekday's 3x same-weekday multiplier from over-forecasting the rest
-// of today (and triggering unnecessary grid charging) when today actually behaves like a normal day.
+// recency-weighted percentile when today is a historical morning-outlier weekday (e.g. a Friday/weekend
+// morning chore day) whose observed morning load (07:00 up to min(12, currentHour)) is calmer than 90%
+// of the normal all-days P50 morning baseline across at least 2 observed hours and whose completed
+// post-12:00 hours have not exceeded the unboosted baseline.
+// Returns a per-hour capping closure when calm-morning dampening applies on todayStr (or nil otherwise).
 func applyOutlierDayCalmMorningDampening(
 	ctx context.Context,
 	rawAvgLoadA *[24]float64,
@@ -2603,34 +2728,38 @@ func applyOutlierDayCalmMorningDampening(
 	weatherByHour map[time.Time]float64,
 	standbyLoad float64,
 	settings types.Settings,
-) {
+) func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64) {
 	// Only evaluate from 09:00 onward (ensuring at least 2 completed hours in [07:00, 09:00))
-	// and only on weekdays where historical loads qualified for a same-weekday boost.
+	// and only on weekdays where historical morning loads qualified for a same-weekday Morning outlier boost.
 	nowLocal := now.In(loc)
-	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()].any() {
-		return
+	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()].Morning {
+		return nil
 	}
 	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc)
 	todayPts := dayMap[todayStr]
 	if todayPts == nil {
-		return
+		return nil
 	}
 
-	// Collect today's observed waking morning hours [07:00, min(12, currentHour)),
-	// skipping any flagged EV/spike hours so an isolated morning spike does not skew the check.
+	// Collect today's completed non-spike hours across [07:00, currentHour),
+	// skipping any flagged EV/spike hours so an isolated spike does not skew the check.
 	endMornHr := min(12, currentHour)
 	obsByHr := make(map[int]float64)
+	mornObsCount := 0
 	for _, pt := range todayPts.points {
 		if pt.HomeKWH <= 0.0 {
 			continue
 		}
 		hr := pt.TSHourStart.In(loc).Hour()
-		if hr >= 7 && hr < endMornHr && !ignoredOutlierHours[dayHourKey{date: todayStr, hour: hr}] {
+		if hr >= 7 && hr < currentHour && !ignoredOutlierHours[dayHourKey{date: todayStr, hour: hr}] {
+			if _, seen := obsByHr[hr]; !seen && hr < endMornHr {
+				mornObsCount++
+			}
 			obsByHr[hr] = pt.HomeKWH
 		}
 	}
-	if len(obsByHr) < 2 {
-		return
+	if mornObsCount < 2 {
+		return nil
 	}
 
 	// Gather valid non-vacation historical days (excluding today) for the unboosted all-days pool.
@@ -2641,7 +2770,7 @@ func applyOutlierDayCalmMorningDampening(
 		}
 	}
 	if len(sortedDates) < 4 {
-		return
+		return nil
 	}
 	sort.Strings(sortedDates)
 
@@ -2852,7 +2981,7 @@ func applyOutlierDayCalmMorningDampening(
 	}
 
 	if mornCount < 2 || baseP50MornSumKWH <= 0.1 {
-		return
+		return nil
 	}
 	if obsMornSumKWH >= calmMorningRatioThreshold*baseP50MornSumKWH {
 		log.Ctx(ctx).DebugContext(
@@ -2865,12 +2994,61 @@ func applyOutlierDayCalmMorningDampening(
 			slog.Float64("observedMorningSumKWH", obsMornSumKWH),
 			slog.Float64("baselineP50MorningSumKWH", baseP50MornSumKWH),
 		)
-		return
+		return nil
+	}
+
+	// Inspect completed post-12:00 hours [12:00, currentHour) and abort dampening if midday/afternoon
+	// load exceeds the unboosted all-days P50 baseline.
+	var obsPostNoonSumKWH, baseP50PostNoonSumKWH float64
+	var postNoonCount int
+	for hr := 12; hr < currentHour; hr++ {
+		obsKWH, hasObs := obsByHr[hr]
+		if !hasObs {
+			continue
+		}
+		hrTargetTime := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), hr, 0, 0, 0, loc)
+		pts, extraKWH := computeAllDaysHourPts(hr, hrTargetTime, 0.50)
+		if len(pts) == 0 {
+			continue
+		}
+		obsPostNoonSumKWH += obsKWH
+		baseP50PostNoonSumKWH += getWeightedPercentile(pts, 0.50) + extraKWH
+		postNoonCount++
+	}
+	if postNoonCount > 0 && obsPostNoonSumKWH > baseP50PostNoonSumKWH {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"skipping weekday-outlier calm-morning dampening because post-noon load exceeds baseline",
+			slog.String("date", todayStr),
+			slog.String("weekday", nowLocal.Weekday().String()),
+			slog.Int("currentHour", currentHour),
+			slog.Int("postNoonHoursChecked", postNoonCount),
+			slog.Float64("observedPostNoonSumKWH", obsPostNoonSumKWH),
+			slog.Float64("baselineP50PostNoonSumKWH", baseP50PostNoonSumKWH),
+		)
+		return nil
 	}
 
 	pct := defaultStrategyPercentile
 	if settings.HomeLoadPredictionStrategy == "conservative" {
 		pct = conservativeStrategyPercentile
+	}
+
+	capHour := func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64) {
+		pts, extraKWH := computeAllDaysHourPts(h, targetTime, pct)
+		if len(pts) == 0 {
+			return rawAvgKWH, rawP75KWH
+		}
+		allDaysPctKWH := getWeightedPercentile(pts, pct)
+		allDaysP75KWH := getWeightedPercentile(pts, 0.75)
+		if extraKWH > 0 {
+			allDaysPctKWH += extraKWH
+			allDaysP75KWH += extraKWH
+		}
+		if allDaysPctKWH < rawAvgKWH {
+			return allDaysPctKWH, max(allDaysPctKWH, min(rawP75KWH, allDaysP75KWH))
+		}
+		return rawAvgKWH, rawP75KWH
 	}
 
 	// Cap remaining hours that fall on today (leaving tomorrow's profile hours untouched) down to
@@ -2880,19 +3058,10 @@ func applyOutlierDayCalmMorningDampening(
 		if !hasHour[h] || targetTimes[h].In(loc).Format("2006-01-02") != todayStr {
 			continue
 		}
-		pts, extraKWH := computeAllDaysHourPts(h, targetTimes[h], pct)
-		if len(pts) == 0 {
-			continue
-		}
-		allDaysPctKWH := getWeightedPercentile(pts, pct)
-		allDaysP75KWH := getWeightedPercentile(pts, 0.75)
-		if extraKWH > 0 {
-			allDaysPctKWH += extraKWH
-			allDaysP75KWH += extraKWH
-		}
-		if allDaysPctKWH < rawAvgLoadA[h] {
-			rawAvgLoadA[h] = allDaysPctKWH
-			rawP75LoadA[h] = max(rawAvgLoadA[h], min(rawP75LoadA[h], allDaysP75KWH))
+		cappedAvg, cappedP75 := capHour(h, targetTimes[h], rawAvgLoadA[h], rawP75LoadA[h])
+		if cappedAvg < rawAvgLoadA[h] {
+			rawAvgLoadA[h] = cappedAvg
+			rawP75LoadA[h] = cappedP75
 			cappedHours++
 		}
 	}
@@ -2910,6 +3079,7 @@ func applyOutlierDayCalmMorningDampening(
 			slog.Int("cappedHours", cappedHours),
 		)
 	}
+	return capHour
 }
 
 // TimeProfile holds modeled average solar production and home load for an hour.

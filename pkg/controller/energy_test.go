@@ -2672,6 +2672,295 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				"cold target day (<= 10°C) must expand selectedDatesMap to include temperature-matched other-weekday days even without heatingHours")
 		}
 	})
+
+	t.Run("IntradayLoadMomentumSustainedSurgeDecaysAndWeightsActiveLoad", func(t *testing.T) {
+		// 28 days of baseline history:
+		// - Sleeping/standby hours (22:00..05:59): 0.30 kWh
+		// - Waking hours (06:00..21:59): 1.10..1.50 kWh (natural daily variation, median ~1.30 kWh)
+		// Today (Wednesday 14:00): sustained daytime surge of 2.30 kWh across 06:00..13:59 (+1.0 kWh residual).
+		now := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
+		today := now.Truncate(24 * time.Hour)
+		var history []types.EnergyStats
+		for d := 28; d >= 1; d-- {
+			dt := today.AddDate(0, 0, -d)
+			dayWakingKWH := 1.10 + 0.10*float64(d%5)
+			for h := 0; h < 24; h++ {
+				loadKWH := 0.30
+				if h >= 6 && h <= 21 {
+					loadKWH = dayWakingKWH
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+			}
+		}
+		for h := 0; h < 14; h++ {
+			loadKWH := 0.30
+			if h >= 6 {
+				loadKWH = 2.30
+			}
+			history = append(history, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+
+		ctxOff := ffIntradayLoadMomentum.With(ctx, false)
+		ctxOn := ffIntradayLoadMomentum.With(ctx, true)
+
+		modelOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, now, history, nil, types.Settings{})
+		modelOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, now, history, nil, types.Settings{})
+		if assert.Len(t, modelOff, 24) && assert.Len(t, modelOn, 24) {
+			lift14 := modelOn[14].AvgHomeLoadKWH - modelOff[14].AvgHomeLoadKWH
+			lift16 := modelOn[16].AvgHomeLoadKWH - modelOff[16].AvgHomeLoadKWH
+			lift19 := modelOn[19].AvgHomeLoadKWH - modelOff[19].AvgHomeLoadKWH
+			lift23 := modelOn[23].AvgHomeLoadKWH - modelOff[23].AvgHomeLoadKWH
+
+			assert.Greater(t, lift14, 0.80, "sustained 8-hour waking surge must lift near-term 14:00 AvgHomeLoadKWH")
+			assert.Greater(t, modelOn[14].P75HomeLoadKWH-modelOff[14].P75HomeLoadKWH, 0.80, "P75HomeLoadKWH must also receive the positive intraday offset")
+			assert.Greater(t, lift14, lift16, "exponential horizon decay must reduce offset from 14:00 to 16:00")
+			assert.Greater(t, lift16, lift19, "exponential horizon decay must reduce offset from 16:00 to 19:00")
+			assert.Less(t, lift23, 0.05, "late-night standby hour 23:00 must stay near baseline via decay and active-load weighting")
+
+			// Tomorrow hours (00:00..13:00 of 2026-07-16) must remain untouched.
+			for h := 0; h < 14; h++ {
+				assert.InDelta(t, modelOff[h].AvgHomeLoadKWH, modelOn[h].AvgHomeLoadKWH, 1e-9, "tomorrow hour %d AvgHomeLoadKWH must be untouched", h)
+				assert.InDelta(t, modelOff[h].P75HomeLoadKWH, modelOn[h].P75HomeLoadKWH, 1e-9, "tomorrow hour %d P75HomeLoadKWH must be untouched", h)
+			}
+		}
+	})
+
+	t.Run("IntradayLoadMomentumBidirectionalDownwardShiftAndStandbyClamp", func(t *testing.T) {
+		// Historical days have 0.50 kWh standby overnight (00:00..05:59) and 2.00..2.60 kWh waking load (06:00..21:59)
+		// with intra-day volatility so today's moderately quieter morning (1.20 kWh with mild variation) stays in
+		// normal occupancy mode (detectedShift == "none") while producing consistent negative residuals (~ -1.1 kWh).
+		now := time.Date(2026, 7, 15, 11, 0, 0, 0, time.UTC)
+		today := now.Truncate(24 * time.Hour)
+		var history []types.EnergyStats
+		for d := 28; d >= 1; d-- {
+			dt := today.AddDate(0, 0, -d)
+			baseWaking := 2.00 + 0.15*float64(d%5)
+			for h := 0; h < 24; h++ {
+				loadKWH := 0.50
+				if h >= 6 && h <= 21 {
+					loadKWH = baseWaking
+					if h == 18 {
+						loadKWH += 0.60
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+			}
+		}
+		todayLoads := []float64{0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 1.05, 1.35, 1.15, 1.40, 1.10}
+		for h, loadKWH := range todayLoads {
+			history = append(history, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+
+		ctxOff := ffIntradayLoadMomentum.With(ctx, false)
+		ctxOn := ffIntradayLoadMomentum.With(ctx, true)
+
+		modelOff, paramsOff, _, _ := c.BuildHourlyEnergyModel(ctxOff, now, history, nil, types.Settings{})
+		modelOn, paramsOn, _, _ := c.BuildHourlyEnergyModel(ctxOn, now, history, nil, types.Settings{})
+		require.Equal(t, "none", paramsOff.DetectedShift)
+		require.Equal(t, "none", paramsOn.DetectedShift)
+
+		if assert.Len(t, modelOff, 24) && assert.Len(t, modelOn, 24) {
+			drop11 := modelOff[11].AvgHomeLoadKWH - modelOn[11].AvgHomeLoadKWH
+			drop15 := modelOff[15].AvgHomeLoadKWH - modelOn[15].AvgHomeLoadKWH
+			assert.Greater(t, drop11, 0.70, "consistent negative waking residuals must lower near-term AvgHomeLoadKWH")
+			assert.Greater(t, modelOff[11].P75HomeLoadKWH-modelOn[11].P75HomeLoadKWH, 0.70, "P75HomeLoadKWH must also shift downward")
+			assert.Greater(t, drop11, drop15, "negative intraday shift must decay exponentially across the afternoon")
+
+			// Verify 0.9 * standbyLoad (~0.45 kWh) floor holds on all remaining todayStr hours (including sleeping 22:00/23:00).
+			minClampKWH := 0.9 * 0.50
+			for h := 11; h < 24; h++ {
+				assert.GreaterOrEqual(t, modelOn[h].AvgHomeLoadKWH, minClampKWH-1e-6, "hour %d AvgHomeLoadKWH must clamp >= 0.9 * standbyLoad", h)
+				assert.GreaterOrEqual(t, modelOn[h].P75HomeLoadKWH, minClampKWH-1e-6, "hour %d P75HomeLoadKWH must clamp >= 0.9 * standbyLoad", h)
+			}
+			for h := 0; h < 11; h++ {
+				assert.InDelta(t, modelOff[h].AvgHomeLoadKWH, modelOn[h].AvgHomeLoadKWH, 1e-9, "tomorrow hour %d must be untouched", h)
+			}
+		}
+	})
+
+	t.Run("IntradayLoadMomentumRejectsSingleHourSpikeAndAnchorsToMedian", func(t *testing.T) {
+		today := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+		var baseHistory []types.EnergyStats
+		for d := 28; d >= 1; d-- {
+			dt := today.AddDate(0, 0, -d)
+			dayWakingKWH := 1.10 + 0.10*float64(d%5)
+			for h := 0; h < 24; h++ {
+				loadKWH := 0.30
+				if h >= 6 && h <= 21 {
+					loadKWH = dayWakingKWH
+				}
+				baseHistory = append(baseHistory, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+			}
+		}
+
+		ctxOff := ffIntradayLoadMomentum.With(ctx, false)
+		ctxOn := ffIntradayLoadMomentum.With(ctx, true)
+
+		// 1. Single-hour 3.6 kWh dryer/oven blip at 09:00 alongside normal waking hours (06:00..11:00) -> t ~ 1.0 < 1.5, unchanged.
+		now12 := today.Add(12 * time.Hour)
+		singleSpikeHist := append([]types.EnergyStats(nil), baseHistory...)
+		for h := 0; h < 12; h++ {
+			loadKWH := 0.30
+			if h >= 6 {
+				loadKWH = 1.30
+			}
+			if h == 9 {
+				loadKWH = 3.60 // Below 4.8 kW EV threshold so it enters residuals, but fails consistency t-score
+			}
+			singleSpikeHist = append(singleSpikeHist, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+		spikeOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, now12, singleSpikeHist, nil, types.Settings{})
+		spikeOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, now12, singleSpikeHist, nil, types.Settings{})
+		if assert.Len(t, spikeOff, 24) && assert.Len(t, spikeOn, 24) {
+			for h := 12; h < 24; h++ {
+				assert.InDelta(t, spikeOff[h].AvgHomeLoadKWH, spikeOn[h].AvgHomeLoadKWH, 1e-9,
+					"isolated 1-hour appliance spike must fail consistency check and leave hour %d unchanged", h)
+			}
+		}
+
+		// 2. Fewer than 3 completed waking hours (now at 08:00 -> only 06:00 and 07:00 completed) -> unchanged.
+		now08 := today.Add(8 * time.Hour)
+		twoHourHist := append([]types.EnergyStats(nil), baseHistory...)
+		for h := 0; h < 8; h++ {
+			loadKWH := 0.30
+			if h >= 6 {
+				loadKWH = 2.60
+			}
+			twoHourHist = append(twoHourHist, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+		twoOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, now08, twoHourHist, nil, types.Settings{})
+		twoOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, now08, twoHourHist, nil, types.Settings{})
+		if assert.Len(t, twoOff, 24) && assert.Len(t, twoOn, 24) {
+			assert.InDelta(t, twoOff[10].AvgHomeLoadKWH, twoOn[10].AvgHomeLoadKWH, 1e-9,
+				"fewer than 3 completed waking hours must not trigger intraday momentum conditioning")
+		}
+
+		// 3. Median anchor: 3 elevated hours at 2.10 kWh (+0.80 residual) + 1 appliance hour at 3.30 kWh (+2.00 residual)
+		// passes t >= 1.5, and anchors the shift to the median (~ +0.80 kWh) rather than the spike-inflated mean (+1.10 kWh).
+		now10 := today.Add(10 * time.Hour)
+		medianHist := append([]types.EnergyStats(nil), baseHistory...)
+		for h := 0; h < 10; h++ {
+			loadKWH := 0.30
+			if h >= 6 {
+				loadKWH = 2.10
+			}
+			if h == 8 {
+				loadKWH = 3.30
+			}
+			medianHist = append(medianHist, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+		medOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, now10, medianHist, nil, types.Settings{})
+		medOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, now10, medianHist, nil, types.Settings{})
+		if assert.Len(t, medOff, 24) && assert.Len(t, medOn, 24) {
+			appliedAt10 := medOn[10].AvgHomeLoadKWH - medOff[10].AvgHomeLoadKWH
+			assert.InDelta(t, 0.80, appliedAt10, 0.15, "shift at currentHour must anchor to median residual (~0.80 kWh) rather than mean")
+		}
+	})
+
+	t.Run("IntradayLoadMomentumSkipsIgnoredEVHoursVacationShiftAndMidnightCalls", func(t *testing.T) {
+		today := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+		var baseHistory []types.EnergyStats
+		for d := 28; d >= 1; d-- {
+			dt := today.AddDate(0, 0, -d)
+			dayWakingKWH := 1.10 + 0.10*float64(d%5)
+			for h := 0; h < 24; h++ {
+				loadKWH := 0.30
+				if h >= 6 && h <= 21 {
+					loadKWH = dayWakingKWH
+				}
+				baseHistory = append(baseHistory, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+			}
+		}
+
+		ctxOff := ffIntradayLoadMomentum.With(ctx, false)
+		ctxOn := ffIntradayLoadMomentum.With(ctx, true)
+
+		// 1. Daytime EV charging session (9.6 kWh at 08:00..10:00, flagged in ignoredOutlierHours) with normal
+		// household load (1.30 kWh) in 06:00, 07:00, 11:00, 12:00 must NOT inflate household load forecasts.
+		now13 := today.Add(13 * time.Hour)
+		evHist := append([]types.EnergyStats(nil), baseHistory...)
+		for h := 0; h < 13; h++ {
+			loadKWH := 0.30
+			if h >= 6 {
+				loadKWH = 1.30
+			}
+			if h >= 8 && h <= 10 {
+				loadKWH = 9.60
+			}
+			evHist = append(evHist, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     loadKWH,
+			})
+		}
+		evOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, now13, evHist, nil, types.Settings{})
+		evOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, now13, evHist, nil, types.Settings{})
+		if assert.Len(t, evOff, 24) && assert.Len(t, evOn, 24) {
+			assert.InDelta(t, evOff[14].AvgHomeLoadKWH, evOn[14].AvgHomeLoadKWH, 0.05,
+				"ignoredOutlierHours EV session must be excluded from todayStr residuals")
+		}
+
+		// 2. Active vacation load shift (detectedShift == "down") must skip intraday residual conditioning.
+		vacHist := make([]types.EnergyStats, 0, len(baseHistory)+24)
+		for _, pt := range baseHistory {
+			if pt.TSHourStart.Format("2006-01-02") == today.AddDate(0, 0, -1).Format("2006-01-02") {
+				pt.HomeKWH = 0.30 // Yesterday flat vacation day
+			}
+			vacHist = append(vacHist, pt)
+		}
+		for h := 0; h < 13; h++ {
+			vacHist = append(vacHist, types.EnergyStats{
+				TSHourStart: today.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     0.30, // Today flat vacation morning
+			})
+		}
+		vacOff, vacParamsOff, _, _ := c.BuildHourlyEnergyModel(ctxOff, now13, vacHist, nil, types.Settings{})
+		vacOn, vacParamsOn, _, _ := c.BuildHourlyEnergyModel(ctxOn, now13, vacHist, nil, types.Settings{})
+		require.Equal(t, "down", vacParamsOff.DetectedShift)
+		require.Equal(t, "down", vacParamsOn.DetectedShift)
+		if assert.Len(t, vacOff, 24) && assert.Len(t, vacOn, 24) {
+			for h := 0; h < 24; h++ {
+				assert.InDelta(t, vacOff[h].AvgHomeLoadKWH, vacOn[h].AvgHomeLoadKWH, 1e-9,
+					"detectedShift != none must skip intraday residual conditioning for hour %d", h)
+			}
+		}
+
+		// 3. Midnight 00:00 history endpoint call (pkg/server/history.go pattern) must leave all 24 hours untouched.
+		midOff, _, _, _ := c.BuildHourlyEnergyModel(ctxOff, today, baseHistory, nil, types.Settings{})
+		midOn, _, _, _ := c.BuildHourlyEnergyModel(ctxOn, today, baseHistory, nil, types.Settings{})
+		if assert.Len(t, midOff, 24) && assert.Len(t, midOn, 24) {
+			for h := 0; h < 24; h++ {
+				assert.InDelta(t, midOff[h].AvgHomeLoadKWH, midOn[h].AvgHomeLoadKWH, 1e-9,
+					"midnight 00:00 call must leave hour %d untouched", h)
+			}
+		}
+	})
 }
 
 func TestTempSimilarityDiffC(t *testing.T) {
@@ -4848,7 +5137,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 	t.Run("CapsRemainingTodayHoursOnCalmOutlierMorningAndLeavesTomorrowUntouched", func(t *testing.T) {
 		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.80, 3)
 		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
-		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Waking: true}}
+		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Waking: true}}
 
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
@@ -4878,7 +5167,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 	t.Run("SkipsWhenNotOutlierWeekdayOrFewerThanTwoMorningHours", func(t *testing.T) {
 		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.80, 1)
 		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
-		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Afternoon: true}}
+		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true}}
 
 		// Only 1 observed morning hour -> no-op
 		applyOutlierDayCalmMorningDampening(
@@ -4926,7 +5215,132 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		assert.InDelta(t, 2.6, rawAvg2[14], 1e-6)
 	})
 
-	t.Run("HonorsNonUTCLocationOnUTCTimestampsForEveningOutlier", func(t *testing.T) {
+	t.Run("SkipsWheneverMorningOutlierIsFalse", func(t *testing.T) {
+		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
+		assertSkipped := func(t *testing.T, p weekdayOutlierPeriods) {
+			t.Helper()
+			dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.75, 3)
+			capFn := applyOutlierDayCalmMorningDampening(
+				context.Background(),
+				&rawAvg,
+				&rawP75,
+				hasHour,
+				targetTimes,
+				now,
+				time.UTC,
+				10,
+				"2025-07-04",
+				dayMap,
+				validDaysMap,
+				nil,
+				map[time.Weekday]weekdayOutlierPeriods{time.Friday: p},
+				nil,
+				nil,
+				0.3,
+				types.Settings{},
+			)
+			assert.Nil(t, capFn, "calm-morning dampening must return nil when Morning is false (%+v)", p)
+			assert.InDelta(t, 2.6, rawAvg[14], 1e-6, "afternoon forecast must not be capped when Morning is false (%+v)", p)
+			assert.InDelta(t, 2.9, rawP75[14], 1e-6, "P75 forecast must not be capped when Morning is false (%+v)", p)
+		}
+
+		t.Run("AfternoonOnly", func(t *testing.T) {
+			assertSkipped(t, weekdayOutlierPeriods{Afternoon: true})
+		})
+		t.Run("EveningOnly", func(t *testing.T) {
+			assertSkipped(t, weekdayOutlierPeriods{Evening: true})
+		})
+		t.Run("WakingOnly", func(t *testing.T) {
+			assertSkipped(t, weekdayOutlierPeriods{Waking: true})
+		})
+		t.Run("WholeDayOnly", func(t *testing.T) {
+			assertSkipped(t, weekdayOutlierPeriods{WholeDay: true})
+		})
+		t.Run("AllNonMorningPeriods", func(t *testing.T) {
+			assertSkipped(t, weekdayOutlierPeriods{Afternoon: true, Evening: true, Waking: true, WholeDay: true})
+		})
+	})
+
+	t.Run("SkipsAt1400WhenPostNoonLoadExceedsUnboostedBaseline", func(t *testing.T) {
+		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.75, 5)
+		todayDate := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+		// Adjust targetTimes for currentHour == 14 (00:00..13:00 tomorrow, 14:00..23:00 today)
+		for h := 0; h < 24; h++ {
+			if h < 14 {
+				targetTimes[h] = todayDate.AddDate(0, 0, 1).Add(time.Duration(h) * time.Hour)
+			} else {
+				targetTimes[h] = todayDate.Add(time.Duration(h) * time.Hour)
+			}
+		}
+		// Add elevated 12:00..13:59 load (1.85 kWh > ~1.0 kWh unboosted P50 baseline) after a calm 07:00..11:59 morning (0.75 kWh).
+		dayMap["2025-07-04"].points = append(dayMap["2025-07-04"].points,
+			types.EnergyStats{TSHourStart: todayDate.Add(12 * time.Hour), HomeKWH: 1.85},
+			types.EnergyStats{TSHourStart: todayDate.Add(13 * time.Hour), HomeKWH: 1.85},
+		)
+
+		now14 := time.Date(2025, 7, 4, 14, 0, 0, 0, time.UTC)
+		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Afternoon: true, Waking: true}}
+
+		capFn := applyOutlierDayCalmMorningDampening(
+			context.Background(),
+			&rawAvg,
+			&rawP75,
+			hasHour,
+			targetTimes,
+			now14,
+			time.UTC,
+			14,
+			"2025-07-04",
+			dayMap,
+			validDaysMap,
+			nil,
+			outliers,
+			nil,
+			nil,
+			0.3,
+			types.Settings{},
+		)
+		assert.Nil(t, capFn, "post-noon load exceeding baseline must abort calm-morning dampening at 14:00")
+		assert.InDelta(t, 2.6, rawAvg[15], 1e-6, "remaining afternoon hours must preserve boost when 12:00-13:59 exceeds baseline")
+		assert.InDelta(t, 2.9, rawP75[15], 1e-6)
+
+		// Contrast: when 12:00..13:59 stays calm (0.85 kWh <= unboosted baseline), dampening still caps remaining hours at 14:00.
+		dayMapCalm, validDaysCalm, hasHourCalm, targetTimesCalm, rawAvgCalm, rawP75Calm := buildFixture(0.75, 5)
+		for h := 0; h < 24; h++ {
+			if h < 14 {
+				targetTimesCalm[h] = todayDate.AddDate(0, 0, 1).Add(time.Duration(h) * time.Hour)
+			} else {
+				targetTimesCalm[h] = todayDate.Add(time.Duration(h) * time.Hour)
+			}
+		}
+		dayMapCalm["2025-07-04"].points = append(dayMapCalm["2025-07-04"].points,
+			types.EnergyStats{TSHourStart: todayDate.Add(12 * time.Hour), HomeKWH: 0.85},
+			types.EnergyStats{TSHourStart: todayDate.Add(13 * time.Hour), HomeKWH: 0.85},
+		)
+		capFnCalm := applyOutlierDayCalmMorningDampening(
+			context.Background(),
+			&rawAvgCalm,
+			&rawP75Calm,
+			hasHourCalm,
+			targetTimesCalm,
+			now14,
+			time.UTC,
+			14,
+			"2025-07-04",
+			dayMapCalm,
+			validDaysCalm,
+			nil,
+			outliers,
+			nil,
+			nil,
+			0.3,
+			types.Settings{},
+		)
+		assert.NotNil(t, capFnCalm)
+		assert.InDelta(t, 1.0, rawAvgCalm[15], 0.15, "remaining afternoon hours should cap when both morning and 12:00-13:59 stay calm")
+	})
+
+	t.Run("HonorsNonUTCLocationOnUTCTimestampsForMorningOutlier", func(t *testing.T) {
 		chicagoLoc, err := time.LoadLocation("America/Chicago")
 		require.NoError(t, err)
 
@@ -4941,7 +5355,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 			var loads []float64
 			for h := 0; h < 24; h++ {
 				val := 1.0
-				if isFri && h >= 17 && h <= 21 {
+				if isFri && ((h >= 6 && h <= 10) || (h >= 17 && h <= 21)) {
 					val = 2.8
 				}
 				// Store TSHourStart in UTC to verify applyOutlierDayCalmMorningDampening converts via .In(loc)
@@ -4983,7 +5397,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		}
 
 		now := time.Date(2025, 7, 4, 10, 0, 0, 0, chicagoLoc)
-		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Evening: true}}
+		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Evening: true}}
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg,

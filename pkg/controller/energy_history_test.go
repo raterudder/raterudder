@@ -122,310 +122,362 @@ func TestEnergyHistory(t *testing.T) {
 	// and 14:00 (pre-peak afternoon update).
 	runHours := []int{4, 10, 14}
 
-	var mu sync.Mutex
-	var globalMetrics energyEvalMetrics
-	var globalBaseAbsErrKWH float64
-	var globalBaseUnderKWH float64
-	var globalBaseOverKWH float64
-	var globalBaseHours int
+	runSuite := func(t *testing.T, evalCtx context.Context, requireAfternoonImprovement bool) (energyEvalMetrics, energyEvalMetrics, energyEvalMetrics) {
+		var mu sync.Mutex
+		var globalMetrics energyEvalMetrics
+		var globalAfternoonAt04 energyEvalMetrics
+		var globalAfternoonAt14 energyEvalMetrics
+		var globalBaseAbsErrKWH float64
+		var globalBaseUnderKWH float64
+		var globalBaseOverKWH float64
+		var globalBaseHours int
 
-	t.Cleanup(func() {
-		if globalMetrics.hoursCount == 0 {
-			return
-		}
-		t.Logf("====== GLOBAL ENERGY MODEL RESULTS ======")
-		t.Logf("Evaluated Runs : %d (%d hours)", globalMetrics.daysCount, globalMetrics.hoursCount)
-		t.Logf("Global MAE     : %.3f kWh/hr (RMSE: %.3f kWh/hr, Bias: %+.3f kWh/hr)",
-			globalMetrics.maeKWH(), globalMetrics.rmseKWH(), globalMetrics.biasKWH())
-		t.Logf("Under-Predict  : %.1f kWh | Over-Predict: %.1f kWh",
-			globalMetrics.underPredictKWH, globalMetrics.overPredictKWH)
-		if globalBaseHours > 0 {
-			baseGlobalMAE := globalBaseAbsErrKWH / float64(globalBaseHours)
-			t.Logf("Baseline MAE   : %.3f kWh/hr | Base Under: %.1f kWh | Base Over: %.1f kWh",
-				baseGlobalMAE, globalBaseUnderKWH, globalBaseOverKWH)
-			assert.LessOrEqual(t, math.Round(globalMetrics.maeKWH()*1000)/1000, baseGlobalMAE+0.005,
-				"Global energy model MAE across all sites should meet or beat baseline")
-			assert.LessOrEqual(t, math.Round(globalMetrics.underPredictKWH*10)/10, globalBaseUnderKWH*1.02+10.0,
-				"Global under-prediction kWh should not regress significantly")
-			assert.LessOrEqual(t, math.Round(globalMetrics.overPredictKWH*10)/10, globalBaseOverKWH*1.02+10.0,
-				"Global over-prediction kWh should not regress significantly")
-		}
-		t.Logf("=========================================")
-	})
+		t.Run("Sites", func(t *testing.T) {
+			for _, file := range files {
+				fileName := file.Name()
+				t.Run(fileName, func(t *testing.T) {
+					t.Parallel()
 
-	for _, file := range files {
-		fileName := file.Name()
-		t.Run(fileName, func(t *testing.T) {
-			t.Parallel()
+					fileBytes, err := energyHistoryFS.ReadFile("testdata/energy_history/" + fileName)
+					require.NoError(t, err)
 
-			fileBytes, err := energyHistoryFS.ReadFile("testdata/energy_history/" + fileName)
-			require.NoError(t, err)
+					var dataset EnergyHistoryDataset
+					err = json.Unmarshal(fileBytes, &dataset)
+					require.NoError(t, err)
 
-			var dataset EnergyHistoryDataset
-			err = json.Unmarshal(fileBytes, &dataset)
-			require.NoError(t, err)
-
-			fileLoc := defaultLoc
-			if dataset.TimeZone != "" {
-				if l, err := time.LoadLocation(dataset.TimeZone); err == nil {
-					fileLoc = l
-				}
-			} else if len(dataset.EnergyHistory) > 0 && dataset.EnergyHistory[0].TimeLocation != "" {
-				if l, err := time.LoadLocation(dataset.EnergyHistory[0].TimeLocation); err == nil {
-					fileLoc = l
-				}
-			}
-
-			settings := types.Settings{
-				EVChargingStandby: dataset.EVChargingStandby,
-			}
-			settings, _, err = types.MigrateSettings(settings, 0, "production")
-			require.NoError(t, err)
-			settings.Location = &types.SiteLocation{TimeZone: fileLoc.String()}
-
-			var allHours []types.EnergyStats
-			dayHourlyMap := make(map[string]map[int]float64)
-			historyByUTC := make(map[time.Time]float64)
-
-			for _, day := range dataset.EnergyHistory {
-				for _, h := range day.Hourly {
-					if h.TSHourStart.IsZero() {
-						continue
-					}
-					allHours = append(allHours, h)
-					historyByUTC[h.TSHourStart.UTC()] = h.HomeKWH
-					localT := h.TSHourStart.In(fileLoc)
-					dStr := localT.Format("2006-01-02")
-					if dayHourlyMap[dStr] == nil {
-						dayHourlyMap[dStr] = make(map[int]float64)
-					}
-					dayHourlyMap[dStr][localT.Hour()] = h.HomeKWH
-				}
-			}
-
-			sort.Slice(allHours, func(i, j int) bool {
-				return allHours[i].TSHourStart.Before(allHours[j].TSHourStart)
-			})
-
-			siteEVMinThresholdKW, siteEVMinStepKW := inferSiteEVThresholdsFromStats(ctx, allHours, settings)
-			actualAnchorMinKW := siteEVMinThresholdKW
-			if siteEVMinThresholdKW > EVMinThresholdKW+0.5 {
-				actualAnchorMinKW = max(siteEVMinThresholdKW, evActualAnchorMinAdaptiveKW)
-			}
-
-			var validLoads []float64
-			for _, h := range allHours {
-				if h.HomeKWH > 0.05 {
-					validLoads = append(validLoads, h.HomeKWH)
-				}
-			}
-			standbyLoadKWH := 0.1
-			if len(validLoads) > 0 {
-				sort.Float64s(validLoads)
-				standbyLoadKWH = max(0.1, validLoads[int(float64(len(validLoads)-1)*0.01)])
-			}
-
-			// BuildHourlyEnergyModel strips EV charging spikes (and adjacent 1-hop partial-charge shoulders)
-			// inside eligible EV charging windows while preserving sustained non-EV household loads (e.g. evening AC
-			// or sub-charger-threshold appliances), so target actuals are sanitized the same way before scoring.
-			fullEVByUTC := make(map[time.Time]bool)
-			isConfirmedFullEV := func(localTS time.Time, loadKWH float64) bool {
-				if !IsEVStandbyEligible(settings, localTS) || loadKWH < siteEVMinThresholdKW {
-					return false
-				}
-				utcTS := localTS.Truncate(time.Hour).UTC()
-				if cached, ok := fullEVByUTC[utcTS]; ok {
-					return cached
-				}
-				cutoff := sort.Search(len(allHours), func(i int) bool {
-					return !allHours[i].TSHourStart.Before(localTS)
-				})
-				prior := allHours[max(0, cutoff-14*24):cutoff]
-				isEV, _ := detectEVChargingWithThresholds(ctx, loadKWH, prior, settings, siteEVMinThresholdKW, siteEVMinStepKW)
-				fullEVByUTC[utcTS] = isEV
-				return isEV
-			}
-
-			evHourByUTC := make(map[time.Time]bool)
-			isEVStandbyHour := func(localTS time.Time, loadKWH float64) bool {
-				if !IsEVStandbyEligible(settings, localTS) || loadKWH < evShoulderMinThresholdKW {
-					return false
-				}
-				utcTS := localTS.Truncate(time.Hour).UTC()
-				if cached, ok := evHourByUTC[utcTS]; ok {
-					return cached
-				}
-				if loadKWH >= siteEVMinThresholdKW {
-					res := isConfirmedFullEV(localTS, loadKWH)
-					evHourByUTC[utcTS] = res
-					return res
-				}
-				hasAdjacentAnchor := false
-				for _, offset := range []time.Duration{-time.Hour, time.Hour} {
-					adjUTC := utcTS.Add(offset)
-					if adjKWH, ok := historyByUTC[adjUTC]; ok && adjKWH >= actualAnchorMinKW {
-						if isConfirmedFullEV(adjUTC.In(fileLoc), adjKWH) {
-							hasAdjacentAnchor = true
-							break
+					fileLoc := defaultLoc
+					if dataset.TimeZone != "" {
+						if l, err := time.LoadLocation(dataset.TimeZone); err == nil {
+							fileLoc = l
+						}
+					} else if len(dataset.EnergyHistory) > 0 && dataset.EnergyHistory[0].TimeLocation != "" {
+						if l, err := time.LoadLocation(dataset.EnergyHistory[0].TimeLocation); err == nil {
+							fileLoc = l
 						}
 					}
-				}
-				if !hasAdjacentAnchor {
-					evHourByUTC[utcTS] = false
-					return false
-				}
-				cutoff := sort.Search(len(allHours), func(i int) bool {
-					return !allHours[i].TSHourStart.Before(localTS)
-				})
-				prior := allHours[max(0, cutoff-14*24):cutoff]
-				baselineKW := calculateRecentBaseline(ctx, prior, siteEVMinThresholdKW, settings)
-				res := loadKWH-baselineKW >= evShoulderMinStepKW && loadKWH > max(baselineKW, hourlyOutlierFloorKWH)*evShoulderMultiple
-				evHourByUTC[utcTS] = res
-				return res
-			}
 
-			sanitizedActualByUTC := make(map[time.Time]float64)
-			findNonEVActualKWH := func(localTS time.Time, rawLoadKWH float64) float64 {
-				if !isEVStandbyHour(localTS, rawLoadKWH) {
-					return rawLoadKWH
-				}
-				utcTS := localTS.Truncate(time.Hour).UTC()
-				if cached, ok := sanitizedActualByUTC[utcTS]; ok {
-					return cached
-				}
-				for dayOffset := 1; dayOffset <= 7; dayOffset++ {
-					prevLocal := localTS.AddDate(0, 0, -dayOffset)
-					prevUTC := prevLocal.Truncate(time.Hour).UTC()
-					if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
-						sanitizedActualByUTC[utcTS] = prevKWH
-						return prevKWH
+					settings := types.Settings{
+						EVChargingStandby: dataset.EVChargingStandby,
 					}
-				}
-				for lb := 1; lb <= 12; lb++ {
-					prevUTC := utcTS.Add(-time.Duration(lb) * time.Hour)
-					prevLocal := prevUTC.In(fileLoc)
-					if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
-						sanitizedActualByUTC[utcTS] = prevKWH
-						return prevKWH
+					settings, _, err = types.MigrateSettings(settings, 0, "production")
+					require.NoError(t, err)
+					settings.Location = &types.SiteLocation{TimeZone: fileLoc.String()}
+
+					var allHours []types.EnergyStats
+					dayHourlyMap := make(map[string]map[int]float64)
+					historyByUTC := make(map[time.Time]float64)
+
+					for _, day := range dataset.EnergyHistory {
+						for _, h := range day.Hourly {
+							if h.TSHourStart.IsZero() {
+								continue
+							}
+							allHours = append(allHours, h)
+							historyByUTC[h.TSHourStart.UTC()] = h.HomeKWH
+							localT := h.TSHourStart.In(fileLoc)
+							dStr := localT.Format("2006-01-02")
+							if dayHourlyMap[dStr] == nil {
+								dayHourlyMap[dStr] = make(map[int]float64)
+							}
+							dayHourlyMap[dStr][localT.Hour()] = h.HomeKWH
+						}
 					}
-				}
-				sanitizedActualByUTC[utcTS] = standbyLoadKWH
-				return standbyLoadKWH
-			}
 
-			simStartStr := dataset.SimStart.UTC().Format("2006-01-02")
-			simEndStr := dataset.SimEnd.UTC().Format("2006-01-02")
+					sort.Slice(allHours, func(i, j int) bool {
+						return allHours[i].TSHourStart.Before(allHours[j].TSHourStart)
+					})
 
-			var evalDates []string
-			for dStr, hMap := range dayHourlyMap {
-				if dStr >= simStartStr && dStr < simEndStr && len(hMap) >= 20 {
-					evalDates = append(evalDates, dStr)
-				}
-			}
-			sort.Strings(evalDates)
-			require.NotEmpty(t, evalDates, "no valid evaluation days found for %s", fileName)
-
-			c := NewController()
-			byHour := make(map[int]energyEvalMetrics)
-			var overall energyEvalMetrics
-
-			for _, dStr := range evalDates {
-				dayStart, err := time.ParseInLocation("2006-01-02", dStr, fileLoc)
-				require.NoError(t, err)
-
-				histWindowStart := dayStart.AddDate(0, 0, -35)
-				priorHours := 0
-				for _, h := range allHours {
-					if !h.TSHourStart.Before(histWindowStart) && h.TSHourStart.Before(dayStart) {
-						priorHours++
+					siteEVMinThresholdKW, siteEVMinStepKW := inferSiteEVThresholdsFromStats(evalCtx, allHours, settings)
+					actualAnchorMinKW := siteEVMinThresholdKW
+					if siteEVMinThresholdKW > EVMinThresholdKW+0.5 {
+						actualAnchorMinKW = max(siteEVMinThresholdKW, evActualAnchorMinAdaptiveKW)
 					}
-				}
-				if priorHours < 7*20 {
-					continue
-				}
 
-				for _, runHr := range runHours {
-					now := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), runHr, 0, 0, 0, fileLoc)
-					hStart := histWindowStart
-
-					var histSlice []types.EnergyStats
+					var validLoads []float64
 					for _, h := range allHours {
-						if !h.TSHourStart.Before(hStart) && h.TSHourStart.Before(now) {
-							histSlice = append(histSlice, h)
+						if h.HomeKWH > 0.05 {
+							validLoads = append(validLoads, h.HomeKWH)
 						}
 					}
-
-					wEnd := dayStart.AddDate(0, 0, 2)
-					var weatherSlice []types.Weather
-					for _, w := range dataset.WeatherHistory {
-						if !w.TSDayStart.Before(hStart) && w.TSDayStart.Before(wEnd) {
-							weatherSlice = append(weatherSlice, w)
-						}
+					standbyLoadKWH := 0.1
+					if len(validLoads) > 0 {
+						sort.Float64s(validLoads)
+						standbyLoadKWH = max(0.1, validLoads[int(float64(len(validLoads)-1)*0.01)])
 					}
 
-					model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, histSlice, weatherSlice, settings)
+					// BuildHourlyEnergyModel strips EV charging spikes (and adjacent 1-hop partial-charge shoulders)
+					// inside eligible EV charging windows while preserving sustained non-EV household loads (e.g. evening AC
+					// or sub-charger-threshold appliances), so target actuals are sanitized the same way before scoring.
+					fullEVByUTC := make(map[time.Time]bool)
+					isConfirmedFullEV := func(localTS time.Time, loadKWH float64) bool {
+						if !IsEVStandbyEligible(settings, localTS) || loadKWH < siteEVMinThresholdKW {
+							return false
+						}
+						utcTS := localTS.Truncate(time.Hour).UTC()
+						if cached, ok := fullEVByUTC[utcTS]; ok {
+							return cached
+						}
+						cutoff := sort.Search(len(allHours), func(i int) bool {
+							return !allHours[i].TSHourStart.Before(localTS)
+						})
+						prior := allHours[max(0, cutoff-14*24):cutoff]
+						isEV, _ := detectEVChargingWithThresholds(evalCtx, loadKWH, prior, settings, siteEVMinThresholdKW, siteEVMinStepKW)
+						fullEVByUTC[utcTS] = isEV
+						return isEV
+					}
 
-					hm := byHour[runHr]
-					hm.daysCount++
+					evHourByUTC := make(map[time.Time]bool)
+					isEVStandbyHour := func(localTS time.Time, loadKWH float64) bool {
+						if !IsEVStandbyEligible(settings, localTS) || loadKWH < evShoulderMinThresholdKW {
+							return false
+						}
+						utcTS := localTS.Truncate(time.Hour).UTC()
+						if cached, ok := evHourByUTC[utcTS]; ok {
+							return cached
+						}
+						if loadKWH >= siteEVMinThresholdKW {
+							res := isConfirmedFullEV(localTS, loadKWH)
+							evHourByUTC[utcTS] = res
+							return res
+						}
+						hasAdjacentAnchor := false
+						for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+							adjUTC := utcTS.Add(offset)
+							if adjKWH, ok := historyByUTC[adjUTC]; ok && adjKWH >= actualAnchorMinKW {
+								if isConfirmedFullEV(adjUTC.In(fileLoc), adjKWH) {
+									hasAdjacentAnchor = true
+									break
+								}
+							}
+						}
+						if !hasAdjacentAnchor {
+							evHourByUTC[utcTS] = false
+							return false
+						}
+						cutoff := sort.Search(len(allHours), func(i int) bool {
+							return !allHours[i].TSHourStart.Before(localTS)
+						})
+						prior := allHours[max(0, cutoff-14*24):cutoff]
+						baselineKW := calculateRecentBaseline(evalCtx, prior, siteEVMinThresholdKW, settings)
+						res := loadKWH-baselineKW >= evShoulderMinStepKW && loadKWH > max(baselineKW, hourlyOutlierFloorKWH)*evShoulderMultiple
+						evHourByUTC[utcTS] = res
+						return res
+					}
 
-					hMap := dayHourlyMap[dStr]
-					for targetHr := runHr; targetHr < 24; targetHr++ {
-						actualRawKWH, ok := hMap[targetHr]
-						if !ok || actualRawKWH <= 0.05 {
+					sanitizedActualByUTC := make(map[time.Time]float64)
+					findNonEVActualKWH := func(localTS time.Time, rawLoadKWH float64) float64 {
+						if !isEVStandbyHour(localTS, rawLoadKWH) {
+							return rawLoadKWH
+						}
+						utcTS := localTS.Truncate(time.Hour).UTC()
+						if cached, ok := sanitizedActualByUTC[utcTS]; ok {
+							return cached
+						}
+						for dayOffset := 1; dayOffset <= 7; dayOffset++ {
+							prevLocal := localTS.AddDate(0, 0, -dayOffset)
+							prevUTC := prevLocal.Truncate(time.Hour).UTC()
+							if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
+								sanitizedActualByUTC[utcTS] = prevKWH
+								return prevKWH
+							}
+						}
+						for lb := 1; lb <= 12; lb++ {
+							prevUTC := utcTS.Add(-time.Duration(lb) * time.Hour)
+							prevLocal := prevUTC.In(fileLoc)
+							if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH > 0.05 && !isEVStandbyHour(prevLocal, prevKWH) {
+								sanitizedActualByUTC[utcTS] = prevKWH
+								return prevKWH
+							}
+						}
+						sanitizedActualByUTC[utcTS] = standbyLoadKWH
+						return standbyLoadKWH
+					}
+
+					simStartStr := dataset.SimStart.UTC().Format("2006-01-02")
+					simEndStr := dataset.SimEnd.UTC().Format("2006-01-02")
+
+					var evalDates []string
+					for dStr, hMap := range dayHourlyMap {
+						if dStr >= simStartStr && dStr < simEndStr && len(hMap) >= 20 {
+							evalDates = append(evalDates, dStr)
+						}
+					}
+					sort.Strings(evalDates)
+					require.NotEmpty(t, evalDates, "no valid evaluation days found for %s", fileName)
+
+					c := NewController()
+					byHour := make(map[int]energyEvalMetrics)
+					var overall energyEvalMetrics
+					var siteAfternoonAt04 energyEvalMetrics
+					var siteAfternoonAt14 energyEvalMetrics
+
+					for _, dStr := range evalDates {
+						dayStart, err := time.ParseInLocation("2006-01-02", dStr, fileLoc)
+						require.NoError(t, err)
+
+						histWindowStart := dayStart.AddDate(0, 0, -35)
+						priorHours := 0
+						for _, h := range allHours {
+							if !h.TSHourStart.Before(histWindowStart) && h.TSHourStart.Before(dayStart) {
+								priorHours++
+							}
+						}
+						if priorHours < 7*20 {
 							continue
 						}
-						targetTS := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), targetHr, 0, 0, 0, fileLoc)
-						actualKWH := findNonEVActualKWH(targetTS, actualRawKWH)
-						predKWH := model[targetHr].AvgHomeLoadKWH
 
-						hm.add(actualKWH, predKWH)
-						overall.add(actualKWH, predKWH)
+						for _, runHr := range runHours {
+							now := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), runHr, 0, 0, 0, fileLoc)
+							hStart := histWindowStart
+
+							var histSlice []types.EnergyStats
+							for _, h := range allHours {
+								if !h.TSHourStart.Before(hStart) && h.TSHourStart.Before(now) {
+									histSlice = append(histSlice, h)
+								}
+							}
+
+							wEnd := dayStart.AddDate(0, 0, 2)
+							var weatherSlice []types.Weather
+							for _, w := range dataset.WeatherHistory {
+								if !w.TSDayStart.Before(hStart) && w.TSDayStart.Before(wEnd) {
+									weatherSlice = append(weatherSlice, w)
+								}
+							}
+
+							model, _, _, _ := c.BuildHourlyEnergyModel(evalCtx, now, histSlice, weatherSlice, settings)
+
+							hm := byHour[runHr]
+							hm.daysCount++
+
+							hMap := dayHourlyMap[dStr]
+							for targetHr := runHr; targetHr < 24; targetHr++ {
+								actualRawKWH, ok := hMap[targetHr]
+								if !ok || actualRawKWH <= 0.05 {
+									continue
+								}
+								targetTS := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), targetHr, 0, 0, 0, fileLoc)
+								actualKWH := findNonEVActualKWH(targetTS, actualRawKWH)
+								predKWH := model[targetHr].AvgHomeLoadKWH
+
+								hm.add(actualKWH, predKWH)
+								overall.add(actualKWH, predKWH)
+								if targetHr >= 14 {
+									if runHr == 4 {
+										siteAfternoonAt04.add(actualKWH, predKWH)
+									} else if runHr == 14 {
+										siteAfternoonAt14.add(actualKWH, predKWH)
+									}
+								}
+							}
+							byHour[runHr] = hm
+							overall.daysCount++
+						}
 					}
-					byHour[runHr] = hm
-					overall.daysCount++
-				}
-			}
 
-			maeRounded := math.Round(overall.maeKWH()*1000.0) / 1000.0
-			underRounded := math.Round(overall.underPredictKWH*10.0) / 10.0
-			overRounded := math.Round(overall.overPredictKWH*10.0) / 10.0
+					maeRounded := math.Round(overall.maeKWH()*1000.0) / 1000.0
+					underRounded := math.Round(overall.underPredictKWH*10.0) / 10.0
+					overRounded := math.Round(overall.overPredictKWH*10.0) / 10.0
 
-			base, hasBaseline := energyHistoryBaselines[fileName]
-			if !hasBaseline {
-				t.Errorf("Missing baseline in energyHistoryBaselines for %q: {maeKWH: %.3f, underPredictKWH: %.1f, overPredictKWH: %.1f}",
-					fileName, maeRounded, underRounded, overRounded)
-			} else {
-				t.Logf("%-24s | Hrs: %4d | MAE: %.3f (base %.3f, %+.3f) [04h:%.3f 10h:%.3f 14h:%.3f] | RMSE: %.3f | Under: %6.1f (base %6.1f) | Over: %6.1f (base %6.1f)",
-					fileName, overall.hoursCount, overall.maeKWH(), base.maeKWH, overall.maeKWH()-base.maeKWH,
-					byHour[4].maeKWH(), byHour[10].maeKWH(), byHour[14].maeKWH(),
-					overall.rmseKWH(), overall.underPredictKWH, base.underPredictKWH, overall.overPredictKWH, base.overPredictKWH)
-			}
+					base, hasBaseline := energyHistoryBaselines[fileName]
+					if !hasBaseline {
+						t.Errorf("Missing baseline in energyHistoryBaselines for %q: {maeKWH: %.3f, underPredictKWH: %.1f, overPredictKWH: %.1f}",
+							fileName, maeRounded, underRounded, overRounded)
+					} else {
+						t.Logf("%-24s | Hrs: %4d | MAE: %.3f (base %.3f, %+.3f) [04h:%.3f 10h:%.3f 14h:%.3f] | RMSE: %.3f | Under: %6.1f (base %6.1f) | Over: %6.1f (base %6.1f)",
+							fileName, overall.hoursCount, overall.maeKWH(), base.maeKWH, overall.maeKWH()-base.maeKWH,
+							byHour[4].maeKWH(), byHour[10].maeKWH(), byHour[14].maeKWH(),
+							overall.rmseKWH(), overall.underPredictKWH, base.underPredictKWH, overall.overPredictKWH, base.overPredictKWH)
+					}
 
-			mu.Lock()
-			globalMetrics.hoursCount += overall.hoursCount
-			globalMetrics.daysCount += overall.daysCount
-			globalMetrics.totalAbsErrKWH += overall.totalAbsErrKWH
-			globalMetrics.totalSqErrKWH2 += overall.totalSqErrKWH2
-			globalMetrics.underPredictKWH += overall.underPredictKWH
-			globalMetrics.overPredictKWH += overall.overPredictKWH
-			globalMetrics.actualKWH += overall.actualKWH
-			globalMetrics.predKWH += overall.predKWH
-			if hasBaseline {
-				globalBaseHours += overall.hoursCount
-				globalBaseAbsErrKWH += base.maeKWH * float64(overall.hoursCount)
-				globalBaseUnderKWH += base.underPredictKWH
-				globalBaseOverKWH += base.overPredictKWH
-			}
-			mu.Unlock()
+					mu.Lock()
+					globalMetrics.hoursCount += overall.hoursCount
+					globalMetrics.daysCount += overall.daysCount
+					globalMetrics.totalAbsErrKWH += overall.totalAbsErrKWH
+					globalMetrics.totalSqErrKWH2 += overall.totalSqErrKWH2
+					globalMetrics.underPredictKWH += overall.underPredictKWH
+					globalMetrics.overPredictKWH += overall.overPredictKWH
+					globalMetrics.actualKWH += overall.actualKWH
+					globalMetrics.predKWH += overall.predKWH
 
-			if hasBaseline {
-				assert.LessOrEqual(t, maeRounded, base.maeKWH+0.010,
-					"Energy model MAE should not regress beyond baseline for %s", fileName)
-				assert.LessOrEqual(t, underRounded, base.underPredictKWH*1.03+5.0,
-					"Energy model under-prediction kWh should not regress beyond baseline for %s", fileName)
-				assert.LessOrEqual(t, overRounded, base.overPredictKWH*1.03+5.0,
-					"Energy model over-prediction kWh should not regress beyond baseline for %s", fileName)
+					globalAfternoonAt04.hoursCount += siteAfternoonAt04.hoursCount
+					globalAfternoonAt04.totalAbsErrKWH += siteAfternoonAt04.totalAbsErrKWH
+					globalAfternoonAt04.totalSqErrKWH2 += siteAfternoonAt04.totalSqErrKWH2
+					globalAfternoonAt04.underPredictKWH += siteAfternoonAt04.underPredictKWH
+					globalAfternoonAt04.overPredictKWH += siteAfternoonAt04.overPredictKWH
+					globalAfternoonAt04.actualKWH += siteAfternoonAt04.actualKWH
+					globalAfternoonAt04.predKWH += siteAfternoonAt04.predKWH
+
+					globalAfternoonAt14.hoursCount += siteAfternoonAt14.hoursCount
+					globalAfternoonAt14.totalAbsErrKWH += siteAfternoonAt14.totalAbsErrKWH
+					globalAfternoonAt14.totalSqErrKWH2 += siteAfternoonAt14.totalSqErrKWH2
+					globalAfternoonAt14.underPredictKWH += siteAfternoonAt14.underPredictKWH
+					globalAfternoonAt14.overPredictKWH += siteAfternoonAt14.overPredictKWH
+					globalAfternoonAt14.actualKWH += siteAfternoonAt14.actualKWH
+					globalAfternoonAt14.predKWH += siteAfternoonAt14.predKWH
+
+					if hasBaseline {
+						globalBaseHours += overall.hoursCount
+						globalBaseAbsErrKWH += base.maeKWH * float64(overall.hoursCount)
+						globalBaseUnderKWH += base.underPredictKWH
+						globalBaseOverKWH += base.overPredictKWH
+					}
+					mu.Unlock()
+
+					if hasBaseline {
+						assert.LessOrEqual(t, maeRounded, base.maeKWH+0.010,
+							"Energy model MAE should not regress beyond baseline for %s", fileName)
+						assert.LessOrEqual(t, underRounded, base.underPredictKWH*1.03+5.0,
+							"Energy model under-prediction kWh should not regress beyond baseline for %s", fileName)
+						assert.LessOrEqual(t, overRounded, base.overPredictKWH*1.03+5.0,
+							"Energy model over-prediction kWh should not regress beyond baseline for %s", fileName)
+					}
+				})
 			}
 		})
+
+		if globalMetrics.hoursCount > 0 {
+			t.Logf("====== GLOBAL ENERGY MODEL RESULTS ======")
+			t.Logf("Evaluated Runs : %d (%d hours)", globalMetrics.daysCount, globalMetrics.hoursCount)
+			t.Logf("Global MAE     : %.3f kWh/hr (RMSE: %.3f kWh/hr, Bias: %+.3f kWh/hr)",
+				globalMetrics.maeKWH(), globalMetrics.rmseKWH(), globalMetrics.biasKWH())
+			t.Logf("Under-Predict  : %.1f kWh | Over-Predict: %.1f kWh",
+				globalMetrics.underPredictKWH, globalMetrics.overPredictKWH)
+			t.Logf("Matched 14..23 : @04:00 MAE %.4f kWh/hr (Under %.1f) | @14:00 MAE %.4f kWh/hr (Under %.1f)",
+				globalAfternoonAt04.maeKWH(), globalAfternoonAt04.underPredictKWH,
+				globalAfternoonAt14.maeKWH(), globalAfternoonAt14.underPredictKWH)
+			if globalBaseHours > 0 {
+				baseGlobalMAE := globalBaseAbsErrKWH / float64(globalBaseHours)
+				t.Logf("Baseline MAE   : %.3f kWh/hr | Base Under: %.1f kWh | Base Over: %.1f kWh",
+					baseGlobalMAE, globalBaseUnderKWH, globalBaseOverKWH)
+				assert.LessOrEqual(t, math.Round(globalMetrics.maeKWH()*1000)/1000, baseGlobalMAE+0.005,
+					"Global energy model MAE across all sites should meet or beat baseline")
+				assert.LessOrEqual(t, math.Round(globalMetrics.underPredictKWH*10)/10, globalBaseUnderKWH*1.02+10.0,
+					"Global under-prediction kWh should not regress significantly")
+				assert.LessOrEqual(t, math.Round(globalMetrics.overPredictKWH*10)/10, globalBaseOverKWH*1.02+10.0,
+					"Global over-prediction kWh should not regress significantly")
+			}
+			if requireAfternoonImprovement {
+				assert.Less(t, globalAfternoonAt14.maeKWH(), 0.6817,
+					"Matched 14:00-23:00 MAE at 14:00 should improve below 0.6817 kWh/hr baseline")
+				assert.Less(t, globalAfternoonAt14.maeKWH(), globalAfternoonAt04.maeKWH(),
+					"Matched 14:00-23:00 MAE at 14:00 should beat 04:00 pre-waking forecast")
+			}
+			t.Logf("=========================================")
+		}
+
+		return globalMetrics, globalAfternoonAt04, globalAfternoonAt14
 	}
+
+	var offAfternoon14 energyEvalMetrics
+	t.Run("IntradayLoadMomentumOff", func(t *testing.T) {
+		_, _, offAfternoon14 = runSuite(t, ffIntradayLoadMomentum.With(ctx, false), false)
+	})
+	t.Run("IntradayLoadMomentumOn", func(t *testing.T) {
+		_, _, onAfternoon14 := runSuite(t, ffIntradayLoadMomentum.With(ctx, true), true)
+		assert.Less(t, onAfternoon14.maeKWH(), offAfternoon14.maeKWH(),
+			"Enabling ffIntradayLoadMomentum should reduce matched 14:00-23:00 MAE")
+		assert.Less(t, onAfternoon14.underPredictKWH, offAfternoon14.underPredictKWH,
+			"Enabling ffIntradayLoadMomentum should reduce matched 14:00-23:00 under-prediction")
+	})
 }
