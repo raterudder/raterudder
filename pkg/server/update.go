@@ -411,8 +411,11 @@ func (s *Server) performSiteUpdate(
 	notifData.vppInfo = vppInfo
 
 	// get History for Controller (Last 35 days from monthly summaries + today's/tomorrow's unsummarized data)
-	now := s.now().In(status.Timestamp.Location())
-	historyStart := truncateDay(now).AddDate(0, 0, -forecastHistoryDays)
+	siteLoc := resolveStatusLocation(settings, status)
+	now := s.now().In(siteLoc)
+	todayStart := truncateDay(now)
+	yesterdayStart := todayStart.AddDate(0, 0, -1)
+	historyStart := todayStart.AddDate(0, 0, -forecastHistoryDays)
 
 	// Fetch existing summaries in-memory first to determine if backfill/update is needed
 	existingSummaries, err := s.storage.GetHistorySummaries(ctx, siteID, historyStart, now)
@@ -426,22 +429,41 @@ func (s *Server) performSiteUpdate(
 	var hasUpdateOrBackfill bool
 	var newSummaries []types.HistorySummary
 
-	latestDay := getSummaryLatestDate(existingSummaries)
-	if len(existingSummaries) == 0 || latestDay.IsZero() {
-		// Trigger backfill
-		newSummaries, err = s.backfillHistorySummaries(ctx, siteID, now)
+	latestEnergyDay, latestWeatherDay := getSummaryLatestDates(existingSummaries, siteLoc)
+	if len(existingSummaries) == 0 || (latestEnergyDay.IsZero() && latestWeatherDay.IsZero()) {
+		// Trigger initial backfill only when no summarized energy or weather exists yet
+		newSummaries, err = s.backfillHistorySummariesWithExisting(ctx, siteID, now, settings.Location != nil, existingSummaries)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to backfill summaries", slog.Any("error", err))
 		} else if len(newSummaries) > 0 {
 			hasUpdateOrBackfill = true
 		}
 	} else {
-		// Check if latest day committed is before yesterday
-		todayStart := truncateDay(now)
-		yesterdayStart := todayStart.AddDate(0, 0, -1)
+		// Track archived energy and weather dates separately so weather-only months never
+		// repeat full backfills while still backfilling late ESS energy across the 35-day window.
+		needEnergy := latestEnergyDay.IsZero() || latestEnergyDay.Before(yesterdayStart)
+		energyStart := historyStart
+		if !latestEnergyDay.IsZero() {
+			energyStart = latestEnergyDay.AddDate(0, 0, 1)
+		}
 
-		if latestDay.Before(yesterdayStart) {
-			newSummaries, err = s.updateHistorySummary(ctx, siteID, latestDay, now)
+		needWeather := settings.Location != nil && (latestWeatherDay.IsZero() || latestWeatherDay.Before(yesterdayStart))
+		weatherStart := historyStart
+		if !latestWeatherDay.IsZero() {
+			weatherStart = latestWeatherDay.AddDate(0, 0, 1)
+		}
+
+		if (needEnergy && !energyStart.After(yesterdayStart)) || (needWeather && !weatherStart.After(yesterdayStart)) {
+			newSummaries, err = s.syncHistorySummaryUpdate(
+				ctx,
+				siteID,
+				energyStart,
+				needEnergy,
+				weatherStart,
+				needWeather,
+				now,
+				existingSummaries,
+			)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update history summary", slog.Any("error", err))
 			} else if len(newSummaries) > 0 {
@@ -454,24 +476,12 @@ func (s *Server) performSiteUpdate(
 		// Merge updated summaries in memory
 		summaryMap := make(map[string]types.HistorySummary)
 		for _, sm := range existingSummaries {
-			var d string
-			if len(sm.Energy) > 0 {
-				d = sm.Energy[0].TSDayStart.Format("2006-01")
-			} else if len(sm.Weather) > 0 {
-				d = sm.Weather[0].TSDayStart.Format("2006-01")
-			}
-			if d != "" {
+			if d := summaryMonthKey(sm, siteLoc); d != "" {
 				summaryMap[d] = sm
 			}
 		}
 		for _, sm := range newSummaries {
-			var d string
-			if len(sm.Energy) > 0 {
-				d = sm.Energy[0].TSDayStart.Format("2006-01")
-			} else if len(sm.Weather) > 0 {
-				d = sm.Weather[0].TSDayStart.Format("2006-01")
-			}
-			if d != "" {
+			if d := summaryMonthKey(sm, siteLoc); d != "" {
 				summaryMap[d] = sm
 			}
 		}
@@ -481,18 +491,7 @@ func (s *Server) performSiteUpdate(
 			merged = append(merged, sm)
 		}
 		slices.SortFunc(merged, func(a, b types.HistorySummary) int {
-			var tA, tB time.Time
-			if len(a.Energy) > 0 {
-				tA = a.Energy[0].TSDayStart
-			} else if len(a.Weather) > 0 {
-				tA = a.Weather[0].TSDayStart
-			}
-			if len(b.Energy) > 0 {
-				tB = b.Energy[0].TSDayStart
-			} else if len(b.Weather) > 0 {
-				tB = b.Weather[0].TSDayStart
-			}
-			return tA.Compare(tB)
+			return summarySortTime(a, siteLoc).Compare(summarySortTime(b, siteLoc))
 		})
 		existingSummaries = merged
 	}
@@ -504,7 +503,7 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.energyHistory = energyHistory
 	notifData.weatherHistory = weatherHistory
-	configuredReserveSOC := settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)
+	configuredReserveSOC := settings.Settings.GetMinBatterySOC(ctx, s.now(), siteLoc, currentPrice)
 
 	// don't update if we're in emergency mode
 	if status.EmergencyMode {
@@ -1477,9 +1476,76 @@ func (s *Server) setESSModes(
 	return changed, nil
 }
 
+func resolveStatusLocation(settings settingsWithVersion, status types.SystemStatus) *time.Location {
+	if status.TimeLocation != "" {
+		if l, err := time.LoadLocation(status.TimeLocation); err == nil {
+			return l
+		}
+	}
+	if !status.Timestamp.IsZero() && status.Timestamp.Location() != nil && status.Timestamp.Location() != time.UTC {
+		return status.Timestamp.Location()
+	}
+	if settings.Location != nil && settings.Location.TimeZone != "" {
+		if l, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
+			return l
+		}
+	}
+	if !status.Timestamp.IsZero() && status.Timestamp.Location() != nil {
+		return status.Timestamp.Location()
+	}
+	return time.UTC
+}
+
+func summaryMonthKey(sm types.HistorySummary, fallbackLoc *time.Location) string {
+	if !sm.TSMonthStart.IsZero() {
+		return sm.TSMonthStart.Format("2006-01")
+	}
+	if fallbackLoc == nil {
+		fallbackLoc = time.UTC
+	}
+	if len(sm.Energy) > 0 && !sm.Energy[0].TSDayStart.IsZero() {
+		loc := fallbackLoc
+		if sm.Energy[0].TimeLocation != "" {
+			if l, err := time.LoadLocation(sm.Energy[0].TimeLocation); err == nil {
+				loc = l
+			}
+		}
+		return sm.Energy[0].TSDayStart.In(loc).Format("2006-01")
+	}
+	if len(sm.Weather) > 0 && !sm.Weather[0].TSDayStart.IsZero() {
+		loc := fallbackLoc
+		if sm.Weather[0].TimeLocation != "" {
+			if l, err := time.LoadLocation(sm.Weather[0].TimeLocation); err == nil {
+				loc = l
+			}
+		}
+		return sm.Weather[0].TSDayStart.In(loc).Format("2006-01")
+	}
+	return ""
+}
+
+func summarySortTime(sm types.HistorySummary, fallbackLoc *time.Location) time.Time {
+	if !sm.TSMonthStart.IsZero() {
+		return sm.TSMonthStart
+	}
+	if len(sm.Energy) > 0 && !sm.Energy[0].TSDayStart.IsZero() {
+		return sm.Energy[0].TSDayStart
+	}
+	if len(sm.Weather) > 0 && !sm.Weather[0].TSDayStart.IsZero() {
+		return sm.Weather[0].TSDayStart
+	}
+	if key := summaryMonthKey(sm, fallbackLoc); key != "" {
+		if t, err := time.Parse("2006-01", key); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // getCombinedHistory retrieves weather and energy histories by querying the monthly summaries in Firestore,
-// and then merges them in memory with today's unsummarized energy data and today+tomorrow's unsummarized weather data.
-// It returns a chronological slice of daily energy stats and a chronological slice of weather documents.
+// and then merges them in memory with unsummarized energy data and unsummarized weather data.
+// It returns a chronological slice of daily energy stats and a chronological slice of weather documents
+// trimmed to historyStart.
 func (s *Server) getCombinedHistory(
 	ctx context.Context,
 	siteID string,
@@ -1487,24 +1553,6 @@ func (s *Server) getCombinedHistory(
 	historyStart, now time.Time,
 	summaries []types.HistorySummary,
 ) ([]types.DailyEnergyStats, []types.Weather, error) {
-	// 1. Fetch monthly summaries that overlap with the range [historyStart, now)
-	// if not passed in-memory.
-	if summaries == nil {
-		var err error
-		summaries, err = s.storage.GetHistorySummaries(ctx, siteID, historyStart, now)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get history summaries: %w", err)
-		}
-	}
-
-	todayStart := truncateDay(now)
-
-	var combinedEnergy []types.DailyEnergyStats
-	var combinedWeather []types.Weather
-
-	var latestSummaryEnergyDay time.Time
-	var latestSummaryWeatherDay time.Time
-
 	locCache := make(map[string]*time.Location)
 	getLocation := func(tz string, fallback *time.Location) *time.Location {
 		if tz == "" {
@@ -1520,73 +1568,142 @@ func (s *Server) getCombinedHistory(
 		return fallback
 	}
 
+	siteLoc := now.Location()
+	if siteLoc == nil {
+		siteLoc = time.UTC
+	}
+	if siteLoc == time.UTC && settings.Location != nil && settings.Location.TimeZone != "" {
+		siteLoc = getLocation(settings.Location.TimeZone, siteLoc)
+	}
+
+	nowInSite := now.In(siteLoc)
+	historyStartInSite := historyStart.In(siteLoc)
+
+	// 1. Fetch monthly summaries that overlap with the range [historyStart, now)
+	// if not passed in-memory.
+	if summaries == nil {
+		var err error
+		summaries, err = s.storage.GetHistorySummaries(ctx, siteID, historyStartInSite, nowInSite)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get history summaries: %w", err)
+		}
+	}
+
+	if siteLoc == time.UTC {
+		for _, summary := range summaries {
+			for _, day := range summary.Energy {
+				if day.TimeLocation != "" {
+					if l := getLocation(day.TimeLocation, time.UTC); l != time.UTC {
+						siteLoc = l
+						break
+					}
+				}
+			}
+			if siteLoc != time.UTC {
+				nowInSite = now.In(siteLoc)
+				historyStartInSite = historyStart.In(siteLoc)
+				break
+			}
+		}
+	}
+
+	todayStart := truncateDay(nowInSite)
+	historyStartDay := truncateDay(historyStartInSite)
+
+	var combinedEnergy []types.DailyEnergyStats
+	var combinedWeather []types.Weather
+
+	var latestSummaryEnergyDay time.Time
+	var latestSummaryWeatherDay time.Time
+
+	energyDayStart := func(day types.DailyEnergyStats) time.Time {
+		if !day.TSDayStart.IsZero() {
+			return day.TSDayStart
+		}
+		if len(day.Hourly) > 0 {
+			return day.Hourly[0].TSHourStart
+		}
+		return time.Time{}
+	}
+	weatherDayStart := func(w types.Weather) time.Time {
+		if !w.TSDayStart.IsZero() {
+			return w.TSDayStart
+		}
+		if len(w.ForecastHours) > 0 {
+			return w.ForecastHours[0].TSHourStart
+		}
+		return time.Time{}
+	}
+	normalizeDay := func(ts time.Time, tz string) time.Time {
+		dLoc := getLocation(tz, siteLoc)
+		d := ts.In(dLoc)
+		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, siteLoc)
+	}
+
 	for _, summary := range summaries {
 		// Filter and append energy stats from the summaries
 		for _, day := range summary.Energy {
-			// We exclude today's data (which won't be in the monthly summary yet).
-			// We explicitly ignore filtering by historyStart (the request range's lower bound)
-			// because the entire monthly summary document was already loaded from Firestore.
-			// Filtering out the early days of the month would discard data we have already paid to read.
-			dLoc := getLocation(day.TimeLocation, now.Location())
-			dDay := day.TSDayStart.In(dLoc)
-			dDayNorm := time.Date(dDay.Year(), dDay.Month(), dDay.Day(), 0, 0, 0, 0, now.Location())
+			ts := energyDayStart(day)
+			if ts.IsZero() {
+				continue
+			}
+			dDayNorm := normalizeDay(ts, day.TimeLocation)
 			if dDayNorm.Before(todayStart) {
-				combinedEnergy = append(combinedEnergy, day)
 				if latestSummaryEnergyDay.IsZero() || dDayNorm.After(latestSummaryEnergyDay) {
 					latestSummaryEnergyDay = dDayNorm
+				}
+				if !dDayNorm.Before(historyStartDay) {
+					combinedEnergy = append(combinedEnergy, day)
 				}
 			}
 		}
 
 		// Filter and append weather data from the summaries
 		for _, w := range summary.Weather {
-			// Explicitly ignore filtering by historyStart because the monthly summary document
-			// was already fetched. Keeping all days ensures we use all available loaded history.
-			wLoc := getLocation(w.TimeLocation, now.Location())
-			wDay := w.TSDayStart.In(wLoc)
-			wDayNorm := time.Date(wDay.Year(), wDay.Month(), wDay.Day(), 0, 0, 0, 0, now.Location())
+			ts := weatherDayStart(w)
+			if ts.IsZero() {
+				continue
+			}
+			wDayNorm := normalizeDay(ts, w.TimeLocation)
 			if wDayNorm.Before(todayStart) {
-				combinedWeather = append(combinedWeather, w)
 				if latestSummaryWeatherDay.IsZero() || wDayNorm.After(latestSummaryWeatherDay) {
 					latestSummaryWeatherDay = wDayNorm
+				}
+				if !wDayNorm.Before(historyStartDay) {
+					combinedWeather = append(combinedWeather, w)
 				}
 			}
 		}
 	}
 
-	// Fallback to each other if one is missing/zero (e.g. in tests or partial data)
-	if latestSummaryWeatherDay.IsZero() {
+	// Only fall back weather summary date from energy when the site actually has a configured location.
+	// Never fall back energy summary date from weather so weather-only months still fetch unsummarized energy.
+	if settings.Location != nil && latestSummaryWeatherDay.IsZero() {
 		latestSummaryWeatherDay = latestSummaryEnergyDay
-	}
-	if latestSummaryEnergyDay.IsZero() {
-		latestSummaryEnergyDay = latestSummaryWeatherDay
 	}
 
 	// Callers like handleHistoryEnergy may pass targetDate+1d as now, so cap
-	// expectedLatestDay at the actual yesterday to avoid expecting today in the summary.
+	// expectedLatestDay at the real expected latest day. Defer behind-schedule warnings
+	// for yesterday until 6 hours after local midnight to match syncHistorySummaryRange.
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
-	realYesterdayStart := truncateDay(s.now().In(now.Location())).AddDate(0, 0, -1)
+	realNowLocal := s.now().In(siteLoc)
+	realTodayStart := truncateDay(realNowLocal)
+	realExpectedLatestDay := realTodayStart.AddDate(0, 0, -1)
+	if realNowLocal.Before(realTodayStart.Add(6 * time.Hour)) {
+		realExpectedLatestDay = realTodayStart.AddDate(0, 0, -2)
+	}
 	expectedLatestDay := yesterdayStart
-	if realYesterdayStart.Before(expectedLatestDay) {
-		expectedLatestDay = realYesterdayStart
+	if realExpectedLatestDay.Before(expectedLatestDay) {
+		expectedLatestDay = realExpectedLatestDay
 	}
 
 	// Determine start range for fetching unsummarized energy history
-	energyFetchStart := todayStart
+	energyFetchStart := historyStartInSite
 	if !latestSummaryEnergyDay.IsZero() {
 		energyFetchStart = latestSummaryEnergyDay.AddDate(0, 0, 1)
-		if latestSummaryEnergyDay.Before(expectedLatestDay) {
-			log.Ctx(ctx).WarnContext(ctx, "energy history summary is behind, fetching missing days from database",
-				slog.String("siteID", siteID),
-				slog.Time("latestSummaryDay", latestSummaryEnergyDay),
-				slog.Time("expectedLatestDay", expectedLatestDay),
-			)
-		}
-	} else {
-		energyFetchStart = historyStart
 	}
-	if energyFetchStart.Before(historyStart) {
-		energyFetchStart = historyStart
+	if energyFetchStart.Before(historyStartInSite) {
+		energyFetchStart = historyStartInSite
 	}
 	if energyFetchStart.After(todayStart) {
 		energyFetchStart = todayStart
@@ -1598,55 +1715,86 @@ func (s *Server) getCombinedHistory(
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get unsummarized energy history", slog.Any("error", err))
 	} else {
-		combinedEnergy = append(combinedEnergy, unsummarizedEnergy...)
-	}
-
-	// Determine start range for fetching unsummarized weather data
-	weatherFetchStart := todayStart
-	if !latestSummaryWeatherDay.IsZero() {
-		weatherFetchStart = latestSummaryWeatherDay.AddDate(0, 0, 1)
-		if latestSummaryWeatherDay.Before(expectedLatestDay) {
-			log.Ctx(ctx).WarnContext(ctx, "weather history summary is behind, fetching missing days from database",
+		var hasBehindUnsummarizedEnergy bool
+		for _, day := range unsummarizedEnergy {
+			ts := energyDayStart(day)
+			if ts.IsZero() {
+				continue
+			}
+			dDayNorm := normalizeDay(ts, day.TimeLocation)
+			if !dDayNorm.After(expectedLatestDay) {
+				hasBehindUnsummarizedEnergy = true
+			}
+			if !dDayNorm.Before(historyStartDay) {
+				combinedEnergy = append(combinedEnergy, day)
+			}
+		}
+		if !latestSummaryEnergyDay.IsZero() && latestSummaryEnergyDay.Before(expectedLatestDay) && hasBehindUnsummarizedEnergy {
+			log.Ctx(ctx).WarnContext(ctx, "energy history summary is behind, fetching missing days from database",
 				slog.String("siteID", siteID),
-				slog.Time("latestSummaryDay", latestSummaryWeatherDay),
+				slog.Time("latestSummaryDay", latestSummaryEnergyDay),
 				slog.Time("expectedLatestDay", expectedLatestDay),
 			)
 		}
-	} else {
-		weatherFetchStart = historyStart
-	}
-	if weatherFetchStart.Before(historyStart) {
-		weatherFetchStart = historyStart
-	}
-	if weatherFetchStart.After(todayStart) {
-		weatherFetchStart = todayStart
 	}
 
-	// 3. Fetch unsummarized weather data if location is configured.
+	// 3. Fetch unsummarized weather data only if location is configured.
 	// We query the range [weatherFetchStart, todayStart + 48 hours) to include both days.
 	if settings.Location != nil {
+		weatherFetchStart := historyStartInSite
+		if !latestSummaryWeatherDay.IsZero() {
+			weatherFetchStart = latestSummaryWeatherDay.AddDate(0, 0, 1)
+		}
+		if weatherFetchStart.Before(historyStartInSite) {
+			weatherFetchStart = historyStartInSite
+		}
+		if weatherFetchStart.After(todayStart) {
+			weatherFetchStart = todayStart
+		}
+
 		unsummarizedWeather, err := s.storage.GetWeather(ctx, siteID, weatherFetchStart, todayStart.AddDate(0, 0, 2))
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to get unsummarized weather", slog.Any("error", err))
 		} else {
-			combinedWeather = append(combinedWeather, unsummarizedWeather...)
+			var hasBehindUnsummarizedWeather bool
+			for _, w := range unsummarizedWeather {
+				ts := weatherDayStart(w)
+				if ts.IsZero() {
+					continue
+				}
+				wDayNorm := normalizeDay(ts, w.TimeLocation)
+				if !wDayNorm.After(expectedLatestDay) {
+					hasBehindUnsummarizedWeather = true
+				}
+				if !wDayNorm.Before(historyStartDay) {
+					combinedWeather = append(combinedWeather, w)
+				}
+			}
+			if !latestSummaryWeatherDay.IsZero() && latestSummaryWeatherDay.Before(expectedLatestDay) && hasBehindUnsummarizedWeather {
+				log.Ctx(ctx).WarnContext(ctx, "weather history summary is behind, fetching missing days from database",
+					slog.String("siteID", siteID),
+					slog.Time("latestSummaryDay", latestSummaryWeatherDay),
+					slog.Time("expectedLatestDay", expectedLatestDay),
+				)
+			}
 		}
 	}
 
 	// Sort energy stats and weather chronologically
 	slices.SortFunc(combinedEnergy, func(a, b types.DailyEnergyStats) int {
-		return a.TSDayStart.Compare(b.TSDayStart)
+		return energyDayStart(a).Compare(energyDayStart(b))
 	})
 	slices.SortFunc(combinedWeather, func(a, b types.Weather) int {
-		return a.TSDayStart.Compare(b.TSDayStart)
+		return weatherDayStart(a).Compare(weatherDayStart(b))
 	})
 
-	// Deduplicate energy stats by date
+	// Deduplicate energy stats by local date
 	if len(combinedEnergy) > 0 {
 		seen := make(map[string]int)
 		var deduped []types.DailyEnergyStats
 		for _, day := range combinedEnergy {
-			dateStr := day.TSDayStart.Format("2006-01-02")
+			dLoc := getLocation(day.TimeLocation, siteLoc)
+			dateStr := energyDayStart(day).In(dLoc).Format("2006-01-02")
 			if idx, ok := seen[dateStr]; ok {
 				if len(day.Hourly) >= len(deduped[idx].Hourly) {
 					deduped[idx] = day
@@ -1659,12 +1807,13 @@ func (s *Server) getCombinedHistory(
 		combinedEnergy = deduped
 	}
 
-	// Deduplicate weather by date
+	// Deduplicate weather by local date
 	if len(combinedWeather) > 0 {
 		seen := make(map[string]int)
 		var deduped []types.Weather
 		for _, w := range combinedWeather {
-			dateStr := w.TSDayStart.Format("2006-01-02")
+			wLoc := getLocation(w.TimeLocation, siteLoc)
+			dateStr := weatherDayStart(w).In(wLoc).Format("2006-01-02")
 			if idx, ok := seen[dateStr]; ok {
 				if len(w.ForecastHours) >= len(deduped[idx].ForecastHours) {
 					deduped[idx] = w
@@ -1680,41 +1829,76 @@ func (s *Server) getCombinedHistory(
 	return combinedEnergy, combinedWeather, nil
 }
 
-// getSummaryLatestDate returns the latest energy TSDayStart from the slice of HistorySummary.
-// Weather entries are intentionally ignored: weather can be stored and summarized for a day
-// (e.g. after the 6-hour threshold) before delayed ESS energy telemetry arrives, and advancing
-// the latest summary date based on weather would cause updateHistorySummary to skip backfilling
-// that day's late-arriving energy data.
-func getSummaryLatestDate(summaries []types.HistorySummary) time.Time {
-	var latest time.Time
+// getSummaryLatestDates returns the latest archived energy and weather calendar days
+// (normalized to local midnight in loc) across the slice of HistorySummary.
+func getSummaryLatestDates(summaries []types.HistorySummary, loc *time.Location) (latestEnergy, latestWeather time.Time) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	locCache := make(map[string]*time.Location)
+	normalize := func(ts time.Time, tz string) time.Time {
+		dLoc := loc
+		if tz != "" {
+			if cached, ok := locCache[tz]; ok && cached != nil {
+				dLoc = cached
+			} else if loaded, err := time.LoadLocation(tz); err == nil {
+				locCache[tz] = loaded
+				dLoc = loaded
+			}
+		}
+		d := ts.In(dLoc)
+		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
+	}
+
 	for _, s := range summaries {
 		for _, day := range s.Energy {
-			if !day.TSDayStart.IsZero() && (latest.IsZero() || day.TSDayStart.After(latest)) {
-				latest = day.TSDayStart
+			if day.TSDayStart.IsZero() {
+				continue
+			}
+			dNorm := normalize(day.TSDayStart, day.TimeLocation)
+			if latestEnergy.IsZero() || dNorm.After(latestEnergy) {
+				latestEnergy = dNorm
+			}
+		}
+		for _, w := range s.Weather {
+			if w.TSDayStart.IsZero() {
+				continue
+			}
+			wNorm := normalize(w.TSDayStart, w.TimeLocation)
+			if latestWeather.IsZero() || wNorm.After(latestWeather) {
+				latestWeather = wNorm
 			}
 		}
 	}
-	return latest
+	return latestEnergy, latestWeather
+}
+
+func (s *Server) backfillStartForTime(now time.Time) time.Time {
+	loc := now.Location()
+	todayStart := truncateDay(now)
+	if now.Day() < 15 {
+		prevMonth := todayStart.AddDate(0, -1, 0)
+		return time.Date(prevMonth.Year(), prevMonth.Month(), 1, 0, 0, 0, 0, loc)
+	}
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 }
 
 // backfillHistorySummaries compiles and stores historical summaries for the current month,
 // and optionally the previous month if today is less than 15 days into the current month.
 func (s *Server) backfillHistorySummaries(ctx context.Context, siteID string, now time.Time) ([]types.HistorySummary, error) {
-	loc := now.Location()
-	todayStart := truncateDay(now)
-
-	// Determine starting point of backfill
-	// If we are less than 15 days into the month then we backfill this month and
-	// last month
-	var backfillStart time.Time
-	if now.Day() < 15 {
-		prevMonth := todayStart.AddDate(0, -1, 0)
-		backfillStart = time.Date(prevMonth.Year(), prevMonth.Month(), 1, 0, 0, 0, 0, loc)
-	} else {
-		backfillStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-	}
-
+	backfillStart := s.backfillStartForTime(now)
 	return s.syncHistorySummaryRange(ctx, siteID, backfillStart, now, true)
+}
+
+func (s *Server) backfillHistorySummariesWithExisting(
+	ctx context.Context,
+	siteID string,
+	now time.Time,
+	fetchWeather bool,
+	existing []types.HistorySummary,
+) ([]types.HistorySummary, error) {
+	backfillStart := s.backfillStartForTime(now)
+	return s.syncHistorySummaryWindow(ctx, siteID, backfillStart, true, backfillStart, fetchWeather, now, true, existing)
 }
 
 // updateHistorySummary checks and commits completed days since latestDayStart
@@ -1736,50 +1920,81 @@ func (s *Server) syncHistorySummaryRange(
 	now time.Time,
 	isBackfill bool,
 ) ([]types.HistorySummary, error) {
+	return s.syncHistorySummaryWindow(ctx, siteID, startDay, true, startDay, true, now, isBackfill, nil)
+}
+
+func (s *Server) syncHistorySummaryUpdate(
+	ctx context.Context,
+	siteID string,
+	energyStart time.Time,
+	fetchEnergy bool,
+	weatherStart time.Time,
+	fetchWeather bool,
+	now time.Time,
+	existing []types.HistorySummary,
+) ([]types.HistorySummary, error) {
+	return s.syncHistorySummaryWindow(ctx, siteID, energyStart, fetchEnergy, weatherStart, fetchWeather, now, false, existing)
+}
+
+func (s *Server) syncHistorySummaryWindow(
+	ctx context.Context,
+	siteID string,
+	energyStart time.Time,
+	fetchEnergy bool,
+	weatherStart time.Time,
+	fetchWeather bool,
+	now time.Time,
+	isBackfill bool,
+	existing []types.HistorySummary,
+) ([]types.HistorySummary, error) {
 	loc := now.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
 	todayStart := truncateDay(now)
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
 
-	var logMsg string
-	var errContext string
-	if isBackfill {
-		logMsg = "backfilling history summary"
-		errContext = "backfill"
-	} else {
-		logMsg = "updating history summary"
-		errContext = "update"
-	}
-
-	if isBackfill {
-		log.Ctx(ctx).InfoContext(ctx, logMsg,
-			slog.String("siteID", siteID),
-			slog.Time("start", startDay),
-			slog.Time("end", yesterdayStart),
-		)
-	} else {
-		log.Ctx(ctx).DebugContext(ctx, logMsg,
-			slog.String("siteID", siteID),
-			slog.Time("start", startDay),
-			slog.Time("end", yesterdayStart),
-		)
-	}
-
-	if startDay.After(yesterdayStart) {
+	fetchEnergy = fetchEnergy && !energyStart.After(yesterdayStart)
+	fetchWeather = fetchWeather && !weatherStart.After(yesterdayStart)
+	if !fetchEnergy && !fetchWeather {
 		return nil, nil
 	}
 
-	// Fetch all energy histories in the range in one query
-	var energyStats []types.DailyEnergyStats
-	var err error
-	energyStats, err = s.storage.GetEnergyHistory(ctx, siteID, startDay, yesterdayStart.AddDate(0, 0, 1))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get energy history for %s: %w", errContext, err)
+	startDay := energyStart
+	if !fetchEnergy || (fetchWeather && weatherStart.Before(startDay)) {
+		startDay = weatherStart
 	}
 
-	// Fetch all weather in the range in one query
-	weatherStats, err := s.storage.GetWeather(ctx, siteID, startDay, yesterdayStart.AddDate(0, 0, 1))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get weather for %s: %w", errContext, err)
+	var errContext string
+	if isBackfill {
+		errContext = "backfill"
+	} else {
+		errContext = "update"
+		log.Ctx(ctx).DebugContext(ctx, "updating history summary",
+			slog.String("siteID", siteID),
+			slog.Time("start", startDay),
+			slog.Time("end", yesterdayStart),
+		)
+	}
+
+	// Fetch energy histories in the energy candidate range in one query
+	var energyStats []types.DailyEnergyStats
+	if fetchEnergy {
+		var err error
+		energyStats, err = s.storage.GetEnergyHistory(ctx, siteID, energyStart, yesterdayStart.AddDate(0, 0, 1))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get energy history for %s: %w", errContext, err)
+		}
+	}
+
+	// Fetch weather in the weather candidate range in one query
+	var weatherStats []types.Weather
+	if fetchWeather {
+		var err error
+		weatherStats, err = s.storage.GetWeather(ctx, siteID, weatherStart, yesterdayStart.AddDate(0, 0, 1))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get weather for %s: %w", errContext, err)
+		}
 	}
 
 	locCache := make(map[string]*time.Location)
@@ -1795,6 +2010,31 @@ func (s *Server) syncHistorySummaryRange(
 			return l
 		}
 		return fallback
+	}
+
+	archivedEnergyHours := make(map[string]int)
+	archivedEnergyDates := make(map[string]bool)
+	archivedWeatherDates := make(map[string]bool)
+	for _, sm := range existing {
+		for _, e := range sm.Energy {
+			if e.TSDayStart.IsZero() {
+				continue
+			}
+			eLoc := getLocation(e.TimeLocation, loc)
+			key := e.TSDayStart.In(eLoc).Format("2006-01-02")
+			archivedEnergyDates[key] = true
+			if len(e.Hourly) > archivedEnergyHours[key] {
+				archivedEnergyHours[key] = len(e.Hourly)
+			}
+		}
+		for _, w := range sm.Weather {
+			if w.TSDayStart.IsZero() {
+				continue
+			}
+			wLoc := getLocation(w.TimeLocation, loc)
+			key := w.TSDayStart.In(wLoc).Format("2006-01-02")
+			archivedWeatherDates[key] = true
+		}
 	}
 
 	weatherStatsByDate := make(map[string]types.Weather)
@@ -1837,12 +2077,18 @@ func (s *Server) syncHistorySummaryRange(
 			weatherBeforeDayEnd = weather.TSUpdated.Before(weatherDayEnd)
 		}
 
-		// 24 hours gets us to midnight the next day, and then 6 hours of buffer
-		pastSixHourThreshold := !now.Before(d.Add(30 * time.Hour))
+		// Local midnight of the next day plus 6 hours of deferral buffer
+		pastSixHourThreshold := !now.Before(d.AddDate(0, 0, 1).Add(6 * time.Hour))
 
 		// A day is eligible if it is complete (including post-midnight weather) or at least 6 hours into the next day
 		if (!hasLastHour || weatherBeforeDayEnd) && !pastSixHourThreshold {
 			break
+		}
+
+		includeEnergy := hasData && (!archivedEnergyDates[dateStr] || len(dailyStat.Hourly) > archivedEnergyHours[dateStr])
+		includeWeather := hasWeather && !archivedWeatherDates[dateStr]
+		if !includeEnergy && !includeWeather {
+			continue
 		}
 
 		monthKey := d.Format("2006-01")
@@ -1857,7 +2103,7 @@ func (s *Server) syncHistorySummaryRange(
 			}
 			summariesByMonth[monthKey] = summary
 		}
-		if hasData {
+		if includeEnergy {
 			dailyStat.Hourly = slices.Clone(dailyStat.Hourly)
 			for _, h := range dailyStat.Hourly {
 				if h.TSHourStart.IsZero() {
@@ -1873,9 +2119,21 @@ func (s *Server) syncHistorySummaryRange(
 			}
 			summary.Energy = append(summary.Energy, dailyStat)
 		}
-		if hasWeather {
+		if includeWeather {
 			summary.Weather = append(summary.Weather, weather)
 		}
+	}
+
+	if len(summariesByMonth) == 0 {
+		return nil, nil
+	}
+
+	if isBackfill {
+		log.Ctx(ctx).InfoContext(ctx, "backfilling history summary",
+			slog.String("siteID", siteID),
+			slog.Time("start", startDay),
+			slog.Time("end", yesterdayStart),
+		)
 	}
 
 	if !minEnergyTime.IsZero() && minEnergyTime.Before(maxEnergyTime) {
@@ -1896,6 +2154,9 @@ func (s *Server) syncHistorySummaryRange(
 
 	var updatedSummaries []types.HistorySummary
 	for m, summary := range summariesByMonth {
+		if len(summary.Energy) == 0 && len(summary.Weather) == 0 {
+			continue
+		}
 
 		// Sort energy stats and weather chronologically
 		slices.SortFunc(summary.Energy, func(a, b types.DailyEnergyStats) int {
@@ -1905,11 +2166,11 @@ func (s *Server) syncHistorySummaryRange(
 			return a.TSDayStart.Compare(b.TSDayStart)
 		})
 
-		summary, err := s.storage.UpdateHistorySummary(ctx, siteID, m, *summary)
+		updated, err := s.storage.UpdateHistorySummary(ctx, siteID, m, *summary)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update history summary for month %s: %w", m, err)
 		}
-		updatedSummaries = append(updatedSummaries, summary)
+		updatedSummaries = append(updatedSummaries, updated)
 	}
 
 	return updatedSummaries, nil

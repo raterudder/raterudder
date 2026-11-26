@@ -253,6 +253,9 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 // getCombinedEnergyHistory fetches energy history across [historyStart, historyEnd) by combining
 // monthly history_summary documents with unsummarized daily energy_history documents.
 func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, historyStart, historyEnd time.Time) ([]types.DailyEnergyStats, error) {
+	if !historyStart.Before(historyEnd) {
+		return nil, nil
+	}
 	baseLoc := historyStart.Location()
 	if baseLoc == nil {
 		baseLoc = time.UTC
@@ -270,7 +273,8 @@ func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, hi
 	}
 
 	var combinedEnergy []types.DailyEnergyStats
-	var latestSummaryEnergyDay time.Time
+	var earliestSummaryStart time.Time
+	var latestSummaryEnd time.Time
 
 	locCache := make(map[string]*time.Location)
 	getLocation := func(tz string, fallback *time.Location) *time.Location {
@@ -287,44 +291,127 @@ func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, hi
 		return fallback
 	}
 
-	// determine if we can get all of the energy data we need from the history summaries
+	energyDayStart := func(day types.DailyEnergyStats) time.Time {
+		if !day.TSDayStart.IsZero() {
+			return day.TSDayStart
+		}
+		if len(day.Hourly) > 0 {
+			return day.Hourly[0].TSHourStart
+		}
+		return time.Time{}
+	}
+
+	resolveDayLocation := func(day types.DailyEnergyStats) *time.Location {
+		if day.TimeLocation != "" {
+			return getLocation(day.TimeLocation, baseLoc)
+		}
+		ts := energyDayStart(day)
+		if baseLoc == time.UTC && !ts.IsZero() && ts.Location() != nil && ts.Location() != time.UTC {
+			return ts.Location()
+		}
+		return baseLoc
+	}
+
+	dayBounds := func(day types.DailyEnergyStats) (time.Time, time.Time, *time.Location) {
+		dLoc := resolveDayLocation(day)
+		dStart := truncateDay(energyDayStart(day).In(dLoc))
+		dEnd := dStart.AddDate(0, 0, 1)
+		if len(day.Hourly) > 0 {
+			if lastEnd := day.Hourly[len(day.Hourly)-1].TSHourStart.Add(time.Hour); lastEnd.After(dEnd) {
+				dEnd = lastEnd
+			}
+		}
+		return dStart, dEnd, dLoc
+	}
+
+	// Collect overlapping summary days before local today, trimming days outside [historyStart, historyEnd).
 	for _, summary := range summaries {
 		for _, day := range summary.Energy {
-			dLoc := getLocation(day.TimeLocation, historyStart.Location())
-			if day.TSDayStart.In(dLoc).Before(todayStart) {
-				combinedEnergy = append(combinedEnergy, day)
-				if latestSummaryEnergyDay.IsZero() || day.TSDayStart.In(dLoc).After(latestSummaryEnergyDay) {
-					latestSummaryEnergyDay = day.TSDayStart.In(dLoc)
-				}
+			if energyDayStart(day).IsZero() {
+				continue
+			}
+			dStart, dEnd, dLoc := dayBounds(day)
+			localTodayStart := truncateDay(s.now().In(dLoc))
+			if !dStart.Before(localTodayStart) {
+				continue
+			}
+			if !dEnd.After(historyStart) || !dStart.Before(historyEnd) {
+				continue
+			}
+			combinedEnergy = append(combinedEnergy, day)
+			if earliestSummaryStart.IsZero() || dStart.Before(earliestSummaryStart) {
+				earliestSummaryStart = dStart
+			}
+			dayNextMidnight := dStart.AddDate(0, 0, 1)
+			if latestSummaryEnd.IsZero() || dayNextMidnight.After(latestSummaryEnd) {
+				latestSummaryEnd = dayNextMidnight
 			}
 		}
 	}
-	energyFetchStart := historyStart
-	if !latestSummaryEnergyDay.IsZero() {
-		energyFetchStart = latestSummaryEnergyDay.AddDate(0, 0, 1)
-	}
-	if energyFetchStart.Before(historyStart) {
-		energyFetchStart = historyStart
-	}
-	if energyFetchStart.Before(historyEnd) {
-		unsummarized, err := s.storage.GetEnergyHistory(ctx, siteID, energyFetchStart, historyEnd)
+
+	fetchRange := func(rangeStart, rangeEnd time.Time) error {
+		if !rangeStart.Before(rangeEnd) {
+			return nil
+		}
+		unsummarized, err := s.storage.GetEnergyHistory(ctx, siteID, rangeStart, rangeEnd)
 		if err != nil {
 			if len(combinedEnergy) == 0 {
-				return nil, err
+				return err
 			}
 			log.Ctx(ctx).WarnContext(ctx, "failed to get unsummarized energy history for savings", slog.String("siteID", siteID), slog.Any("error", err))
-		} else {
-			combinedEnergy = append(combinedEnergy, unsummarized...)
+			return nil
+		}
+		for _, day := range unsummarized {
+			if energyDayStart(day).IsZero() {
+				continue
+			}
+			dStart, dEnd, _ := dayBounds(day)
+			if !dEnd.After(historyStart) || !dStart.Before(historyEnd) {
+				continue
+			}
+			combinedEnergy = append(combinedEnergy, day)
+		}
+		return nil
+	}
+
+	if earliestSummaryStart.IsZero() {
+		if err := fetchRange(historyStart, historyEnd); err != nil {
+			return nil, err
+		}
+	} else {
+		// Fill leading unsummarized day gap before earliestSummaryStart.
+		if historyStart.Before(earliestSummaryStart) {
+			leadingEnd := earliestSummaryStart
+			if historyEnd.Before(leadingEnd) {
+				leadingEnd = historyEnd
+			}
+			if err := fetchRange(historyStart, leadingEnd); err != nil {
+				return nil, err
+			}
+		}
+		// Fill trailing unsummarized day gap after latestSummaryEnd.
+		trailingStart := latestSummaryEnd
+		if trailingStart.Before(historyStart) {
+			trailingStart = historyStart
+		}
+		if trailingStart.Before(historyEnd) {
+			if err := fetchRange(trailingStart, historyEnd); err != nil {
+				return nil, err
+			}
 		}
 	}
+
+	slices.SortFunc(combinedEnergy, func(a, b types.DailyEnergyStats) int {
+		return energyDayStart(a).Compare(energyDayStart(b))
+	})
 
 	// de-duplicate in case we had a bit of overlap
 	if len(combinedEnergy) > 0 {
 		seen := make(map[string]int)
 		var deduped []types.DailyEnergyStats
 		for _, day := range combinedEnergy {
-			dLoc := getLocation(day.TimeLocation, baseLoc)
-			dateStr := day.TSDayStart.In(dLoc).Format("2006-01-02")
+			dLoc := resolveDayLocation(day)
+			dateStr := energyDayStart(day).In(dLoc).Format("2006-01-02")
 			if idx, ok := seen[dateStr]; ok {
 				if len(day.Hourly) >= len(deduped[idx].Hourly) {
 					deduped[idx] = day
@@ -594,10 +681,15 @@ func (s *Server) getSiteSavingsWithSettings(
 		}
 	}
 
+	prelimLoc := resolveActionLocation(settings, nil)
+	if prelimLoc == time.UTC && minStart.Location() != nil && minStart.Location() != time.UTC {
+		prelimLoc = minStart.Location()
+	}
+
 	// Cap lookback at shadowWarmupLookbackDays prior to the earliest period to warm up shadowSOC.
-	lookbackStart := minStart.AddDate(0, 0, -shadowWarmupLookbackDays)
+	lookbackStart := minStart.In(prelimLoc).AddDate(0, 0, -shadowWarmupLookbackDays)
 	// Look ahead nextDayValuationLookaheadDays past maxEnd for next-day stored energy valuation and 24h net metering.
-	fetchEnd := maxEnd.AddDate(0, 0, nextDayValuationLookaheadDays)
+	fetchEnd := maxEnd.In(prelimLoc).AddDate(0, 0, nextDayValuationLookaheadDays)
 
 	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, fetchEnd)
 	if err != nil {
@@ -626,23 +718,6 @@ func (s *Server) getSiteSavingsWithSettings(
 		}
 	}
 
-	energyStatsDaily, err := s.getCombinedEnergyHistory(ctx, siteID, lookbackStart, fetchEnd)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var energyStats []types.EnergyStats
-	for _, day := range energyStatsDaily {
-		for _, h := range day.Hourly {
-			if !h.TSHourStart.Before(lookbackStart) && h.TSHourStart.Before(fetchEnd) {
-				energyStats = append(energyStats, h)
-			}
-		}
-	}
-	slices.SortFunc(energyStats, func(a, b types.EnergyStats) int {
-		return a.TSHourStart.Compare(b.TSHourStart)
-	})
-
 	actionQueryEnd := actionEnd
 	if maxEnd.After(actionQueryEnd) {
 		actionQueryEnd = maxEnd
@@ -655,6 +730,35 @@ func (s *Server) getSiteSavingsWithSettings(
 			return actions[i].Timestamp.Before(actions[j].Timestamp)
 		})
 	}
+
+	var latestAction *types.Action
+	if len(actions) > 0 {
+		latestAction = &actions[len(actions)-1]
+	}
+	siteLoc := resolveActionLocation(settings, latestAction)
+	if siteLoc == time.UTC && minStart.Location() != nil && minStart.Location() != time.UTC {
+		siteLoc = minStart.Location()
+	}
+
+	energyLookbackStart := minStart.In(siteLoc).AddDate(0, 0, -shadowWarmupLookbackDays)
+	energyFetchEnd := maxEnd.In(siteLoc).AddDate(0, 0, nextDayValuationLookaheadDays)
+
+	energyStatsDaily, err := s.getCombinedEnergyHistory(ctx, siteID, energyLookbackStart, energyFetchEnd)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var energyStats []types.EnergyStats
+	for _, day := range energyStatsDaily {
+		for _, h := range day.Hourly {
+			if !h.TSHourStart.Before(energyLookbackStart) && h.TSHourStart.Before(energyFetchEnd) {
+				energyStats = append(energyStats, h)
+			}
+		}
+	}
+	slices.SortFunc(energyStats, func(a, b types.EnergyStats) int {
+		return a.TSHourStart.Compare(b.TSHourStart)
+	})
 
 	var filteredActions []types.Action
 	var latestActionWithPlan types.Action
@@ -688,12 +792,13 @@ func (s *Server) getSiteSavingsWithSettings(
 	rtEff := inferRoundTripEfficiency(energyStats, capacityKWH, optParams.RoundTripEfficiency)
 	oneWayEff := math.Sqrt(rtEff)
 
-	siteLoc := minStart.Location()
-	for _, day := range energyStatsDaily {
-		if day.TimeLocation != "" {
-			if l, err := time.LoadLocation(day.TimeLocation); err == nil {
-				siteLoc = l
-				break
+	if siteLoc == time.UTC {
+		for _, day := range energyStatsDaily {
+			if day.TimeLocation != "" {
+				if l, err := time.LoadLocation(day.TimeLocation); err == nil {
+					siteLoc = l
+					break
+				}
 			}
 		}
 	}

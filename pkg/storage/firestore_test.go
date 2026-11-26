@@ -1701,8 +1701,8 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), rawEarliest.(time.Time).UTC())
 		assert.Equal(t, time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), rawLatest.(time.Time).UTC())
 
-		t.Run("EnergyOnlyDateBoundsIgnoreWeather", func(t *testing.T) {
-			weatherSiteID := "test-site-weather-ignored-bounds"
+		t.Run("UnionDateBoundsIncludeWeatherAndEnergy", func(t *testing.T) {
+			weatherSiteID := "test-site-weather-union-bounds"
 			wDay1 := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 			wDay2 := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 
@@ -1733,12 +1733,14 @@ func TestFirestoreProvider(t *testing.T) {
 			wDoc, err := wColl.Doc("2026-08").Get(ctx)
 			require.NoError(t, err)
 
-			// Weather-only summaries intentionally omit earliestDate and latestDate so weather
-			// never advances summary date bounds ahead of delayed energy data.
-			_, err = wDoc.DataAt("earliestDate")
-			assert.Error(t, err)
-			_, err = wDoc.DataAt("latestDate")
-			assert.Error(t, err)
+			// Weather-only summaries persist earliestDate and latestDate so GetHistorySummaries
+			// returns them instead of re-triggering repeated monthly backfills.
+			woEarliest, err := wDoc.DataAt("earliestDate")
+			require.NoError(t, err)
+			woLatest, err := wDoc.DataAt("latestDate")
+			require.NoError(t, err)
+			assert.Equal(t, wDay1, woEarliest.(time.Time).UTC())
+			assert.Equal(t, wDay2, woLatest.(time.Time).UTC())
 
 			gotWeatherOnly, err := f.GetHistorySummaries(
 				ctx,
@@ -1747,10 +1749,13 @@ func TestFirestoreProvider(t *testing.T) {
 				time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
 			)
 			require.NoError(t, err)
-			assert.Empty(t, gotWeatherOnly)
+			if assert.Len(t, gotWeatherOnly, 1) {
+				assert.Empty(t, gotWeatherOnly[0].Energy)
+				assert.Len(t, gotWeatherOnly[0].Weather, 2)
+			}
 
 			// Merge Energy (Aug 5 and Aug 12) alongside wider Weather (Aug 1 and Aug 20):
-			// earliestDate and latestDate must reflect only the Energy bounds.
+			// earliestDate and latestDate must reflect the union across Energy and Weather.
 			wEarly := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 			eStart := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
 			eEnd := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
@@ -1774,8 +1779,8 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			mixedLatest, err := wDocMixed.DataAt("latestDate")
 			require.NoError(t, err)
-			assert.Equal(t, eStart, mixedEarliest.(time.Time).UTC())
-			assert.Equal(t, eEnd, mixedLatest.(time.Time).UTC())
+			assert.Equal(t, wEarly, mixedEarliest.(time.Time).UTC())
+			assert.Equal(t, wLate, mixedLatest.(time.Time).UTC())
 
 			gotMixed, err := f.GetHistorySummaries(
 				ctx,
@@ -1787,6 +1792,75 @@ func TestFirestoreProvider(t *testing.T) {
 			if assert.Len(t, gotMixed, 1) {
 				assert.Len(t, gotMixed[0].Energy, 2)
 				assert.Len(t, gotMixed[0].Weather, 4)
+			}
+		})
+
+		t.Run("PositiveOffsetTimezonesWithoutLoadingThirdMonth", func(t *testing.T) {
+			londonLoc, err := time.LoadLocation("Europe/London")
+			require.NoError(t, err)
+			sydneyLoc, err := time.LoadLocation("Australia/Sydney")
+			require.NoError(t, err)
+
+			for _, tc := range []struct {
+				name   string
+				siteID string
+				loc    *time.Location
+			}{
+				{name: "EuropeLondonBST", siteID: "test-site-london-summaries", loc: londonLoc},
+				{name: "AustraliaSydneyAEST", siteID: "test-site-sydney-summaries", loc: sydneyLoc},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					may31 := time.Date(2026, 5, 31, 0, 0, 0, 0, tc.loc)
+					jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, tc.loc)
+					jun15 := time.Date(2026, 6, 15, 0, 0, 0, 0, tc.loc)
+					jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, tc.loc)
+					jul05 := time.Date(2026, 7, 5, 0, 0, 0, 0, tc.loc)
+
+					_, err := f.UpdateHistorySummary(ctx, tc.siteID, "2026-05", types.HistorySummary{
+						Energy: []types.DailyEnergyStats{
+							{TSDayStart: may31, TimeLocation: tc.loc.String()},
+						},
+					})
+					require.NoError(t, err)
+
+					_, err = f.UpdateHistorySummary(ctx, tc.siteID, "2026-06", types.HistorySummary{
+						Energy: []types.DailyEnergyStats{
+							{TSDayStart: jun01, TimeLocation: tc.loc.String()},
+							{TSDayStart: jun15, TimeLocation: tc.loc.String()},
+						},
+					})
+					require.NoError(t, err)
+
+					_, err = f.UpdateHistorySummary(ctx, tc.siteID, "2026-07", types.HistorySummary{
+						Energy: []types.DailyEnergyStats{
+							{TSDayStart: jul01, TimeLocation: tc.loc.String()},
+							{TSDayStart: jul05, TimeLocation: tc.loc.String()},
+						},
+					})
+					require.NoError(t, err)
+
+					// Mid-June through July query (both localized and UTC) must include 2026-06 even though
+					// jun01 in UTC falls on 2026-05-31 (23:00Z in London, 14:00Z in Sydney).
+					resMidLocal, err := f.GetHistorySummaries(ctx, tc.siteID, jun15, jul05.AddDate(0, 0, 1))
+					require.NoError(t, err)
+					if assert.Len(t, resMidLocal, 2) {
+						assert.Equal(t, "2026-06-01", resMidLocal[0].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
+						assert.Equal(t, "2026-07-01", resMidLocal[1].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
+					}
+
+					resMidUTC, err := f.GetHistorySummaries(ctx, tc.siteID, jun15.UTC(), jul05.AddDate(0, 0, 1).UTC())
+					require.NoError(t, err)
+					assert.Len(t, resMidUTC, 2)
+
+					// Query starting on local day 1 of June spanning into July must return only June and July
+					// (2 months), without stepping back and loading May (a 3rd month).
+					resDay1Local, err := f.GetHistorySummaries(ctx, tc.siteID, jun01, jul05.AddDate(0, 0, 1))
+					require.NoError(t, err)
+					if assert.Len(t, resDay1Local, 2) {
+						assert.Equal(t, "2026-06-01", resDay1Local[0].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
+						assert.Equal(t, "2026-07-01", resDay1Local[1].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
+					}
+				})
 			}
 		})
 	})

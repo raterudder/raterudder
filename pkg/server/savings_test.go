@@ -1347,3 +1347,144 @@ func TestInferRoundTripEfficiency(t *testing.T) {
 		assert.InDelta(t, 0.80, inferRoundTripEfficiency(stats, 15.0, 0.90), 0.0001)
 	})
 }
+
+func TestGetCombinedEnergyHistory(t *testing.T) {
+	t.Run("FillsLeadingAndTrailingUnsummarizedGapsAndTrimsOutsideWindow", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		now := time.Date(2026, 7, 10, 14, 0, 0, 0, loc)
+		beforeWindow := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+		historyStart := time.Date(2026, 7, 3, 0, 0, 0, 0, loc)
+		leadGapDay := time.Date(2026, 7, 4, 0, 0, 0, 0, loc)
+		sumDay1 := time.Date(2026, 7, 5, 0, 0, 0, 0, loc)
+		sumDay2 := time.Date(2026, 7, 7, 0, 0, 0, 0, loc)
+		trailGapDay := time.Date(2026, 7, 8, 0, 0, 0, 0, loc)
+		today := time.Date(2026, 7, 10, 0, 0, 0, 0, loc)
+		historyEnd := today.AddDate(0, 0, 1)
+
+		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, "site1", historyStart, historyEnd).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart:   beforeWindow,
+						TimeLocation: loc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: beforeWindow.Add(time.Hour), HomeKWH: 99}},
+					},
+					{
+						TSDayStart:   sumDay1,
+						TimeLocation: loc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: sumDay1.Add(time.Hour), HomeKWH: 5}},
+					},
+					{
+						TSDayStart:   sumDay2,
+						TimeLocation: loc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: sumDay2.Add(time.Hour), HomeKWH: 7}},
+					},
+				},
+			},
+		}, nil).Once()
+
+		// Leading unsummarized gap [historyStart, sumDay1)
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", historyStart, sumDay1).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   beforeWindow,
+				TimeLocation: loc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: beforeWindow.Add(time.Hour), HomeKWH: 88}},
+			},
+			{
+				TSDayStart:   leadGapDay,
+				TimeLocation: loc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: leadGapDay.Add(time.Hour), HomeKWH: 4}},
+			},
+		}, nil).Once()
+
+		// Trailing unsummarized gap [sumDay2 + 1d, historyEnd)
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", sumDay2.AddDate(0, 0, 1), historyEnd).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   trailGapDay,
+				TimeLocation: loc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: trailGapDay.Add(time.Hour), HomeKWH: 8}},
+			},
+			{
+				TSDayStart:   today,
+				TimeLocation: loc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: today.Add(time.Hour), HomeKWH: 10}},
+			},
+		}, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return now },
+		}
+
+		got, err := srv.getCombinedEnergyHistory(context.Background(), "site1", historyStart, historyEnd)
+		require.NoError(t, err)
+		if assert.Len(t, got, 5) {
+			assert.Equal(t, "2026-07-04", got[0].TSDayStart.In(loc).Format("2006-01-02"))
+			assert.Equal(t, "2026-07-05", got[1].TSDayStart.In(loc).Format("2006-01-02"))
+			assert.Equal(t, "2026-07-07", got[2].TSDayStart.In(loc).Format("2006-01-02"))
+			assert.Equal(t, "2026-07-08", got[3].TSDayStart.In(loc).Format("2006-01-02"))
+			assert.Equal(t, "2026-07-10", got[4].TSDayStart.In(loc).Format("2006-01-02"))
+		}
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PositiveOffsetTimezonesAlignSummaryAndTrailingBounds", func(t *testing.T) {
+		for _, tz := range []string{"Europe/London", "Australia/Sydney"} {
+			t.Run(tz, func(t *testing.T) {
+				loc, err := time.LoadLocation(tz)
+				require.NoError(t, err)
+
+				jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+				jun30 := time.Date(2026, 6, 30, 0, 0, 0, 0, loc)
+				jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+				now := jul01.Add(10 * time.Hour)
+				historyEnd := jul01.AddDate(0, 0, 1)
+
+				mockS := &mockStorage{}
+				mockS.On("GetHistorySummaries", mock.Anything, "site1", jun01, historyEnd).Return([]types.HistorySummary{
+					{
+						Energy: []types.DailyEnergyStats{
+							// Simulate JSON-unmarshaled UTC TSDayStart for positive-UTC-offset local midnight
+							{
+								TSDayStart:   jun01.UTC(),
+								TimeLocation: tz,
+								Hourly:       []types.EnergyStats{{TSHourStart: jun01.Add(12 * time.Hour).UTC(), SolarKWH: 6}},
+							},
+							{
+								TSDayStart:   jun30.UTC(),
+								TimeLocation: tz,
+								Hourly:       []types.EnergyStats{{TSHourStart: jun30.Add(12 * time.Hour).UTC(), SolarKWH: 7}},
+							},
+						},
+					},
+				}, nil).Once()
+
+				// No leading gap because jun01 == historyStart; trailing fetch starts at jul01 local midnight
+				mockS.On("GetEnergyHistory", mock.Anything, "site1", jul01, historyEnd).Return([]types.DailyEnergyStats{
+					{
+						TSDayStart:   jul01,
+						TimeLocation: tz,
+						Hourly:       []types.EnergyStats{{TSHourStart: jul01.Add(8 * time.Hour), SolarKWH: 3}},
+					},
+				}, nil).Once()
+
+				srv := &Server{
+					storage: mockS,
+					nowFunc: func() time.Time { return now },
+				}
+
+				got, err := srv.getCombinedEnergyHistory(context.Background(), "site1", jun01, historyEnd)
+				require.NoError(t, err)
+				if assert.Len(t, got, 3) {
+					assert.Equal(t, "2026-06-01", got[0].TSDayStart.In(loc).Format("2006-01-02"))
+					assert.Equal(t, "2026-06-30", got[1].TSDayStart.In(loc).Format("2006-01-02"))
+					assert.Equal(t, "2026-07-01", got[2].TSDayStart.In(loc).Format("2006-01-02"))
+				}
+				mockS.AssertExpectations(t)
+			})
+		}
+	})
+}

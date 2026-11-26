@@ -172,20 +172,15 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action", slog.Any("error", err))
-	} else if latestAction != nil {
-		if latestAction.SystemStatus.TimeLocation != "" {
-			if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
-				latestAction.Timestamp = latestAction.Timestamp.In(loc)
-				latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
-				latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
-			}
-		}
+	}
+	loc := resolveActionLocation(settings, latestAction)
+	if latestAction != nil {
+		latestAction.Timestamp = latestAction.Timestamp.In(loc)
+		latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
+		latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
 	}
 
-	now := s.now()
-	if latestAction != nil && !latestAction.Timestamp.IsZero() && latestAction.Timestamp.Location() != nil {
-		now = now.In(latestAction.Timestamp.Location())
-	}
+	now := s.now().In(loc)
 
 	if latestAction != nil && latestAction.Fault {
 		s.writeFaultedForecast(ctx, w, siteID, settings, now, latestAction, "private, max-age=300")
@@ -204,9 +199,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	if isFreshPlan {
 		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
-		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+		energyHistory24, err := s.storage.GetEnergyHistory(ctx, siteID, histStart24, now)
 		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for 24h forecast", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to get energy history for 24h forecast", slog.Any("error", err))
 		}
 		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
 		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
@@ -456,15 +451,15 @@ func (s *Server) writeFaultedForecast(
 	ctx context.Context,
 	w http.ResponseWriter,
 	siteID string,
-	settings settingsWithVersion,
+	_ settingsWithVersion,
 	now time.Time,
 	faultAction *types.Action,
 	cacheControl string,
 ) {
 	histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
-	energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+	energyHistory24, err := s.storage.GetEnergyHistory(ctx, siteID, histStart24, now)
 	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
+		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history for faulted forecast", slog.Any("error", err))
 	}
 	flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
 	energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)

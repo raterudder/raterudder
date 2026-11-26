@@ -1822,4 +1822,146 @@ func TestHandleForecast(t *testing.T) {
 		assert.NotEmpty(t, res.PriceHistory)
 		assert.Empty(t, errBuf.String(), "GetStatus unauthorized fallback must emit zero ERROR logs")
 	})
+
+	t.Run("FreshPlanFastPathAndFaultedForecastReadDirectEnergyWithoutSummariesOrWeather", func(t *testing.T) {
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		// 2026-07-20 02:30 UTC is 2026-07-19 21:30 CDT (evening local time after UTC midnight)
+		nowUTC := time.Date(2026, 7, 20, 2, 30, 0, 0, time.UTC)
+		nowLocal := nowUTC.In(chicagoLoc)
+		histStart24 := nowLocal.AddDate(0, 0, -1).Truncate(time.Hour)
+		pastHour := nowLocal.Add(-2 * time.Hour).Truncate(time.Hour)
+
+		locSettings := types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "franklin",
+			Location: &types.SiteLocation{
+				TimeZone:  chicagoLoc.String(),
+				Latitude:  41.8781,
+				Longitude: -87.6298,
+			},
+		}
+
+		// 1. Fresh plan fast-path
+		mockFresh := &mockStorage{}
+		mockFresh.On("GetSettings", mock.Anything, types.SiteIDNone).Return(locSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		freshPlan := &types.Plan{
+			TSCreated:          nowLocal.Add(-5 * time.Minute),
+			HorizonHours:       1,
+			TotalProjectedCost: 1.50,
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowLocal.Truncate(time.Hour),
+					TSEnd:         nowLocal.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1,
+					BatteryMode:   types.BatteryModeStandby,
+				},
+			},
+		}
+		mockFresh.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return(&types.Action{
+			Timestamp:    nowLocal.Add(-5 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.12, TSStart: nowLocal.Truncate(time.Hour), TSEnd: nowLocal.Truncate(time.Hour).Add(time.Hour)},
+			Plan:         freshPlan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:   65,
+				Timestamp:    nowLocal.Add(-5 * time.Minute),
+				TimeLocation: chicagoLoc.String(),
+			},
+		}, nil).Once()
+		mockFresh.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s time.Time) bool {
+			return s.Equal(histStart24)
+		}), mock.MatchedBy(func(e time.Time) bool {
+			return e.Equal(nowLocal)
+		})).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   truncateDay(nowLocal),
+				TimeLocation: chicagoLoc.String(),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: pastHour, SolarKWH: 1.5, HomeKWH: 2.5, MinBatterySOC: 60, MaxBatterySOC: 70},
+				},
+			},
+		}, nil).Once()
+		mockFresh.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastHour, TSEnd: pastHour.Add(time.Hour), DollarsPerKWH: 0.12},
+		}, nil).Once()
+
+		srvFresh := &Server{
+			utilities:  utility.NewMap(mockFresh),
+			ess:        ess.NewMap(),
+			storage:    mockFresh,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return nowUTC },
+		}
+
+		reqFresh := httptest.NewRequest("GET", "/api/forecast", nil)
+		reqFresh = reqFresh.WithContext(context.WithValue(reqFresh.Context(), siteIDContextKey, types.SiteIDNone))
+		wFresh := httptest.NewRecorder()
+		srvFresh.handleForecast(wFresh, reqFresh)
+
+		require.Equal(t, http.StatusOK, wFresh.Code)
+		var resFresh ForecastRes
+		require.NoError(t, json.NewDecoder(wFresh.Body).Decode(&resFresh))
+		require.NotNil(t, resFresh.Plan)
+		assert.Len(t, resFresh.EnergyHistory, 1)
+		mockFresh.AssertNotCalled(t, "GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockFresh.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockFresh.AssertExpectations(t)
+
+		// 2. writeFaultedForecast path (ESS auth backoff active even with Location configured)
+		faultSettings := locSettings
+		faultSettings.ESSAuthStatus = types.ESSAuthStatus{
+			ConsecutiveFailures: 40,
+			LastAttempt:         nowUTC.Add(-time.Hour),
+		}
+		mockFault := &mockStorage{}
+		mockFault.On("GetSettings", mock.Anything, types.SiteIDNone).Return(faultSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockFault.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
+		mockFault.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s time.Time) bool {
+			return s.Equal(histStart24)
+		}), mock.MatchedBy(func(e time.Time) bool {
+			return e.Equal(nowLocal)
+		})).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   truncateDay(nowLocal),
+				TimeLocation: chicagoLoc.String(),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: pastHour, SolarKWH: 1.0, HomeKWH: 2.0},
+				},
+			},
+		}, nil).Once()
+		mockFault.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastHour, TSEnd: pastHour.Add(time.Hour), DollarsPerKWH: 0.12},
+		}, nil).Once()
+
+		mockES := &mockESS{MockName: "franklin"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srvFault := &Server{
+			utilities:  utility.NewMap(mockFault),
+			ess:        essMap,
+			storage:    mockFault,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return nowUTC },
+		}
+
+		reqFault := httptest.NewRequest("GET", "/api/forecast", nil)
+		reqFault = reqFault.WithContext(context.WithValue(reqFault.Context(), siteIDContextKey, types.SiteIDNone))
+		wFault := httptest.NewRecorder()
+		srvFault.handleForecast(wFault, reqFault)
+
+		require.Equal(t, http.StatusOK, wFault.Code)
+		var resFault ForecastRes
+		require.NoError(t, json.NewDecoder(wFault.Body).Decode(&resFault))
+		require.NotNil(t, resFault.LatestAction)
+		assert.True(t, resFault.LatestAction.Fault)
+		assert.Len(t, resFault.EnergyHistory, 1)
+		mockFault.AssertNotCalled(t, "GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockFault.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockFault.AssertExpectations(t)
+	})
 }
