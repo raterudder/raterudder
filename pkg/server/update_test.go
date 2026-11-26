@@ -111,6 +111,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -164,7 +165,7 @@ func TestHandleUpdate(t *testing.T) {
 		t.Run("Missing Authorization Header - Specific Email", func(t *testing.T) {
 			oidcSrv, _ := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "check@example.com", nil, oidcSrv.URL)
+			srv := newAuthServer("test-audience", "check@example.com", nil, oidcSrv.URL)
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			w := httptest.NewRecorder()
 
@@ -176,7 +177,7 @@ func TestHandleUpdate(t *testing.T) {
 		t.Run("Invalid Authorization Header Format", func(t *testing.T) {
 			oidcSrv, _ := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "check@example.com", nil, oidcSrv.URL)
+			srv := newAuthServer("test-audience", "check@example.com", nil, oidcSrv.URL)
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			req.Header.Set("Authorization", "Basic user:pass")
 			w := httptest.NewRecorder()
@@ -189,7 +190,7 @@ func TestHandleUpdate(t *testing.T) {
 		t.Run("Invalid Token", func(t *testing.T) {
 			oidcSrv, _ := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "check@example.com", nil, oidcSrv.URL)
+			srv := newAuthServer("test-audience", "check@example.com", nil, oidcSrv.URL)
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			req.Header.Set("Authorization", "Bearer bad-token")
 			w := httptest.NewRecorder()
@@ -202,21 +203,23 @@ func TestHandleUpdate(t *testing.T) {
 		t.Run("Admin Email Fallback - Valid", func(t *testing.T) {
 			oidcSrv, priv := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "", []string{"admin@example.com"}, oidcSrv.URL)
-			req := httptest.NewRequest("GET", "/api/update", nil)
+			srv := newAuthServer("test-audience", "", []string{"admin@example.com"}, oidcSrv.URL)
+			bodyBytes, err := json.Marshal(map[string]string{"siteID": types.SiteIDNone})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/update", bytes.NewBuffer(bodyBytes))
 			validToken := generateTestToken(t, oidcSrv.URL, priv, "admin@example.com", "admin")
 			req.Header.Set("Authorization", "Bearer "+validToken)
-			req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
 			w := httptest.NewRecorder()
 
-			srv.handleUpdate(w, req)
-			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 
 		t.Run("Valid Token, Specific Email Wrong", func(t *testing.T) {
 			oidcSrv, priv := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "right@example.com", nil, oidcSrv.URL)
+			srv := newAuthServer("test-audience", "right@example.com", nil, oidcSrv.URL)
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			validToken := generateTestToken(t, oidcSrv.URL, priv, "wrong@example.com", "wrong")
 			req.Header.Set("Authorization", "Bearer "+validToken)
@@ -230,21 +233,23 @@ func TestHandleUpdate(t *testing.T) {
 		t.Run("Valid Token, Correct Specific Email", func(t *testing.T) {
 			oidcSrv, priv := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "right@example.com", nil, oidcSrv.URL)
-			req := httptest.NewRequest("GET", "/api/update", nil)
+			srv := newAuthServer("test-audience", "right@example.com", nil, oidcSrv.URL)
+			bodyBytes, err := json.Marshal(map[string]string{"siteID": types.SiteIDNone})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/update", bytes.NewBuffer(bodyBytes))
 			validToken := generateTestToken(t, oidcSrv.URL, priv, "right@example.com", "right")
 			req.Header.Set("Authorization", "Bearer "+validToken)
-			req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
 			w := httptest.NewRecorder()
 
-			srv.handleUpdate(w, req)
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
+			handler.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		})
 
 		t.Run("Admin Email Fallback - Invalid", func(t *testing.T) {
 			oidcSrv, priv := setupOIDCTest(t)
 			defer oidcSrv.Close()
-			srv := newAuthServer("my-audience", "", []string{"admin@example.com"}, oidcSrv.URL)
+			srv := newAuthServer("test-audience", "", []string{"admin@example.com"}, oidcSrv.URL)
 			req := httptest.NewRequest("GET", "/api/update", nil)
 			// Token for a different user
 			validToken := generateTestToken(t, oidcSrv.URL, priv, "notadmin@example.com", "notadmin")
@@ -271,6 +276,274 @@ func TestHandleUpdate(t *testing.T) {
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+		})
+
+		t.Run("Direct Handler Without Auth Blocked Before Site Lookup", func(t *testing.T) {
+			strictStorage := &mockStorage{}
+			srvWithEmail := &Server{
+				storage:             strictStorage,
+				utilities:           utility.NewMap(strictStorage),
+				ess:                 ess.NewMap(),
+				updateSpecificEmail: "scheduler@example.com",
+			}
+			// Omit siteIDContextKey so s.getSiteID would panic if reached
+			req := httptest.NewRequest(http.MethodPost, "/api/update", nil)
+			w := httptest.NewRecorder()
+			srvWithEmail.handleUpdate(w, req)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+
+			srvWithoutEmail := &Server{
+				storage:   strictStorage,
+				utilities: utility.NewMap(strictStorage),
+				ess:       ess.NewMap(),
+			}
+			req2 := httptest.NewRequest(http.MethodPost, "/api/update", nil)
+			w2 := httptest.NewRecorder()
+			srvWithoutEmail.handleUpdate(w2, req2)
+			assert.Equal(t, http.StatusUnauthorized, w2.Result().StatusCode)
+
+			reqReadOnlyAdmin := httptest.NewRequest(http.MethodPost, "/api/update", nil)
+			reqReadOnlyAdmin = reqReadOnlyAdmin.WithContext(context.WithValue(reqReadOnlyAdmin.Context(), userContextKey, types.User{
+				ID:    "google:admin-sub",
+				Email: "admin@example.com",
+				Admin: false,
+			}))
+			w3 := httptest.NewRecorder()
+			srvWithoutEmail.handleUpdate(w3, reqReadOnlyAdmin)
+			assert.Equal(t, http.StatusForbidden, w3.Result().StatusCode)
+			strictStorage.AssertExpectations(t)
+		})
+
+		t.Run("Cookie Fallback Blocked When Update Specific Email Set", func(t *testing.T) {
+			oidcSrv, priv := setupOIDCTest(t)
+			defer oidcSrv.Close()
+			provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+			require.NoError(t, err)
+
+			const siteID = "site1"
+			var setModesCalls atomic.Int32
+			var insertActionCalls atomic.Int32
+
+			strictStorage := &mockStorage{}
+			strictStorage.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				insertActionCalls.Add(1)
+			}).Return(nil).Maybe()
+
+			strictESS := &mockESS{}
+			strictESS.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				setModesCalls.Add(1)
+			}).Return(true, nil).Maybe()
+
+			essMap := ess.NewMap()
+			essMap.SetSystem(siteID, strictESS)
+			uMap := utility.NewMap(strictStorage)
+			uMap.SetProvider(siteID, mockU)
+
+			srv := &Server{
+				utilities:            uMap,
+				ess:                  essMap,
+				storage:              strictStorage,
+				controller:           controller.NewController(),
+				sessionEncryptionKey: "12345678901234567890123456789012",
+				sessionDuration:      7 * 24 * time.Hour,
+				updateSpecificEmail:  "updater@example.com",
+				updateOIDCVerifier:   provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
+				adminEmails:          []string{"admin@example.com"},
+				oidcAudiences: map[string]string{
+					"google": "test-audience",
+				},
+				oidcVerifiers: map[string]tokenVerifier{
+					"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+				},
+			}
+
+			adminSessionToken, err := srv.createSessionToken("google:admin-sub", "admin@example.com", "admin-secret", time.Hour)
+			require.NoError(t, err)
+			ownerSessionToken, err := srv.createSessionToken("google:owner-sub", "owner@example.com", "owner-secret", time.Hour)
+			require.NoError(t, err)
+
+			adminCookie := &http.Cookie{Name: sessionTokenCookie, Value: adminSessionToken}
+			ownerCookie := &http.Cookie{Name: sessionTokenCookie, Value: ownerSessionToken}
+
+			muxHandler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
+			doJSON := func(method, path string, body any, cookie *http.Cookie, bearer string) (int, http.Header, string) {
+				var buf bytes.Buffer
+				if body != nil {
+					require.NoError(t, json.NewEncoder(&buf).Encode(body))
+				}
+				req := httptest.NewRequest(method, path, &buf)
+				if cookie != nil {
+					req.AddCookie(cookie)
+				}
+				if bearer != "" {
+					req.Header.Set("Authorization", "Bearer "+bearer)
+				}
+				w := httptest.NewRecorder()
+				muxHandler.ServeHTTP(w, req)
+				return w.Code, w.Header(), w.Body.String()
+			}
+
+			adminUpdateCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, adminCookie, "")
+			ownerUpdateCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, "")
+			assert.Equal(t, http.StatusUnauthorized, adminUpdateCode)
+			assert.Equal(t, http.StatusUnauthorized, ownerUpdateCode)
+			assert.Zero(t, setModesCalls.Load())
+			assert.Zero(t, insertActionCalls.Load())
+
+			adminLegacyCookie := &http.Cookie{Name: authTokenCookie, Value: generateTestToken(t, oidcSrv.URL, priv, "admin@example.com", "admin-sub")}
+			ownerLegacyCookie := &http.Cookie{Name: authTokenCookie, Value: generateTestToken(t, oidcSrv.URL, priv, "owner@example.com", "owner-sub")}
+			adminLegacyCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, adminLegacyCookie, "")
+			ownerLegacyCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerLegacyCookie, "")
+			assert.Equal(t, http.StatusUnauthorized, adminLegacyCode)
+			assert.Equal(t, http.StatusUnauthorized, ownerLegacyCode)
+			assert.Zero(t, setModesCalls.Load())
+			assert.Zero(t, insertActionCalls.Load())
+
+			strictStorage.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+			strictStorage.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+			strictStorage.AssertNotCalled(t, "GetSettings", mock.Anything, mock.Anything)
+		})
+
+		t.Run("Site Owners Allowed And Non-Owners Blocked When Update Specific Email Unset", func(t *testing.T) {
+			oidcSrv, priv := setupOIDCTest(t)
+			defer oidcSrv.Close()
+			provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+			require.NoError(t, err)
+
+			const siteID = "site1"
+			var setModesCalls atomic.Int32
+			var insertActionCalls atomic.Int32
+
+			ownerStorage := &mockStorage{}
+			ownerStorage.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+			ownerStorage.On("GetLatestAction", mock.Anything, siteID).Return((*types.Action)(nil), nil).Maybe()
+			ownerStorage.On("GetHistorySummaries", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+					},
+				},
+			}, nil).Maybe()
+			ownerStorage.On("GetSettings", mock.Anything, siteID).Return(types.Settings{
+				MinBatterySOC:   5.0,
+				UtilityProvider: "test",
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Maybe()
+			ownerStorage.On("GetLatestEnergyHistoryTime", mock.Anything, siteID).Return(time.Time{}, 0, nil).Maybe()
+			ownerStorage.On("GetLatestPriceHistoryTime", mock.Anything, siteID).Return(time.Time{}, 0, nil).Maybe()
+			ownerStorage.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+			ownerStorage.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+			ownerStorage.On("UpsertEnergyHistories", mock.Anything, siteID, mock.Anything, mock.Anything).Return(nil).Maybe()
+			ownerStorage.On("UpsertPrices", mock.Anything, siteID, mock.Anything, mock.Anything).Return(nil).Maybe()
+			ownerStorage.On("InsertAction", mock.Anything, siteID, mock.Anything).Run(func(args mock.Arguments) {
+				insertActionCalls.Add(1)
+			}).Return(nil).Maybe()
+
+			site1Doc := types.Site{
+				ID:          siteID,
+				Permissions: []types.SitePermissions{{UserID: "google:owner-sub"}},
+			}
+			ownerStorage.On("GetUser", mock.Anything, "google:admin-sub").Return(types.User{
+				ID:            "google:admin-sub",
+				Email:         "admin@example.com",
+				SessionSecret: "admin-secret",
+			}, nil)
+			ownerStorage.On("GetUser", mock.Anything, "google:other-sub").Return(types.User{
+				ID:            "google:other-sub",
+				Email:         "other@example.com",
+				SessionSecret: "other-secret",
+			}, nil)
+			ownerStorage.On("GetUser", mock.Anything, "google:owner-sub").Return(types.User{
+				ID:            "google:owner-sub",
+				Email:         "owner@example.com",
+				SessionSecret: "owner-secret",
+				Sites:         []types.UserSite{{ID: siteID}},
+			}, nil)
+			ownerStorage.On("GetSite", mock.Anything, siteID).Return(site1Doc, nil)
+
+			ownerESS := &mockESS{}
+			ownerESS.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+			ownerESS.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Maybe()
+			ownerESS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+			ownerESS.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil).Maybe()
+			ownerESS.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				setModesCalls.Add(1)
+			}).Return(true, nil).Maybe()
+
+			essMap := ess.NewMap()
+			essMap.SetSystem(siteID, ownerESS)
+			uMap := utility.NewMap(ownerStorage)
+			uMap.SetProvider(siteID, mockU)
+
+			srv := &Server{
+				utilities:            uMap,
+				ess:                  essMap,
+				storage:              ownerStorage,
+				controller:           controller.NewController(),
+				sessionEncryptionKey: "12345678901234567890123456789012",
+				sessionDuration:      7 * 24 * time.Hour,
+				updateSpecificEmail:  "", // Optional: unset so site owners can trigger their own updates
+				adminEmails:          []string{"admin@example.com"},
+				oidcAudiences: map[string]string{
+					"google": "test-audience",
+				},
+				oidcVerifiers: map[string]tokenVerifier{
+					"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+				},
+			}
+
+			adminSessionToken, err := srv.createSessionToken("google:admin-sub", "admin@example.com", "admin-secret", time.Hour)
+			require.NoError(t, err)
+			otherSessionToken, err := srv.createSessionToken("google:other-sub", "other@example.com", "other-secret", time.Hour)
+			require.NoError(t, err)
+			ownerSessionToken, err := srv.createSessionToken("google:owner-sub", "owner@example.com", "owner-secret", time.Hour)
+			require.NoError(t, err)
+
+			adminCookie := &http.Cookie{Name: sessionTokenCookie, Value: adminSessionToken}
+			otherCookie := &http.Cookie{Name: sessionTokenCookie, Value: otherSessionToken}
+			ownerCookie := &http.Cookie{Name: sessionTokenCookie, Value: ownerSessionToken}
+			ownerLegacyCookie := &http.Cookie{Name: authTokenCookie, Value: generateTestToken(t, oidcSrv.URL, priv, "owner@example.com", "owner-sub")}
+
+			muxHandler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
+			doJSON := func(method, path string, body any, cookie *http.Cookie, bearer string) (int, http.Header, string) {
+				var buf bytes.Buffer
+				if body != nil {
+					require.NoError(t, json.NewEncoder(&buf).Encode(body))
+				}
+				req := httptest.NewRequest(method, path, &buf)
+				if cookie != nil {
+					req.AddCookie(cookie)
+				}
+				if bearer != "" {
+					req.Header.Set("Authorization", "Bearer "+bearer)
+				}
+				w := httptest.NewRecorder()
+				muxHandler.ServeHTTP(w, req)
+				return w.Code, w.Header(), w.Body.String()
+			}
+
+			// Read-only multi-site admin without direct site permission must be rejected with 403
+			adminCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, adminCookie, "")
+			assert.Equal(t, http.StatusForbidden, adminCode)
+			// Unrelated user without site permission must be rejected with 403
+			otherCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, otherCookie, "")
+			assert.Equal(t, http.StatusForbidden, otherCode)
+			// Bearer header must not silently fall back to owner cookie when updateSpecificEmail is unset
+			bearerFallbackCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, generateTestToken(t, oidcSrv.URL, priv, "owner@example.com", "owner-sub"))
+			assert.Equal(t, http.StatusUnauthorized, bearerFallbackCode)
+			assert.Zero(t, setModesCalls.Load())
+			assert.Zero(t, insertActionCalls.Load())
+			ownerStorage.AssertNotCalled(t, "GetSettings", mock.Anything, mock.Anything)
+
+			// Site owner can trigger their own update via session_token or legacy auth_token cookie
+			ownerCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, "")
+			assert.Equal(t, http.StatusOK, ownerCode)
+			assert.Equal(t, int32(1), setModesCalls.Load())
+			assert.Equal(t, int32(1), insertActionCalls.Load())
+
+			ownerLegacyCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerLegacyCookie, "")
+			assert.Equal(t, http.StatusOK, ownerLegacyCode)
+			assert.Equal(t, int32(2), setModesCalls.Load())
+			assert.Equal(t, int32(2), insertActionCalls.Load())
 		})
 	})
 
@@ -2355,6 +2628,52 @@ func TestHandleUpdateSites(t *testing.T) {
 			handler.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+
+		t.Run("Update Specific Email Required Even With Cookies", func(t *testing.T) {
+			savedEmail := srv.updateSpecificEmail
+			savedSessionKey := srv.sessionEncryptionKey
+			srv.sessionEncryptionKey = "12345678901234567890123456789012"
+			defer func() {
+				srv.updateSpecificEmail = savedEmail
+				srv.sessionEncryptionKey = savedSessionKey
+			}()
+
+			sessionToken, err := srv.createSessionToken("google:owner-sub", "owner@example.com", "owner-secret", time.Hour)
+			require.NoError(t, err)
+			ownerCookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+			legacyCookie := &http.Cookie{Name: authTokenCookie, Value: generateTestToken(t, oidcSrv.URL, priv, "owner@example.com", "owner-sub")}
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+
+			// With updateSpecificEmail set: cookies must not fallback
+			reqCookieSet := httptest.NewRequest("POST", "/api/updateSites", nil)
+			reqCookieSet.AddCookie(ownerCookie)
+			wCookieSet := httptest.NewRecorder()
+			handler.ServeHTTP(wCookieSet, reqCookieSet)
+			assert.Equal(t, http.StatusUnauthorized, wCookieSet.Code)
+
+			// With updateSpecificEmail unset: /api/updateSites must still reject cookies and unauthenticated calls
+			srv.updateSpecificEmail = ""
+			reqOwnerUnset := httptest.NewRequest("POST", "/api/updateSites", nil)
+			reqOwnerUnset.AddCookie(ownerCookie)
+			wOwnerUnset := httptest.NewRecorder()
+			handler.ServeHTTP(wOwnerUnset, reqOwnerUnset)
+			assert.Equal(t, http.StatusUnauthorized, wOwnerUnset.Code)
+
+			reqLegacyUnset := httptest.NewRequest("POST", "/api/updateSites", nil)
+			reqLegacyUnset.AddCookie(legacyCookie)
+			wLegacyUnset := httptest.NewRecorder()
+			handler.ServeHTTP(wLegacyUnset, reqLegacyUnset)
+			assert.Equal(t, http.StatusUnauthorized, wLegacyUnset.Code)
+
+			reqNoAuthUnset := httptest.NewRequest("POST", "/api/updateSites", nil)
+			wNoAuthUnset := httptest.NewRecorder()
+			handler.ServeHTTP(wNoAuthUnset, reqNoAuthUnset)
+			assert.Equal(t, http.StatusUnauthorized, wNoAuthUnset.Code)
+
+			mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+			mockS.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
 		})
 	})
 

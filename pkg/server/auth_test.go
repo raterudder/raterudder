@@ -478,6 +478,111 @@ func TestAuthMiddleware(t *testing.T) {
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 
+		// 7. When updateSpecificEmail is set, cookie requests (session_token and auth_token for admin and owner)
+		// on /api/update and /api/updateSites must NOT fall back to cookies and must not trigger GetUser or GetSite lookups
+		server.adminEmails = []string{"admin@example.com"}
+		defer func() { server.adminEmails = nil }()
+
+		adminSessionToken, err := server.createSessionToken("google:admin@example.com", "admin@example.com", "admin-secret", time.Hour)
+		require.NoError(t, err)
+		ownerSessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "owner-secret", time.Hour)
+		require.NoError(t, err)
+
+		adminCookie := &http.Cookie{Name: sessionTokenCookie, Value: adminSessionToken}
+		ownerCookie := &http.Cookie{Name: sessionTokenCookie, Value: ownerSessionToken}
+		legacyOwnerCookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+
+		doJSON := func(method, path string, body any, cookie *http.Cookie, bearer string) (int, http.Header, string) {
+			req := createReq(method, path, body, cookie)
+			if bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+bearer)
+			}
+			rec := httptest.NewRecorder()
+			server.authMiddleware(testHandler).ServeHTTP(rec, req)
+			return rec.Code, rec.Header(), rec.Body.String()
+		}
+
+		const siteID = "site1"
+		adminUpdateCode, adminHdr, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, adminCookie, "")
+		ownerUpdateCode, ownerHdr, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, "")
+		legacyUpdateCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, legacyOwnerCookie, "")
+		assert.Equal(t, http.StatusUnauthorized, adminUpdateCode)
+		assert.Equal(t, http.StatusUnauthorized, ownerUpdateCode)
+		assert.Equal(t, http.StatusUnauthorized, legacyUpdateCode)
+		assert.Empty(t, adminHdr.Get("X-Update-Specific"))
+		assert.Empty(t, ownerHdr.Get("X-Update-Specific"))
+
+		adminUpdateSitesCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, adminCookie, "")
+		ownerUpdateSitesCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, ownerCookie, "")
+		legacyUpdateSitesCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, legacyOwnerCookie, "")
+		assert.Equal(t, http.StatusUnauthorized, adminUpdateSitesCode)
+		assert.Equal(t, http.StatusUnauthorized, ownerUpdateSitesCode)
+		assert.Equal(t, http.StatusUnauthorized, legacyUpdateSitesCode)
+
+		mocks.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mocks.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+
+		// 8. When updateSpecificEmail is unset:
+		// - /api/updateSites still requires updateSpecificEmail (rejects cookie requests without storage lookups)
+		// - /api/update rejects Authorization headers without falling back to cookies
+		// - /api/update lets cookie requests through as a normal siteID call
+		server.updateSpecificEmail = ""
+		noSchedUpdateSitesAdminCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, adminCookie, "")
+		noSchedUpdateSitesOwnerCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, ownerCookie, "")
+		noSchedUpdateSitesLegacyCode, _, _ := doJSON(http.MethodPost, "/api/updateSites", nil, legacyOwnerCookie, "")
+		assert.Equal(t, http.StatusUnauthorized, noSchedUpdateSitesAdminCode)
+		assert.Equal(t, http.StatusUnauthorized, noSchedUpdateSitesOwnerCode)
+		assert.Equal(t, http.StatusUnauthorized, noSchedUpdateSitesLegacyCode)
+
+		bearerWithCookieCode, _, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, validToken)
+		assert.Equal(t, http.StatusUnauthorized, bearerWithCookieCode)
+
+		mocks.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mocks.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+
+		// Site owner cookie on /api/update succeeds as a normal siteID call (explicit siteID and default single site)
+		ownerUser := types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "owner-secret",
+			Sites:         []types.UserSite{{ID: siteID}},
+		}
+		ownerSite := types.Site{
+			ID:          siteID,
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(ownerUser, nil).Times(3)
+		mocks.On("GetSite", mock.Anything, siteID).Return(ownerSite, nil).Times(3)
+
+		noSchedOwnerCode, noSchedOwnerHdr, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, ownerCookie, "")
+		assert.Equal(t, http.StatusOK, noSchedOwnerCode)
+		assert.Equal(t, siteID, noSchedOwnerHdr.Get("X-Site-ID"))
+		assert.Equal(t, "user@example.com", noSchedOwnerHdr.Get("X-Email"))
+		assert.Equal(t, "true", noSchedOwnerHdr.Get("X-Admin"))
+		assert.Empty(t, noSchedOwnerHdr.Get("X-Update-Specific"))
+
+		noSchedDefaultSiteCode, noSchedDefaultSiteHdr, _ := doJSON(http.MethodPost, "/api/update", nil, ownerCookie, "")
+		assert.Equal(t, http.StatusOK, noSchedDefaultSiteCode)
+		assert.Equal(t, siteID, noSchedDefaultSiteHdr.Get("X-Site-ID"))
+		assert.Equal(t, "true", noSchedDefaultSiteHdr.Get("X-Admin"))
+
+		noSchedLegacyCode, noSchedLegacyHdr, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, legacyOwnerCookie, "")
+		assert.Equal(t, http.StatusOK, noSchedLegacyCode)
+		assert.Equal(t, "true", noSchedLegacyHdr.Get("X-Admin"))
+
+		// Multi-site admin without direct site permission passes authMiddleware as read-only (X-Admin: false)
+		mocks.On("GetUser", mock.Anything, "google:admin@example.com").Return(types.User{
+			ID:            "google:admin@example.com",
+			Email:         "admin@example.com",
+			SessionSecret: "admin-secret",
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, siteID).Return(ownerSite, nil).Once()
+
+		noSchedAdminCode, noSchedAdminHdr, _ := doJSON(http.MethodPost, "/api/update", map[string]string{"siteID": siteID}, adminCookie, "")
+		assert.Equal(t, http.StatusOK, noSchedAdminCode)
+		assert.Equal(t, "false", noSchedAdminHdr.Get("X-Admin"))
+		assert.Empty(t, noSchedAdminHdr.Get("X-Update-Specific"))
+
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 

@@ -50,6 +50,24 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	ctx := common.CtxWithWaitGroup(r.Context(), &wg)
 
+	if s.updateSpecificEmail != "" {
+		if !s.getUpdateSpecificAuth(r) {
+			writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+			return
+		}
+	} else if !s.bypassAuth {
+		user := s.getUser(r)
+		if user.ID == "" {
+			writeJSONError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if !user.Admin {
+			log.Ctx(ctx).WarnContext(ctx, "unauthorized for site update", slog.String("userID", user.ID), slog.String("email", user.Email))
+			writeJSONError(w, "unauthorized", http.StatusForbidden)
+			return
+		}
+	}
+
 	siteID := s.getSiteID(r)
 
 	// 1. Get Settings and Credentials

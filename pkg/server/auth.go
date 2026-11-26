@@ -22,15 +22,16 @@ import (
 )
 
 type pathAttributes struct {
-	allowNoLogin       bool
-	ignoreUserNotFound bool
-	isUpdatePath       bool
-	ignoreSiteID       bool
-	optionalSiteID     bool
-	allowAllSites      bool
-	allowAppToken      bool
-	requireAppToken    bool
-	allowQueryToken    bool
+	allowNoLogin          bool
+	ignoreUserNotFound    bool
+	isUpdatePath          bool
+	requireUpdateSpecific bool
+	ignoreSiteID          bool
+	optionalSiteID        bool
+	allowAllSites         bool
+	allowAppToken         bool
+	requireAppToken       bool
+	allowQueryToken       bool
 }
 
 var routeAuthAttributes = map[string]pathAttributes{
@@ -41,7 +42,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/report/browser":               {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/join":                         {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/update":                       {isUpdatePath: true},
-	"/api/updateSites":                  {isUpdatePath: true, ignoreSiteID: true},
+	"/api/updateSites":                  {isUpdatePath: true, requireUpdateSpecific: true, ignoreSiteID: true},
 	"/api/list/sites":                   {ignoreSiteID: true},
 	"/api/feedback":                     {ignoreUserNotFound: true, optionalSiteID: true, allowAllSites: true},
 	"/api/list/feedback":                {ignoreSiteID: true},
@@ -85,6 +86,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		allowNoLogin := attrs.allowNoLogin
 		ignoreUserNotFound := attrs.ignoreUserNotFound
 		isUpdatePath := attrs.isUpdatePath
+		requireUpdateSpecific := attrs.requireUpdateSpecific
 		ignoreSiteID := attrs.ignoreSiteID
 		optionalSiteID := attrs.optionalSiteID
 		allowAllSites := attrs.allowAllSites
@@ -224,8 +226,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				authSuccess = true
 			}
 
-			// Check /api/update specific auth
-			if !authSuccess && isUpdatePath && s.updateSpecificEmail != "" {
+			// Check /api/update and /api/updateSites scheduler auth.
+			// /api/updateSites always requires updateSpecificEmail; /api/update uses it when configured
+			// (without falling back to cookies) and otherwise proceeds as a normal siteID cookie call.
+			useUpdateSpecific := isUpdatePath && (requireUpdateSpecific || s.updateSpecificEmail != "")
+			if !authSuccess && useUpdateSpecific {
+				if s.updateSpecificEmail == "" {
+					log.Ctx(ctx).WarnContext(ctx, "update endpoint called without update-specific email configured", slog.String("path", r.URL.Path))
+					writeJSONError(w, "authentication required", http.StatusUnauthorized)
+					return
+				}
 				authHeader := r.Header.Get("Authorization")
 				if authHeader != "" {
 					if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -264,11 +274,20 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						return
 					}
 				}
+				if !authViaUpdateSpecific {
+					log.Ctx(ctx).WarnContext(ctx, "missing update-specific authentication", slog.String("path", r.URL.Path))
+					writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+					return
+				}
+			} else if !authSuccess && isUpdatePath && r.Header.Get("Authorization") != "" {
+				log.Ctx(ctx).WarnContext(ctx, "authorization header not allowed without update-specific email", slog.String("path", r.URL.Path))
+				writeJSONError(w, "update-specific authentication not configured", http.StatusUnauthorized)
+				return
 			}
 
 			// normal user auth (cookie)
 			// ignore login so that a login request can overwrite a broken cookie
-			if !authSuccess && r.URL.Path != "/api/auth/login" {
+			if !authSuccess && !useUpdateSpecific && r.URL.Path != "/api/auth/login" {
 				// 1. Check sessionTokenCookie
 				sessionCookie, err := r.Cookie(sessionTokenCookie)
 				if err != nil && !errors.Is(err, http.ErrNoCookie) {
@@ -320,7 +339,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				}
 			}
 
-			if authViaUpdateSpecific && isUpdatePath {
+			if useUpdateSpecific {
+				if !authViaUpdateSpecific {
+					writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+					return
+				}
 				// allowed to update
 			} else if authSuccess {
 				// fetch user
