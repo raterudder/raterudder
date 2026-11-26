@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func generateTestToken(t *testing.T, srvURL string, priv crypto.PrivateKey, email, subject string) string {
@@ -1637,12 +1638,17 @@ func TestHandleLogin(t *testing.T) {
 			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 		},
 		updateOIDCVerifier: provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
+		generalRateLimit:   rate.Inf,
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Inf,
+		sensitiveBurst:     30,
 	}
 
 	createReq := func(token string) *http.Request {
 		body := map[string]string{"token": token, "client": "google"}
 		bodyBytes, _ := json.Marshal(body)
 		r := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(bodyBytes))
+		r.Header.Set("Content-Type", "application/json")
 		return r
 	}
 
@@ -1782,6 +1788,7 @@ func TestHandleLogin(t *testing.T) {
 		server.storage = mocks
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBufferString("invalid-json"))
+		req.Header.Set("Content-Type", "application/json")
 
 		server.handleLogin(w, req)
 
@@ -1851,6 +1858,7 @@ func TestHandleLogin(t *testing.T) {
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
 			server.authMiddleware(http.HandlerFunc(server.handleLogin)).ServeHTTP(w, req)
 			return w
 		}
@@ -1886,6 +1894,199 @@ func TestHandleLogin(t *testing.T) {
 		})
 
 		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Audit Content-Type And CrossOriginProtection Without Blocking", func(t *testing.T) {
+		newLoginRequestWithLogs := func(contentType string) (*http.Request, *bytes.Buffer) {
+			bodyBytes, err := json.Marshal(map[string]string{
+				"token":  validToken,
+				"client": "google",
+			})
+			require.NoError(t, err)
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+			req := httptest.NewRequest(http.MethodPost, "https://raterudder.example.com/api/auth/login", bytes.NewBuffer(bodyBytes))
+			req = req.WithContext(log.With(req.Context(), bufLogger))
+			if contentType != "" {
+				req.Header.Set("Content-Type", contentType)
+			}
+			return req, &logBuf
+		}
+
+		decodeLogLines := func(t *testing.T, buf *bytes.Buffer) []map[string]any {
+			t.Helper()
+			raw := strings.TrimSpace(buf.String())
+			if raw == "" {
+				return nil
+			}
+			lines := strings.Split(raw, "\n")
+			records := make([]map[string]any, 0, len(lines))
+			for _, line := range lines {
+				var rec map[string]any
+				require.NoError(t, json.Unmarshal([]byte(line), &rec))
+				records = append(records, rec)
+			}
+			return records
+		}
+
+		t.Run("ValidJSONWithCharsetDoesNotLogError", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("application/json; charset=utf-8")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			req.Header.Set("Origin", "https://raterudder.example.com")
+			w := httptest.NewRecorder()
+
+			server.setupHandler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Empty(t, decodeLogLines(t, logBuf))
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("TextPlainContentTypeLogsErrorWithNilParseErrorAndSucceeds", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("text/plain")
+			w := httptest.NewRecorder()
+
+			server.handleLogin(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			records := decodeLogLines(t, logBuf)
+			if assert.Len(t, records, 1) {
+				assert.Equal(t, "login request without application/json Content-Type would be blocked", records[0]["msg"])
+				assert.Equal(t, "text/plain", records[0]["contentType"])
+				val, hasErrorKey := records[0]["error"]
+				assert.True(t, hasErrorKey)
+				assert.Nil(t, val)
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("MissingContentTypeLogsErrorAndSucceeds", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("")
+			w := httptest.NewRecorder()
+
+			server.handleLogin(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			records := decodeLogLines(t, logBuf)
+			if assert.Len(t, records, 1) {
+				assert.Equal(t, "login request without application/json Content-Type would be blocked", records[0]["msg"])
+				assert.Equal(t, "", records[0]["contentType"])
+				assert.NotEmpty(t, records[0]["error"])
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("MalformedContentTypeLogsErrorAndSucceeds", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("application/json; badparam")
+			w := httptest.NewRecorder()
+
+			server.handleLogin(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			records := decodeLogLines(t, logBuf)
+			if assert.Len(t, records, 1) {
+				assert.Equal(t, "login request without application/json Content-Type would be blocked", records[0]["msg"])
+				assert.Equal(t, "application/json; badparam", records[0]["contentType"])
+				assert.NotEmpty(t, records[0]["error"])
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("SetupHandlerCrossSiteTextPlainLogsBothErrorsWithoutBlocking", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("text/plain; charset=utf-8")
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			req.Header.Set("Origin", "https://evil.example")
+			w := httptest.NewRecorder()
+
+			server.setupHandler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			records := decodeLogLines(t, logBuf)
+			if assert.Len(t, records, 2) {
+				assert.Equal(t, "cross-origin request would be blocked", records[0]["msg"])
+				assert.Equal(t, http.MethodPost, records[0]["method"])
+				assert.Equal(t, "/api/auth/login", records[0]["path"])
+				assert.Equal(t, "cross-site", records[0]["secFetchSite"])
+				assert.Equal(t, "https://evil.example", records[0]["origin"])
+				assert.Equal(t, "raterudder.example.com", records[0]["host"])
+				assert.Equal(t, "text/plain; charset=utf-8", records[0]["contentType"])
+				assert.NotEmpty(t, records[0]["error"])
+
+				assert.Equal(t, "login request without application/json Content-Type would be blocked", records[1]["msg"])
+				assert.Equal(t, "text/plain; charset=utf-8", records[1]["contentType"])
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("SetupHandlerCrossOriginHeaderOnlyLogsErrorWithoutBlocking", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:            "google:user@example.com",
+				Email:         "user@example.com",
+				SessionSecret: "test-secret-123",
+			}, nil).Once()
+
+			req, logBuf := newLoginRequestWithLogs("application/json")
+			req.Header.Set("Origin", "https://evil.example")
+			w := httptest.NewRecorder()
+
+			server.setupHandler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			records := decodeLogLines(t, logBuf)
+			if assert.Len(t, records, 1) {
+				assert.Equal(t, "cross-origin request would be blocked", records[0]["msg"])
+				assert.Equal(t, http.MethodPost, records[0]["method"])
+				assert.Equal(t, "/api/auth/login", records[0]["path"])
+				assert.Equal(t, "", records[0]["secFetchSite"])
+				assert.Equal(t, "https://evil.example", records[0]["origin"])
+				assert.Equal(t, "raterudder.example.com", records[0]["host"])
+				assert.Equal(t, "application/json", records[0]["contentType"])
+				assert.NotEmpty(t, records[0]["error"])
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
 	})
 }
 

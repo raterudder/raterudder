@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -508,6 +509,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	contentType := r.Header.Get("Content-Type")
+	if mediaType, _, err := mime.ParseMediaType(contentType); err != nil || mediaType != "application/json" {
+		log.Ctx(r.Context()).ErrorContext(
+			r.Context(),
+			"login request without application/json Content-Type would be blocked",
+			slog.String("contentType", contentType),
+			slog.Any("error", err),
+		)
+	}
+
 	// Parse Parse Form to get the token, expecting JSON body
 	var req struct {
 		Token  string `json:"token"`

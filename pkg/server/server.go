@@ -356,7 +356,9 @@ func (s *Server) setupHandler() http.Handler {
 	mux.Handle("/api/", http.MaxBytesHandler(
 		s.rateLimitMiddleware(
 			common.CtxFromRequestMiddleware(
-				s.authMiddleware(apiMux),
+				s.crossOriginProtectionMiddleware(
+					s.authMiddleware(apiMux),
+				),
 			),
 		),
 		1048576,
@@ -620,6 +622,27 @@ func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 
 		h.ServeHTTP(w, r)
 	}
+}
+
+func (s *Server) crossOriginProtectionMiddleware(next http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := cop.Check(r); err != nil {
+			ctx := r.Context()
+			log.Ctx(ctx).ErrorContext(
+				ctx,
+				"cross-origin request would be blocked",
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.String("secFetchSite", r.Header.Get("Sec-Fetch-Site")),
+				slog.String("origin", r.Header.Get("Origin")),
+				slog.String("host", r.Host),
+				slog.String("contentType", r.Header.Get("Content-Type")),
+				slog.Any("error", err),
+			)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) revisionMiddleware(next http.Handler) http.Handler {
