@@ -80,6 +80,20 @@
     `go build -tags timetzdata ./cmd/...`
   - Build static production `raterudder` binary with embedded `web/dist` (run frontend build first):
     `CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o /tmp/raterudder ./cmd/raterudder`
+- **Fixture Privacy Checks**:
+  - Verify synthetic `^site[0-9]+$` IDs, redacted PII/credentials, and 2-decimal weather coordinates across `pkg/controller/testdata/`:
+    `go test ./pkg/controller -run "^TestFixturePrivacy$"`
+
+### Secret & Privacy Scans
+- **Install Pre-Commit Hook**: Configure Git to run the versioned pre-commit secret and PII check (`gitleaks git --pre-commit --staged --config .gitleaks.toml --redact`):
+  `./scripts/setup-hooks.sh`
+- **Local Gitleaks Scans**:
+  - Scan full git commit history (matches CI `secret-scan` job):
+    `gitleaks git --config .gitleaks.toml --redact`
+  - Scan working tree files (including untracked files not ignored by `.gitignore`):
+    `gitleaks dir --config .gitleaks.toml --redact`
+  - Scan staged changes manually before committing:
+    `gitleaks git --pre-commit --staged --config .gitleaks.toml --redact`
 
 ### Frontend Tests
 - **Vitest**: Run single test files with `npm test path/to/test.test.tsx`.
@@ -107,4 +121,4 @@
 - **GCP Project**: Cloud Logging and Firestore run under project `raterudder` (`projects/raterudder`).
 - **Polling Interval**: RateRudder site updates (`/api/updateSites`) run every **20 minutes** (not every 5 minutes; do not confuse 5-minute utility price feeds or cache TTLs with the control loop interval).
 - **Site Debugging Skill**: Use the `debug-site` skill (`cmd/inspectsite` and `cmd/replayplan`) to inspect site settings, action history, cloud logs, and re-run `controller.Plan` across historical polls.
-- **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files.
+- **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files. Before committing fixture updates or site debugging changes, install the pre-commit hook (`./scripts/setup-hooks.sh`), verify `gitleaks git --pre-commit --staged --config .gitleaks.toml --redact` and `gitleaks dir --config .gitleaks.toml --redact` exit `0`, and run `go test ./pkg/controller -run "^TestFixturePrivacy$"` (`cmd/fetchhistory` maps sites to synthetic `site<N>` IDs and rounds weather `latitude`/`longitude` to 2 decimal places).
