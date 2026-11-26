@@ -41,6 +41,9 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 	if countryCode == "" || postalCode == "" {
 		return types.SiteLocation{}, fmt.Errorf("country code and zip code are required")
 	}
+	if err := ValidateLocationInput(countryCode, postalCode); err != nil {
+		return types.SiteLocation{}, err
+	}
 
 	u := *s.GeocodingURL
 
@@ -55,12 +58,12 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return types.SiteLocation{}, fmt.Errorf("failed to create geocoding request: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("failed to create geocoding request: %w", redactRequestError(err, s.APIKey))
 	}
 
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
-		return types.SiteLocation{}, fmt.Errorf("geocoding request failed: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("geocoding request failed: %w", redactRequestError(err, s.APIKey))
 	}
 	defer resp.Body.Close()
 
@@ -74,7 +77,7 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 	}
 
 	if len(data.Results) == 0 {
-		return types.SiteLocation{}, fmt.Errorf("no location found for zip code %s", postalCode)
+		return types.SiteLocation{}, fmt.Errorf("%w for zip code %s", ErrNoLocationFound, postalCode)
 	}
 
 	// Find the result with the largest population that matches the country code
@@ -97,7 +100,7 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 	}
 
 	if bestLoc == (types.SiteLocation{}) {
-		return types.SiteLocation{}, fmt.Errorf("no location found for zip code %s and country code %s", postalCode, countryCode)
+		return types.SiteLocation{}, fmt.Errorf("%w for zip code %s and country code %s", ErrNoLocationFound, postalCode, countryCode)
 	}
 
 	return bestLoc, nil
@@ -323,12 +326,12 @@ func (s *OpenMeteo) Forecast(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create weather request: %w", err)
+		return nil, fmt.Errorf("failed to create weather request: %w", redactRequestError(err, s.APIKey))
 	}
 
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("weather request failed: %w", err)
+		return nil, fmt.Errorf("weather request failed: %w", redactRequestError(err, s.APIKey))
 	}
 	defer resp.Body.Close()
 
