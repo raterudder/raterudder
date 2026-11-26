@@ -1358,7 +1358,14 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "redeemed oauth authorization code", slog.String("userID", codeData.UserID), slog.String("siteID", redeemedApp.SiteID), slog.String("appID", redeemedApp.ID))
+	log.Ctx(ctx).InfoContext(ctx, "redeemed oauth authorization code",
+		slog.String("event", eventAppConnected),
+		slog.String("userID", codeData.UserID),
+		slog.String("siteID", redeemedApp.SiteID),
+		slog.String("appID", redeemedApp.ID),
+		slog.String("appName", redeemedApp.Name),
+		slog.String("appType", "oauth"),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

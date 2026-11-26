@@ -219,7 +219,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode shortwave_radiation%s: %w", suffix, err)
 	}
 	if len(ms.shortwaveRadiation) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("shortwaveRadiationCount", len(ms.shortwaveRadiation)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("shortwaveRadiationCount", len(ms.shortwaveRadiation)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d shortwave radiation", expectedLen, len(ms.shortwaveRadiation))
 	}
 
@@ -227,7 +227,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode diffuse_radiation%s: %w", suffix, err)
 	}
 	if len(ms.diffuseRadiation) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("diffuseRadiationCount", len(ms.diffuseRadiation)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("diffuseRadiationCount", len(ms.diffuseRadiation)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d diffuse radiation", expectedLen, len(ms.diffuseRadiation))
 	}
 
@@ -235,7 +235,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode direct_normal_irradiance%s: %w", suffix, err)
 	}
 	if len(ms.directNormalIrradiance) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("directNormalIrradianceCount", len(ms.directNormalIrradiance)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("directNormalIrradianceCount", len(ms.directNormalIrradiance)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d direct normal irradiance", expectedLen, len(ms.directNormalIrradiance))
 	}
 
@@ -247,7 +247,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode temperature_2m%s: %w", suffix, err)
 	}
 	if len(ms.temperature) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("temperatureCount", len(ms.temperature)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("temperatureCount", len(ms.temperature)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d temperature", expectedLen, len(ms.temperature))
 	}
 
@@ -255,7 +255,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode snowfall%s: %w", suffix, err)
 	}
 	if len(ms.snowfall) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("snowfallCount", len(ms.snowfall)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("snowfallCount", len(ms.snowfall)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d snowfall", expectedLen, len(ms.snowfall))
 	}
 
@@ -263,7 +263,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode snow_depth%s: %w", suffix, err)
 	}
 	if len(ms.snowDepth) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("snowDepthCount", len(ms.snowDepth)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("snowDepthCount", len(ms.snowDepth)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d snow depth", expectedLen, len(ms.snowDepth))
 	}
 
@@ -271,7 +271,7 @@ func parseModelHourlySeries(ctx context.Context, hourlyMap map[string]json.RawMe
 		return ms, fmt.Errorf("failed to decode cloud_cover%s: %w", suffix, err)
 	}
 	if len(ms.cloudCover) != expectedLen {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("cloudCoverCount", len(ms.cloudCover)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: hourly data mismatch", slog.String("model", model), slog.Int("timeCount", expectedLen), slog.Int("cloudCoverCount", len(ms.cloudCover)))
 		return ms, fmt.Errorf("hourly data mismatch: %d times, %d cloud cover", expectedLen, len(ms.cloudCover))
 	}
 
@@ -337,18 +337,17 @@ func (s *OpenMeteo) Forecast(
 
 	if resp.StatusCode != http.StatusOK {
 		var errData map[string]interface{}
-		err := json.NewDecoder(resp.Body).Decode(&errData)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: failed to parse weather error response", slog.Any("error", err), slog.Int("status", resp.StatusCode))
+		if err := json.NewDecoder(resp.Body).Decode(&errData); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse weather error response", slog.Any("error", err), slog.Int("status", resp.StatusCode))
 			return nil, fmt.Errorf("weather api returned status %d", resp.StatusCode)
 		}
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: weather api returned status", slog.Any("response", errData), slog.Int("status", resp.StatusCode))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: weather api returned status", slog.Any("response", errData), slog.Int("status", resp.StatusCode))
 		return nil, fmt.Errorf("weather api returned status %d: %v", resp.StatusCode, errData)
 	}
 
 	var data rawWeatherForecastResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: failed to decode weather response", slog.Any("error", err))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to decode weather response", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to decode weather response: %w", err)
 	}
 
@@ -390,7 +389,7 @@ func (s *OpenMeteo) Forecast(
 	}
 
 	if len(dailyTime) != len(dailySunrise) || len(dailyTime) != len(dailySunset) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: daily data mismatch", slog.Int("timeCount", len(dailyTime)), slog.Int("sunriseCount", len(dailySunrise)), slog.Int("sunsetCount", len(dailySunset)))
+		log.Ctx(ctx).WarnContext(ctx, "open-meteo: daily data mismatch", slog.Int("timeCount", len(dailyTime)), slog.Int("sunriseCount", len(dailySunrise)), slog.Int("sunsetCount", len(dailySunset)))
 		return nil, fmt.Errorf("daily data mismatch: %d times, %d sunrises, %d sunsets", len(dailyTime), len(dailySunrise), len(dailySunset))
 	}
 

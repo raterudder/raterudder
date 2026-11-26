@@ -89,7 +89,7 @@ func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
 	return s.vppInfo, nil
 }
 
-// GetPeriods implements the Utility interface, returning named import TOU periods when present.
+// GetPeriods implements the Utility interface, returning named import TOU periods when they cover all 24 hours of the day.
 func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,7 +100,64 @@ func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
 			res = append(res, p.TimePeriod)
 		}
 	}
+	if len(res) == 0 {
+		return nil, nil
+	}
+	if !namedPeriodsCoverDay(res, time.Now()) {
+		return nil, nil
+	}
 	return res, nil
+}
+
+func namedPeriodsCoverDay(periods []types.TimePeriod, now time.Time) bool {
+	loc := time.UTC
+	var candidateLoc *time.Location
+	first := true
+	minuteSet := map[int]bool{0: true}
+	for _, p := range periods {
+		if p.LocationPtr != nil {
+			if first {
+				candidateLoc = p.LocationPtr
+				first = false
+			} else if p.LocationPtr.String() != candidateLoc.String() {
+				candidateLoc = nil
+			}
+		}
+		for _, h := range p.Hours {
+			if h.MinuteStart >= 0 && h.MinuteStart < 60 {
+				minuteSet[h.MinuteStart] = true
+			}
+			if h.MinuteEnd >= 0 && h.MinuteEnd < 60 {
+				minuteSet[h.MinuteEnd] = true
+			}
+		}
+	}
+	if candidateLoc != nil {
+		loc = candidateLoc
+	}
+
+	nowInLoc := now.In(loc)
+	dayStart := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), 0, 0, 0, 0, loc)
+	nextDay := dayStart.AddDate(0, 0, 1)
+	for ts := dayStart; ts.Before(nextDay); ts = ts.Add(time.Hour) {
+		for minute := range minuteSet {
+			checkTS := ts.Add(time.Duration(minute) * time.Minute)
+			if !checkTS.Before(nextDay) {
+				continue
+			}
+			covered := false
+			for i := range periods {
+				if ok, _, err := periods[i].Contains(checkTS); err == nil && ok {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {

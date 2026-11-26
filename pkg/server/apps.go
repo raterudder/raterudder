@@ -316,7 +316,14 @@ func (s *Server) handleNewApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "stored new user app", slog.String("appID", newApp.ID), slog.String("appName", newApp.Name))
+	log.Ctx(ctx).InfoContext(ctx, "stored new user app",
+		slog.String("event", eventAppConnected),
+		slog.String("appID", newApp.ID),
+		slog.String("appName", newApp.Name),
+		slog.String("appType", "apiKey"),
+		slog.String("siteID", siteID),
+		slog.String("userID", user.ID),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -368,7 +375,12 @@ func (s *Server) handleRevokeApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "revoked user app", slog.String("appID", req.ID))
+	log.Ctx(ctx).InfoContext(ctx, "revoked user app",
+		slog.String("event", eventAppRevoked),
+		slog.String("appID", req.ID),
+		slog.String("siteID", siteID),
+		slog.String("userID", user.ID),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

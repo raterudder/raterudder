@@ -151,6 +151,23 @@ func TestSiteFees(t *testing.T) {
 		}
 	})
 
+	t.Run("GetPeriods returns nil for partial-day named fees", func(t *testing.T) {
+		s := &SiteFees{
+			periods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod: types.TimePeriod{
+						Name:  "On-Peak",
+						Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+					},
+					DollarsPerKWH: 0.25,
+				},
+			},
+		}
+		periods, err := s.GetPeriods(ctx)
+		require.NoError(t, err)
+		assert.Nil(t, periods)
+	})
+
 	t.Run("applyFees logic", func(t *testing.T) {
 		periods := []types.UtilityFeesPeriod{
 			{

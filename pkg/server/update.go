@@ -33,9 +33,40 @@ type updateResult struct {
 	Price  *types.Price  `json:"price,omitempty"`
 }
 
+const (
+	energyBackfillWindowDays = 5
+	siteUpdateControlReserve = 30 * time.Second
+	defaultWeatherRetryDelay = 3 * time.Second
+)
+
+func (s *Server) getWeatherRetryDelay() time.Duration {
+	if s.weatherRetryDelay > 0 {
+		return s.weatherRetryDelay
+	}
+	return defaultWeatherRetryDelay
+}
+
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	ctx := common.CtxWithWaitGroup(r.Context(), &wg)
+
+	if s.updateSpecificEmail != "" {
+		if !s.getUpdateSpecificAuth(r) {
+			writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+			return
+		}
+	} else if !s.bypassAuth {
+		user := s.getUser(r)
+		if user.ID == "" {
+			writeJSONError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if !user.Admin {
+			log.Ctx(ctx).WarnContext(ctx, "unauthorized for site update", slog.String("userID", user.ID), slog.String("email", user.Email))
+			writeJSONError(w, "unauthorized", http.StatusForbidden)
+			return
+		}
+	}
 
 	siteID := s.getSiteID(r)
 
@@ -263,6 +294,14 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	// so Cloud Run considers the HTTP request active and does not throttle CPU.
 	wg.Wait()
 
+	log.Ctx(ctx).InfoContext(ctx, "site update heartbeat",
+		slog.String("event", eventSiteUpdateHeartbeat),
+		slog.String("kind", kind),
+		slog.Int("idx", idx),
+		slog.Int("total", total),
+		slog.Int("siteCount", len(results)),
+	)
+
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(results); err != nil {
 		panic(http.ErrAbortHandler)
@@ -300,27 +339,48 @@ func (s *Server) performSiteUpdate(
 		return nil, "", fmt.Errorf("failed to get utility system (%s): %w", settings.UtilityProvider, err)
 	}
 
-	// sync energy history
-	if err := s.updateEnergyHistory(ctx, siteID, essSystem); err != nil {
-		if errors.Is(err, ess.ErrUnauthorized) {
-			log.Ctx(ctx).WarnContext(ctx, "failed to sync energy history", slog.Any("error", err))
+	// Cap optional history syncs so at least 30 seconds remain on ctx for GetStatus and setESSModes.
+	syncCtx := ctx
+	cancelSync := func() {}
+	runOptionalSyncs := true
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		syncDeadline := deadline.Add(-siteUpdateControlReserve)
+		if !time.Now().Before(syncDeadline) {
+			runOptionalSyncs = false
+			if ctx.Err() == nil {
+				log.Ctx(ctx).WarnContext(ctx, "skipping optional history syncs due to insufficient remaining update budget",
+					slog.Duration("remaining", time.Until(deadline)),
+				)
+			}
 		} else {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history", slog.Any("error", err))
-		}
-		// continue even if history sync fails
-	}
-
-	if err := s.updatePriceHistory(ctx, siteID, utility, false); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update price history", slog.Any("error", err))
-		// continue even if price history sync fails
-	}
-
-	// fetch weather history/forecast if location is configured
-	if settings.Location != nil {
-		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
+			syncCtx, cancelSync = context.WithDeadline(ctx, syncDeadline)
 		}
 	}
+	defer cancelSync()
+
+	if runOptionalSyncs {
+		var syncWG sync.WaitGroup
+		syncWG.Go(func() {
+			if err := s.updateEnergyHistory(syncCtx, siteID, essSystem); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to sync energy history", slog.Any("error", err))
+			}
+		})
+		syncWG.Go(func() {
+			if err := s.updatePriceHistory(syncCtx, siteID, utility, false); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to update price history", slog.Any("error", err))
+			}
+		})
+		if settings.Location != nil {
+			loc := *settings.Location
+			syncWG.Go(func() {
+				if err := s.updateWeatherHistory(syncCtx, siteID, loc); err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to update weather history", slog.Any("error", err))
+				}
+			})
+		}
+		syncWG.Wait()
+	}
+	cancelSync()
 
 	log.Ctx(ctx).DebugContext(ctx, "update: energy and weather history synced")
 
@@ -1212,6 +1272,16 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart), slog.Any("to", fetchEnd))
 
 	newWeathers, err := s.weather.Forecast(ctx, loc, syncStart, fetchEnd)
+	if err != nil && ctx.Err() == nil {
+		delay := s.getWeatherRetryDelay()
+		log.Ctx(ctx).WarnContext(ctx, "weather forecast failed, retrying", slog.Any("error", err), slog.Duration("delay", delay))
+		select {
+		case <-time.After(delay):
+			newWeathers, err = s.weather.Forecast(ctx, loc, syncStart, fetchEnd)
+		case <-ctx.Done():
+			return fmt.Errorf("failed to get weather history: %w", ctx.Err())
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get weather history: %w", err)
 	}
@@ -1321,17 +1391,32 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 		return nil
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", syncStart), slog.Any("to", syncEnd))
-
-	newHistory, err := essSystem.GetEnergyHistory(ctx, syncStart, syncEnd)
-	if err != nil {
-		return fmt.Errorf("failed to get energy history: %w", err)
-	}
-
-	if len(newHistory) > 0 {
-		if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
-			return fmt.Errorf("failed to upsert energy histories: %w", err)
+	for windowStart := syncStart; windowStart.Before(syncEnd); {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("failed to get energy history: %w", err)
 		}
+
+		nextWindowStart := truncateDay(windowStart).AddDate(0, 0, energyBackfillWindowDays)
+		windowEnd := nextWindowStart.Add(-time.Hour)
+		if windowEnd.After(syncEnd) || !windowStart.Before(windowEnd) {
+			windowEnd = syncEnd
+			nextWindowStart = syncEnd
+		}
+
+		log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", windowStart), slog.Any("to", windowEnd))
+
+		newHistory, err := essSystem.GetEnergyHistory(ctx, windowStart, windowEnd)
+		if err != nil {
+			return fmt.Errorf("failed to get energy history: %w", err)
+		}
+
+		if len(newHistory) > 0 {
+			if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
+				return fmt.Errorf("failed to upsert energy histories: %w", err)
+			}
+		}
+
+		windowStart = nextWindowStart
 	}
 	return nil
 }

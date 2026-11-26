@@ -3,8 +3,11 @@ package utility
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,50 @@ import (
 
 func init() {
 	log.SetDefaultLogLevel(slog.LevelError)
+}
+
+func isTransientLiveAPIErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "status 5") ||
+		strings.Contains(msg, "status: 429") ||
+		strings.Contains(msg, "status: 5")
+}
+
+func retryLiveAPIIntegration[T any](t *testing.T, provider string, fn func() (T, error)) (T, error) {
+	t.Helper()
+	const maxAttempts = 5
+	backoff := time.Second
+
+	var zero T
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		res, err := fn()
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !isTransientLiveAPIErr(err) {
+			return zero, err
+		}
+		t.Logf("%s integration attempt %d/%d failed with transient error: %v", provider, attempt+1, maxAttempts, err)
+		if attempt < maxAttempts-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	t.Skipf("%s API transiently unavailable after %d attempts: %v", provider, maxAttempts, lastErr)
+	return zero, lastErr
 }
 
 func TestListUtilities(t *testing.T) {
@@ -616,6 +663,18 @@ func TestRatesCoverAllTime(t *testing.T) {
 					loopLoc = candidateLoc
 				}
 
+				var namedImportPeriods []types.TimePeriod
+				for _, p := range periods {
+					if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional && p.Name != "" {
+						namedImportPeriods = append(namedImportPeriods, p.TimePeriod)
+					}
+				}
+				hasNamedImport := len(namedImportPeriods) > 0
+				if hasNamedImport {
+					assert.True(t, namedPeriodsCoverDay(namedImportPeriods, time.Now()), "named import periods should cover all 24 hours today")
+					assert.True(t, namedPeriodsCoverDay(namedImportPeriods, time.Date(2027, 1, 15, 0, 0, 0, 0, loopLoc)), "named import periods should cover all 24 hours in 2027")
+				}
+
 				// Calendar Sampling Optimization:
 				// Brute-force checking every single hour of a multi-year window (e.g. for dynamic schedules
 				// like SCE or PG&E which have thousands of periods) is extremely slow and resource intensive.
@@ -699,6 +758,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 							var applicableSolarNames []string
 							var applicableBatteryNames []string
 							var additionalNames []string
+							hasNamedMatch := false
 							for i := range periods {
 								ok, _, err := periods[i].Contains(ts)
 								// require.NoError is slow in tight loops so we only check inside
@@ -715,8 +775,19 @@ func TestRatesCoverAllTime(t *testing.T) {
 										additionalNames = append(additionalNames, periods[i].Description)
 									} else {
 										applicableNames = append(applicableNames, periods[i].Description)
+										if periods[i].Name != "" {
+											hasNamedMatch = true
+										}
 									}
 								}
+							}
+							if hasNamedImport && !hasNamedMatch && !ts.Before(time.Date(2026, 7, 1, 0, 0, 0, 0, loopLoc)) {
+								failures++
+								if failures > 10 {
+									assert.Fail(t, "too many failures")
+									return
+								}
+								assert.Fail(t, "missing named import period", "Hour %v should match a named import period (found %v)", ts, applicableNames)
 							}
 							expectBase := 1
 							if rate.ID == "comed_besh" {

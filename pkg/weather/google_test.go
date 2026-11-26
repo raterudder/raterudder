@@ -54,14 +54,14 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "DUMMY_GMAPS_KEY_MARKER_9911",
+			APIKey:       "FAKE_GMAPS_KEY_MARKER_9911",
 			GeocodingURL: geoURL,
 			HTTPClient:   ts.Client(),
 		}
 
 		_, err = w.Location(context.Background(), "US", strings.Repeat("%", 400000))
 		require.ErrorIs(t, err, ErrInvalidLocation)
-		assert.NotContains(t, err.Error(), "DUMMY_GMAPS_KEY_MARKER_9911")
+		assert.NotContains(t, err.Error(), "FAKE_GMAPS_KEY_MARKER_9911")
 
 		_, err = w.Location(context.Background(), "US", strings.Repeat("9", MaxPostalCodeLength+1))
 		require.ErrorIs(t, err, ErrInvalidLocation)
@@ -90,7 +90,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		geoURL, err := url.Parse(closedURL + "/geocode")
 		require.NoError(t, err)
 
-		const apiKey = "DUMMY_GMAPS_KEY_MARKER_9911+secret/val=1"
+		const apiKey = "FAKE_GMAPS_KEY_MARKER_9911+secret/val=1"
 		w := &GoogleGeocodingWrapper{
 			APIKey:       apiKey,
 			GeocodingURL: geoURL,
@@ -99,16 +99,16 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 
 		_, err = w.Location(context.Background(), "US", "60601")
 		require.Error(t, err)
-		assert.NotContains(t, err.Error(), "DUMMY_GMAPS_KEY_MARKER_9911")
+		assert.NotContains(t, err.Error(), "FAKE_GMAPS_KEY_MARKER_9911")
 		assert.NotContains(t, err.Error(), apiKey)
-		assert.NotContains(t, fmt.Sprintf("%v", llog.ErrKV(err)), "DUMMY_GMAPS_KEY_MARKER_9911")
+		assert.NotContains(t, fmt.Sprintf("%v", llog.ErrKV(err)), "FAKE_GMAPS_KEY_MARKER_9911")
 		assert.Contains(t, err.Error(), "key=REDACTED")
 
 		var netErr net.Error
 		assert.ErrorAs(t, err, &netErr)
 		var urlErr *url.Error
 		if assert.ErrorAs(t, err, &urlErr) {
-			assert.NotContains(t, urlErr.URL, "DUMMY_GMAPS_KEY_MARKER_9911")
+			assert.NotContains(t, urlErr.URL, "FAKE_GMAPS_KEY_MARKER_9911")
 			assert.Contains(t, urlErr.URL, "key=REDACTED")
 		}
 	})
@@ -135,7 +135,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		tzURL, err := url.Parse(closedTZURL + "/timezone")
 		require.NoError(t, err)
 
-		const apiKey = "DUMMY_GMAPS_KEY_MARKER_9911"
+		const apiKey = "FAKE_GMAPS_KEY_MARKER_9911"
 		w := &GoogleGeocodingWrapper{
 			APIKey:       apiKey,
 			GeocodingURL: geoURL,
@@ -415,7 +415,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy_key",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			TimezoneURL:  tzURL,
 			HTTPClient:   ts.Client(),

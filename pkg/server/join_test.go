@@ -515,4 +515,68 @@ func TestHandleJoin(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code)
 		})
 	})
+
+	t.Run("EmitsStructuredEventsOnCreateAndJoin", func(t *testing.T) {
+		t.Run("NewUserCreatesSite", func(t *testing.T) {
+			store := &mockStorage{}
+			s := newServer(store)
+
+			store.On("GetSite", mock.Anything, "alice_00").Return(types.Site{}, storage.ErrSiteNotFound).Once()
+			store.On("CreateSite", mock.Anything, "alice_00", mock.Anything).Return(nil).Once()
+			store.On("CreateUser", mock.Anything, mock.Anything).Return(nil).Once()
+
+			ctx, logBuf := captureJSONLogs(context.Background())
+			ctx = context.WithValue(ctx, userToRegisterContextKey, types.User{
+				ID:            "user-new",
+				Email:         "alice@example.com",
+				SessionSecret: "secret",
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(`{"create":true,"name":"Home"}`)).WithContext(ctx)
+			w := httptest.NewRecorder()
+			s.handleJoin(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventSiteCreated); assert.True(t, ok) {
+				assert.Equal(t, "alice_00", entry["siteID"])
+				assert.Equal(t, "user-new", entry["userID"])
+			}
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventUserCreated); assert.True(t, ok) {
+				assert.Equal(t, "user-new", entry["userID"])
+			}
+			_, joined := findLoggedEvent(t, logBuf.String(), eventUserJoinedSite)
+			assert.False(t, joined, "creating a site should not also emit user_joined_site")
+			store.AssertExpectations(t)
+		})
+
+		t.Run("ExistingUserJoinsSiteByInvite", func(t *testing.T) {
+			store := &mockStorage{}
+			s := newServer(store)
+
+			store.On("GetSite", mock.Anything, "shared-site").Return(types.Site{
+				ID:          "shared-site",
+				InviteCode:  "invite123",
+				Permissions: []types.SitePermissions{{UserID: "owner"}},
+			}, nil).Once()
+			store.On("GetUser", mock.Anything, "user2").Return(types.User{ID: "user2", Email: "bob@example.com"}, nil).Once()
+			store.On("UpdateUser", mock.Anything, mock.Anything).Return(nil).Once()
+			store.On("UpdateSite", mock.Anything, "shared-site", mock.Anything).Return(nil).Once()
+
+			ctx, logBuf := captureJSONLogs(context.Background())
+			ctx = context.WithValue(ctx, userContextKey, types.User{ID: "user2", Email: "bob@example.com"})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(`{"create":false,"joinSiteID":"shared-site","inviteCode":"invite123"}`)).WithContext(ctx)
+			w := httptest.NewRecorder()
+			s.handleJoin(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if entry, ok := findLoggedEvent(t, logBuf.String(), eventUserJoinedSite); assert.True(t, ok) {
+				assert.Equal(t, "shared-site", entry["siteID"])
+				assert.Equal(t, "user2", entry["userID"])
+			}
+			_, created := findLoggedEvent(t, logBuf.String(), eventSiteCreated)
+			assert.False(t, created)
+			store.AssertExpectations(t)
+		})
+	})
 }
