@@ -3598,6 +3598,105 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockEnphase.AssertExpectations(t))
 	})
+
+	t.Run("EmitsStructuredEventsForESSUtilityAndPauseTransitions", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{MockName: "franklin"}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Franklin: &types.FranklinCredentials{Username: "u", Password: "p"},
+		}, true, nil).Once()
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+
+		mockU := &mockUtility{}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		// 1. First time ESS + Utility configured
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummaries", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+		utilMap := utility.NewMap(mockS)
+		utilMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			utilities:     utilMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		body1, err := json.Marshal(struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                "franklin",
+				UtilityProvider:    "comed",
+				UtilityRate:        "comed_bes",
+				SolarTrendRatioMax: 1.5,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{Username: "u", Password: "p"},
+			},
+		})
+		require.NoError(t, err)
+
+		ctx1, logBuf1 := captureJSONLogs(context.Background())
+		req1 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(body1)).WithContext(ctx1), "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusOK, w1.Result().StatusCode, w1.Body.String())
+
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventESSConnected); assert.True(t, ok) {
+			assert.Equal(t, "franklin", entry["ess"])
+		}
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventUtilityConfigured); assert.True(t, ok) {
+			assert.Equal(t, "comed", entry["utilityProvider"])
+			assert.Equal(t, "comed_bes", entry["utilityRate"])
+		}
+
+		// 2. Subsequent settings save with Pause=true should emit site_automation_paused and NOT re-emit ess_connected or utility_configured
+		existingConnected := types.Settings{
+			ESS:                "franklin",
+			UtilityProvider:    "comed",
+			UtilityRate:        "comed_bes",
+			SolarTrendRatioMax: 1.5,
+		}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(existingConnected, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		pausedSettings := existingConnected
+		pausedSettings.Pause = true
+		body2, err := json.Marshal(pausedSettings)
+		require.NoError(t, err)
+
+		ctx2, logBuf2 := captureJSONLogs(context.Background())
+		req2 := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(body2)).WithContext(ctx2), "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		_, hasESS := findLoggedEvent(t, logBuf2.String(), eventESSConnected)
+		assert.False(t, hasESS, "ess_connected should only emit on first ESS connection")
+		_, hasUtil := findLoggedEvent(t, logBuf2.String(), eventUtilityConfigured)
+		assert.False(t, hasUtil, "utility_configured should only emit on first utility configuration")
+		_, hasPaused := findLoggedEvent(t, logBuf2.String(), eventSiteAutomationPaused)
+		assert.True(t, hasPaused, "expected site_automation_paused event")
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {

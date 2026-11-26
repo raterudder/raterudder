@@ -3541,11 +3541,27 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Subscription.TSCreated = s.now().UTC()
 
+	isNewDevice := true
+	for _, existing := range user.Subscriptions {
+		if existing.ID == req.Subscription.ID || existing.Endpoint == req.Subscription.Endpoint {
+			isNewDevice = false
+			break
+		}
+	}
+
 	ctx := r.Context()
 	if err := s.storage.AddUserPushSubscription(ctx, userID, req.Subscription); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save push subscription", slog.Any("error", err))
 		writeJSONError(w, "failed to save subscription", http.StatusInternalServerError)
 		return
+	}
+
+	if isNewDevice {
+		log.Ctx(ctx).InfoContext(ctx, "notification device subscribed",
+			slog.String("event", eventNotificationDeviceSubscribed),
+			slog.String("userID", userID),
+			slog.String("appType", req.Subscription.AppType),
+		)
 	}
 
 	// If sendTest is requested, dispatch an immediate test notification
@@ -3612,6 +3628,11 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to remove subscription", http.StatusInternalServerError)
 		return
 	}
+
+	log.Ctx(ctx).InfoContext(ctx, "notification device unsubscribed",
+		slog.String("event", eventNotificationDeviceUnsubscribed),
+		slog.String("userID", userID),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

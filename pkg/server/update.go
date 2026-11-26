@@ -263,6 +263,14 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	// so Cloud Run considers the HTTP request active and does not throttle CPU.
 	wg.Wait()
 
+	log.Ctx(ctx).InfoContext(ctx, "site update heartbeat",
+		slog.String("event", eventSiteUpdateHeartbeat),
+		slog.String("kind", kind),
+		slog.Int("idx", idx),
+		slog.Int("total", total),
+		slog.Int("siteCount", len(results)),
+	)
+
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(results); err != nil {
 		panic(http.ErrAbortHandler)

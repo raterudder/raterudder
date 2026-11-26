@@ -986,6 +986,53 @@ func TestHandleSubscribe(t *testing.T) {
 		assertRejected("https://fcm.googleapis.com/fcm/send/test-sub-id#frag")
 		mockS.AssertNotCalled(t, "AddUserPushSubscription", mock.Anything, mock.Anything, mock.Anything)
 	})
+
+	t.Run("EmitsEventOnlyForNewDevice", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+
+		endpoint := "https://fcm.googleapis.com/fcm/send/device-1"
+		subReq := subscribeRequest{
+			Subscription: types.PushSubscription{
+				Endpoint: endpoint,
+				AppType:  types.PushSubscriptionAppTypeStandalone,
+				Keys:     types.PushSubscriptionKeys{P256DH: "test-p256dh", Auth: "test-auth"},
+			},
+		}
+		body, err := json.Marshal(subReq)
+		require.NoError(t, err)
+
+		mockS.On("AddUserPushSubscription", mock.Anything, "user1", mock.Anything).Return(nil).Twice()
+
+		// 1. New device -> emits notification_device_subscribed
+		ctx1, logBuf1 := captureJSONLogs(context.Background())
+		ctx1 = context.WithValue(ctx1, userContextKey, types.User{ID: "user1"})
+		req1 := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body)).WithContext(ctx1)
+		rec1 := httptest.NewRecorder()
+		srv.handleSubscribe(rec1, req1)
+		assert.Equal(t, http.StatusOK, rec1.Code)
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventNotificationDeviceSubscribed); assert.True(t, ok) {
+			assert.Equal(t, "user1", entry["userID"])
+			assert.Equal(t, types.PushSubscriptionAppTypeStandalone, entry["appType"])
+		}
+
+		// 2. Existing device re-subscribing -> does NOT emit notification_device_subscribed
+		ctx2, logBuf2 := captureJSONLogs(context.Background())
+		ctx2 = context.WithValue(ctx2, userContextKey, types.User{
+			ID: "user1",
+			Subscriptions: []types.PushSubscription{
+				{Endpoint: endpoint},
+			},
+		})
+		req2 := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body)).WithContext(ctx2)
+		rec2 := httptest.NewRecorder()
+		srv.handleSubscribe(rec2, req2)
+		assert.Equal(t, http.StatusOK, rec2.Code)
+		_, found := findLoggedEvent(t, logBuf2.String(), eventNotificationDeviceSubscribed)
+		assert.False(t, found, "re-subscribing an existing device should not emit notification_device_subscribed")
+
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleUnsubscribe(t *testing.T) {

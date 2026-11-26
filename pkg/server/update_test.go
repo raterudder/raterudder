@@ -2397,6 +2397,74 @@ func TestHandleUpdateSites(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		assert.Empty(t, errBuf.String(), "handleUpdateSites must not emit ERROR logs on permanent ESS auth rejection")
 	})
+
+	t.Run("Emits site_update_heartbeat structured log on success", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(
+			map[string]types.Settings{},
+			map[string]int{},
+			map[string]time.Time{},
+			nil,
+		)
+
+		srv := &Server{
+			storage:    mockS,
+			ess:        ess.NewMap(),
+			utilities:  utility.NewMap(mockS),
+			bypassAuth: true,
+		}
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		req := httptest.NewRequest("POST", "/api/updateSites", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSites(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var found bool
+		for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal([]byte(line), &entry))
+			if entry["event"] == "site_update_heartbeat" {
+				found = true
+				assert.Equal(t, "site update heartbeat", entry["msg"])
+				assert.Equal(t, float64(0), entry["siteCount"])
+			}
+		}
+		assert.True(t, found, "expected structured JSON log with event=site_update_heartbeat")
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Does not emit site_update_heartbeat on ListSitesSettings error", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(
+			(map[string]types.Settings)(nil),
+			(map[string]int)(nil),
+			(map[string]time.Time)(nil),
+			fmt.Errorf("firestore unavailable"),
+		)
+
+		srv := &Server{
+			storage:    mockS,
+			ess:        ess.NewMap(),
+			utilities:  utility.NewMap(mockS),
+			bypassAuth: true,
+		}
+
+		var logBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		req := httptest.NewRequest("POST", "/api/updateSites", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSites(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
+		assert.NotContains(t, logBuf.String(), "site_update_heartbeat")
+		mockS.AssertExpectations(t)
+	})
 }
 
 // Helpers for Recording Mocks

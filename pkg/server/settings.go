@@ -617,6 +617,39 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		slog.Any("after", newSettings),
 	)
 
+	if existing.ESS == "" && newSettings.ESS != "" {
+		log.Ctx(ctx).InfoContext(ctx, "ess connected",
+			slog.String("event", eventESSConnected),
+			slog.String("siteID", siteID),
+			slog.String("userID", user.ID),
+			slog.String("ess", newSettings.ESS),
+		)
+	}
+	if existing.UtilityProvider == "" && newSettings.UtilityProvider != "" {
+		log.Ctx(ctx).InfoContext(ctx, "utility configured",
+			slog.String("event", eventUtilityConfigured),
+			slog.String("siteID", siteID),
+			slog.String("userID", user.ID),
+			slog.String("utilityProvider", newSettings.UtilityProvider),
+			slog.String("utilityRate", newSettings.UtilityRate),
+		)
+	}
+	if newSettings.ESS != "" {
+		if !existing.Pause && newSettings.Pause {
+			log.Ctx(ctx).InfoContext(ctx, "site automation paused",
+				slog.String("event", eventSiteAutomationPaused),
+				slog.String("siteID", siteID),
+				slog.String("userID", user.ID),
+			)
+		} else if existing.Pause && !newSettings.Pause {
+			log.Ctx(ctx).InfoContext(ctx, "site automation resumed",
+				slog.String("event", eventSiteAutomationResumed),
+				slog.String("siteID", siteID),
+				slog.String("userID", user.ID),
+			)
+		}
+	}
+
 	if !existing.Pause && newSettings.Pause && newSettings.ManageTOUSchedules {
 		s.revertManagedTOUModeOnPause(ctx, siteID, settingsWithVersion{
 			Settings:  newSettings,
