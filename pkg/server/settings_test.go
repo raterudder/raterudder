@@ -4378,4 +4378,65 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
 		assert.ErrorContains(t, err, "missing minimum battery SOC for utility period name:")
 	})
+
+	t.Run("RateBasedMinSOC_PartialDaySiteFees_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.Configured(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityFeesPeriods: []types.UtilityFeesPeriod{
+				{
+					TimePeriod: types.TimePeriod{
+						Name:  "Peak",
+						Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+					},
+					DollarsPerKWH: 0.15,
+				},
+			},
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "configured utility has no TOU rate periods for rate-based minimum SOC")
+	})
+
+	t.Run("RateBasedMinSOC_MixedNamedAndUnnamed_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.NewMap(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_e_tou_c",
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+				{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}}, MinBatterySOC: 20.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "all reserve SOC periods must specify a utility period name")
+	})
+
+	t.Run("RateBasedMinSOC_AmerenMOOptionB_Valid", func(t *testing.T) {
+		mockUMap := utility.Configured(nil)
+		sTest := &Server{
+			utilities: mockUMap,
+			nowFunc:   func() time.Time { return time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC) },
+		}
+		s := types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_mo_overnight",
+			UtilityRateOptions: types.UtilityRateOptions{
+				PeakPeriodOption: "option_b",
+			},
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 15.0},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 30.0},
+				{UtilityPeriodName: "Anytime", MinBatterySOC: 20.0},
+			},
+		}
+		minSOC, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		require.NoError(t, err)
+		assert.Equal(t, 15.0, minSOC)
+	})
 }

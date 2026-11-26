@@ -467,7 +467,7 @@ func engieUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Solar Flat Rate",
 				Options: engieOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return engiePeriods("engie_solar_elec_single", opts, []int{2026}), nil
+					return engiePeriods("engie_solar_elec_single", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
@@ -475,7 +475,7 @@ func engieUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Solar Time of Use",
 				Options: engieOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return engiePeriods("engie_solar_elec_tou", opts, []int{2026}), nil
+					return engiePeriods("engie_solar_elec_tou", opts, []int{2026, 2027}), nil
 				},
 			},
 		},

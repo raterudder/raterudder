@@ -1029,8 +1029,13 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 	}
 
 	if isNameBased {
+		for _, p := range newSettings.MinBatterySOCPeriods {
+			if p.UtilityPeriodName == "" {
+				return 0, errors.New("all reserve SOC periods must specify a utility period name for rate-based minimum SOC")
+			}
+		}
 		if newSettings.UtilityProvider != "" && s.utilities != nil {
-			u, err := s.utilities.Site(ctx, siteID, newSettings)
+			u, err := s.utilities.PreviewSite(ctx, newSettings)
 			if err != nil || u == nil {
 				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
 			}
@@ -1044,16 +1049,16 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 					configuredNames[p.UtilityPeriodName] = true
 				}
 			}
-			hasNamedPeriods := false
+			var namedPeriods []types.TimePeriod
 			for _, p := range periods {
 				if p.Name != "" {
-					hasNamedPeriods = true
+					namedPeriods = append(namedPeriods, p)
 					if !configuredNames[p.Name] {
 						return 0, fmt.Errorf("missing minimum battery SOC for utility period name: %s", p.Name)
 					}
 				}
 			}
-			if !hasNamedPeriods {
+			if len(namedPeriods) == 0 {
 				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
 			}
 		}
