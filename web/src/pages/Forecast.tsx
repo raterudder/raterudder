@@ -33,7 +33,7 @@ type ChartConfig = {
 
 import {
     ALL_ZONES,
-    classifyPlanPeriod,
+    classifyPlanPeriods,
     buildPlanSolarLoadSeries,
     buildPlanPriceSeries,
     computePlanSummaryStats,
@@ -285,8 +285,7 @@ const ForecastChart = React.memo(function ForecastChart({
             return [];
         }
         const usedKeys = new Set<string>();
-        for (const p of planPeriods) {
-            const z = classifyPlanPeriod(p);
+        for (const z of classifyPlanPeriods(planPeriods)) {
             usedKeys.add(z.key);
         }
         return ALL_ZONES.filter((z) => usedKeys.has(z.key));
@@ -725,7 +724,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             return planData;
         }
 
-        const periodZones = periods.map((p) => classifyPlanPeriod(p));
+        const periodZones = classifyPlanPeriods(periods);
 
         // Base hourly rates for each period (used for solar and home load interpolation)
         let isPeriodRatesSorted = true;

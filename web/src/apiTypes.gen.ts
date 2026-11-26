@@ -146,6 +146,11 @@ export interface SimulationParams {
     panelTilt: number;
     averageSolarEfficiency: number;
     detectedShift?: string;
+    batteryDischargeEfficiency?: number;
+    batteryChargeEfficiency?: number;
+    batteryDischargeFixedKW?: number;
+    batteryHeaterTriggerTempC?: number;
+    batteryHeaterPowerKW?: number;
 }
 
 export interface Action {

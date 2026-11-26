@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -261,13 +262,21 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 	})
 
 	t.Run("Integration_RealAPI", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping live Ameren MISO API integration test in short mode")
+		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("skipping live Ameren MISO API integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
+		}
+
 		c := configuredAmerenSmart(nil)
 		c.misoAPIURL = "https://docs.misoenergy.org/marketreports"
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		price, err := c.GetCurrentPrice(ctx)
+		price, err := retryLiveAPIIntegration(t, "ameren", func() (types.Price, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return c.GetCurrentPrice(ctx)
+		})
 		require.NoError(t, err)
 
 		// Basic sanity checks

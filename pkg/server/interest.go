@@ -67,6 +67,13 @@ func (s *Server) handleSubmitInterest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Ctx(ctx).InfoContext(ctx, "interest submitted",
+		slog.String("event", eventInterestSubmitted),
+		slog.String("utility", req.Utility),
+		slog.String("battery", req.Battery),
+		slog.String("state", req.State),
+	)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {

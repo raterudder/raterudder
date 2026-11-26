@@ -872,7 +872,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 				if hasTargetTemp && len(weather) > 0 {
 					if actualLoad > unweightedExpected {
 						isWeatherDrivenSurge := false
-						if allDaysSimW >= minTempSimilarityWeightSum {
+						if allDaysSimW >= allDaysTempSimilarityDampenThreshold {
 							isWeatherDrivenSurge = true
 						} else if countOtherTemp > 0 {
 							meanOtherTempC := sumOtherTemp / float64(countOtherTemp)
@@ -940,6 +940,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		// This prevents threshold jitter.
 		scaleG = min(1.0, max(0.0, (math.Abs(zScoreG)-1.2)*1.0))
 		appliedShift = meanDiff * scaleG
+		if settings.HomeLoadPredictionStrategy == "conservative" && appliedShift > 0 {
+			appliedShift = 0
+		}
 	}
 
 	// Debug logs are enriched with recentValidDates, validDaysCount, and full recentDiffDetails
@@ -1047,14 +1050,15 @@ func (c *Controller) BuildHourlyEnergyModel(
 		// heating or cooling hour (or an evening following a hot afternoon) so non-recent
 		// other-weekday cold snaps or heatwaves aren't dropped.
 		isHeatingHour := hvac.heatingHours[h] && targetTemp <= coldHeatingMaxTempC
+		isColdTarget := targetTemp <= coldHeatingBaseTempC
 		isCoolingHour := hvac.coolingHours[h] && targetTemp >= hotCoolingMinTempC
 		isHotAfternoonEvening := hasTargetAfternoonPeak && targetAfternoonPeakC >= eveningThermalLagMinPeakTempC
-		if hasTargetTemp && (isHeatingHour || isCoolingHour || (hvac.hasElectricCooling && isHotAfternoonEvening)) {
+		if hasTargetTemp && (isHeatingHour || isColdTarget || isCoolingHour || (hvac.hasElectricCooling && isHotAfternoonEvening)) {
 			for dateStr, hasTemps := range validDateHasHourTemp {
 				if !hasTemps[h] {
 					continue
 				}
-				if hvac.hasElectricCooling && isHotAfternoonEvening && !isHeatingHour && !isCoolingHour {
+				if hvac.hasElectricCooling && isHotAfternoonEvening && !isHeatingHour && !isColdTarget && !isCoolingHour {
 					histPeakC, hasHistPeak := getDayMaxTemp(dateStr)
 					if !hasHistPeak || histPeakC < eveningThermalLagMinPeakTempC {
 						continue

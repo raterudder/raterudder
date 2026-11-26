@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1043,7 +1044,7 @@ func TestRun(t *testing.T) {
 		var googleDiscoveryCalls, appleDiscoveryCalls atomic.Int32
 		appleFirstAttemptStarted := make(chan struct{})
 		appleFirstAttemptRelease := make(chan struct{})
-		appleFirstAttemptDone := make(chan struct{})
+		warmOIDCDone := make(chan struct{})
 		var appleOnce sync.Once
 
 		flakyAppleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1058,9 +1059,6 @@ func TestRun(t *testing.T) {
 			}
 			if appleFail.Load() {
 				http.Error(w, "bad gateway", http.StatusBadGateway)
-				if callNum == 1 {
-					close(appleFirstAttemptDone)
-				}
 				return
 			}
 			appleSrv.Config.Handler.ServeHTTP(w, r)
@@ -1108,6 +1106,7 @@ func TestRun(t *testing.T) {
 			generalBurst:         30,
 			sensitiveRateLimit:   rate.Inf,
 			sensitiveBurst:       5,
+			onWarmOIDCDone:       func() { close(warmOIDCDone) },
 		}
 		require.NoError(t, srv.configureOIDC(
 			context.Background(),
@@ -1164,9 +1163,9 @@ func TestRun(t *testing.T) {
 		// Unblock Apple warmup attempt -> fails with 502 and continues without retrying in background
 		close(appleFirstAttemptRelease)
 		select {
-		case <-appleFirstAttemptDone:
+		case <-warmOIDCDone:
 		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for Apple OIDC warmup failure")
+			t.Fatal("timed out waiting for OIDC warmup completion")
 		}
 
 		srv.oidcMu.RLock()
@@ -1623,5 +1622,201 @@ func TestConfigureOIDC(t *testing.T) {
 		)
 		assert.ErrorContains(t, err, "unsupported oidc audience client")
 		assert.False(t, called)
+	})
+}
+
+func TestCrossOriginProtectionMiddleware(t *testing.T) {
+	oidcSrv, priv := setupOIDCTest(t)
+	defer oidcSrv.Close()
+	provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+	require.NoError(t, err)
+	updateToken := generateTestTokenWithAudience(t, oidcSrv.URL, priv, "updater@example.com", "updater-sub", "update-audience")
+
+	newTestServer := func(mockS *mockStorage) *Server {
+		return &Server{
+			utilities:            utility.NewMap(mockS),
+			ess:                  ess.NewMap(),
+			storage:              mockS,
+			controller:           controller.NewController(),
+			sessionEncryptionKey: "12345678901234567890123456789012",
+			encryptionKey:        "12345678901234567890123456789012",
+			updateSpecificEmail:  "updater@example.com",
+			oidcAudiences:        map[string]string{"google": "web-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "web-audience"}).Verify,
+			},
+			updateOIDCVerifier: provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
+			generalRateLimit:   rate.Inf,
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Inf,
+			sensitiveBurst:     30,
+		}
+	}
+
+	newRecordedRequest := func(method, target string, body io.Reader) (*http.Request, *bytes.Buffer) {
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+		req := httptest.NewRequest(method, target, body)
+		req = req.WithContext(log.With(req.Context(), logger))
+		return req, &logBuf
+	}
+
+	decodeLogLines := func(t *testing.T, buf *bytes.Buffer) []map[string]any {
+		t.Helper()
+		raw := strings.TrimSpace(buf.String())
+		if raw == "" {
+			return nil
+		}
+		lines := strings.Split(raw, "\n")
+		records := make([]map[string]any, 0, len(lines))
+		for _, line := range lines {
+			var rec map[string]any
+			require.NoError(t, json.Unmarshal([]byte(line), &rec))
+			records = append(records, rec)
+		}
+		return records
+	}
+
+	t.Run("CrossSiteSecFetchSiteLogsErrorWithoutBlocking", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/auth/logout", nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Origin", "https://attacker.example")
+		req.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		records := decodeLogLines(t, logBuf)
+		if assert.Len(t, records, 1) {
+			assert.Equal(t, "cross-origin request would be blocked", records[0]["msg"])
+			assert.Equal(t, http.MethodPost, records[0]["method"])
+			assert.Equal(t, "/api/auth/logout", records[0]["path"])
+			assert.Equal(t, "cross-site", records[0]["secFetchSite"])
+			assert.Equal(t, "https://attacker.example", records[0]["origin"])
+			assert.Equal(t, "raterudder.example.com", records[0]["host"])
+			assert.Equal(t, "text/plain", records[0]["contentType"])
+			assert.NotEmpty(t, records[0]["error"])
+		}
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("MismatchedOriginWithoutSecFetchSiteLogsErrorWithoutBlocking", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/auth/logout", nil)
+		req.Header.Set("Origin", "https://attacker.example")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		records := decodeLogLines(t, logBuf)
+		if assert.Len(t, records, 1) {
+			assert.Equal(t, "cross-origin request would be blocked", records[0]["msg"])
+			assert.Equal(t, http.MethodPost, records[0]["method"])
+			assert.Equal(t, "/api/auth/logout", records[0]["path"])
+			assert.Equal(t, "", records[0]["secFetchSite"])
+			assert.Equal(t, "https://attacker.example", records[0]["origin"])
+			assert.Equal(t, "raterudder.example.com", records[0]["host"])
+			assert.Equal(t, "application/x-www-form-urlencoded", records[0]["contentType"])
+			assert.NotEmpty(t, records[0]["error"])
+		}
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("SameOriginSecFetchSiteDoesNotLogError", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/auth/logout", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Origin", "https://raterudder.example.com")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, decodeLogLines(t, logBuf))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("SecFetchSiteNoneDoesNotLogError", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/auth/logout", nil)
+		req.Header.Set("Sec-Fetch-Site", "none")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, decodeLogLines(t, logBuf))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("MatchingOriginWithoutSecFetchSiteDoesNotLogError", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/auth/logout", nil)
+		req.Header.Set("Origin", "https://raterudder.example.com")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, decodeLogLines(t, logBuf))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("SafeGetRequestDoesNotLogErrorEvenCrossSite", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodGet, "https://raterudder.example.com/api/auth/status", nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Origin", "https://attacker.example")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, decodeLogLines(t, logBuf))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("HeaderlessNonBrowserPostDoesNotLogError", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(
+			map[string]types.Settings{},
+			map[string]int{},
+			map[string]time.Time{},
+			nil,
+		).Once()
+		srv := newTestServer(mockS)
+		handler := srv.setupHandler()
+
+		req, logBuf := newRecordedRequest(http.MethodPost, "https://raterudder.example.com/api/updateSites", nil)
+		req.Header.Set("Authorization", "Bearer "+updateToken)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, decodeLogLines(t, logBuf))
+		mockS.AssertExpectations(t)
 	})
 }

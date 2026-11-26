@@ -166,6 +166,25 @@ const isUtilityOptionVisible = (
     });
 };
 
+const applyVisibleUtilityOptionDefaults = (
+    rateOptions: UtilityRateOption[],
+    currentOpts: UtilityRateOptions | undefined
+): UtilityRateOptions => {
+    const finalOpts: UtilityRateOptions = { ...currentOpts };
+    rateOptions.forEach(opt => {
+        if (!isUtilityOptionVisible(opt, rateOptions, finalOpts)) {
+            return;
+        }
+        const existing = getRateOptionField(finalOpts, opt.field);
+        if (existing === undefined || existing === null || existing === "") {
+            if (opt.default !== undefined) {
+                setRateOptionField(finalOpts, opt.field, opt.default);
+            }
+        }
+    });
+    return finalOpts;
+};
+
 const UtilityForm = ({
     settings,
     onChange,
@@ -1496,6 +1515,7 @@ const Settings = ({
     const [highlightTOU, setHighlightTOU] = useState(false);
     const [highlightEV, setHighlightEV] = useState(false);
     const [highlightESS, setHighlightESS] = useState(false);
+    const [highlightUtility, setHighlightUtility] = useState(false);
     const deepLinkHandledRef = useRef(false);
 
     useEffect(() => {
@@ -1507,7 +1527,9 @@ const Settings = ({
         const hasEV = (searchParams.has('ev') && evParam !== '0' && evParam !== 'false') || window.location.hash === '#ev';
         const essParam = searchParams.get('ess');
         const hasESS = (searchParams.has('ess') && essParam !== '0' && essParam !== 'false') || window.location.hash === '#ess';
-        if (hasTOU || hasEV || hasESS) {
+        const tariffParam = searchParams.get('tariff');
+        const hasTariff = (searchParams.has('tariff') && tariffParam !== '0' && tariffParam !== 'false') || window.location.hash === '#tariff';
+        if (hasTOU || hasEV || hasESS || hasTariff) {
             deepLinkHandledRef.current = true;
             setForceFullSettings(true);
             setIsInWizard(false);
@@ -1521,6 +1543,10 @@ const Settings = ({
             if (hasESS) {
                 setEditESS(true);
                 setHighlightESS(true);
+            }
+            if (hasTariff) {
+                setEditUtility(true);
+                setHighlightUtility(true);
             }
         }
     }, [loading, settings]);
@@ -1548,6 +1574,14 @@ const Settings = ({
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
     }, [highlightEV, highlightTOU, highlightESS, loading]);
+
+    useEffect(() => {
+        if (!highlightUtility || highlightTOU || highlightESS || highlightEV || !editUtility || loading) return;
+        const target = document.querySelector('[data-testid="utility-section"]');
+        if (target && typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [highlightUtility, highlightTOU, highlightESS, highlightEV, editUtility, loading]);
 
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [deleteAccountChecked, setDeleteAccountChecked] = useState(false);
@@ -2222,21 +2256,15 @@ const Settings = ({
             setError(null);
             setSuccessMessage(null);
 
-            // Merge default values for utility rate options
+            // Merge default values for visible utility rate options
             const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
             const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
             const finalSettings = normalizeMinBatterySOC({ ...settings });
             if (utilityRate) {
-                const finalOpts: UtilityRateOptions = { ...finalSettings.utilityRateOptions };
-                (utilityRate.options || []).forEach(opt => {
-                    const existing = getRateOptionField(finalOpts, opt.field);
-                    if (existing === undefined || existing === null || existing === "") {
-                        if (opt.default !== undefined) {
-                            setRateOptionField(finalOpts, opt.field, opt.default);
-                        }
-                    }
-                });
-                finalSettings.utilityRateOptions = finalOpts;
+                finalSettings.utilityRateOptions = applyVisibleUtilityOptionDefaults(
+                    utilityRate.options || [],
+                    finalSettings.utilityRateOptions
+                );
             }
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
@@ -2386,15 +2414,10 @@ const Settings = ({
                 const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
                 const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
                 if (utilityRate) {
-                    const finalOpts: UtilityRateOptions = { ...settings.utilityRateOptions };
-                    (utilityRate.options || []).forEach(opt => {
-                        const existing = getRateOptionField(finalOpts, opt.field);
-                        if (existing === undefined || existing === null || existing === "") {
-                            if (opt.default !== undefined) {
-                                setRateOptionField(finalOpts, opt.field, opt.default);
-                            }
-                        }
-                    });
+                    const finalOpts = applyVisibleUtilityOptionDefaults(
+                        utilityRate.options || [],
+                        settings.utilityRateOptions
+                    );
                     setSettings(prev => prev ? ({ ...prev, utilityRateOptions: finalOpts }) : null);
                 }
             }
@@ -2707,7 +2730,7 @@ const Settings = ({
     const showChecklist = !!(settings && !showWizard && (!isUtilityConfigured || !isESSConfigured) && !forceFullSettings);
 
     const locationHighlightClass = showChecklist && !isLocationConfigured ? "highlighted-section" : "";
-    const utilityHighlightClass = showChecklist && !isUtilityConfigured && !isUtilityDirty ? "highlighted-section" : "";
+    const utilityHighlightClass = (highlightUtility || (showChecklist && !isUtilityConfigured && !isUtilityDirty)) ? "highlighted-section" : "";
     const essHighlightClass = (highlightESS || (showChecklist && !isESSConfigured && !isESSDirty)) ? "highlighted-section" : "";
 
     const renderGridSettingsModal = () => (

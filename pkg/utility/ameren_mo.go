@@ -323,6 +323,7 @@ func amerenMOPeriods(plan string, options types.UtilityRateOptions, years []int)
 						Year:               year,
 						MonthStart:         w.monthStart,
 						MonthEnd:           w.monthEnd,
+						OtherName:          "Anytime",
 						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
 						OtherDescription:   "Ameren MO Overnight Savers Option B Winter Anytime Rate",
 					})
@@ -410,6 +411,7 @@ func amerenMOPeriods(plan string, options types.UtilityRateOptions, years []int)
 						Year:               year,
 						MonthStart:         w.monthStart,
 						MonthEnd:           w.monthEnd,
+						OtherName:          "Anytime",
 						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
 						OtherDescription:   "Ameren MO Smart Savers Option B Winter Anytime Rate",
 					})
@@ -516,6 +518,7 @@ func amerenMOPeriods(plan string, options types.UtilityRateOptions, years []int)
 						Year:               year,
 						MonthStart:         w.monthStart,
 						MonthEnd:           w.monthEnd,
+						OtherName:          "Anytime",
 						OtherDollarsPerKWH: amerenMOAnytimeWinterDollarsPerKWH + riders,
 						OtherDescription:   "Ameren MO Ultimate Savers Option B Winter Anytime Rate",
 					})

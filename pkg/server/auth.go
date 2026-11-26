@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,15 +23,16 @@ import (
 )
 
 type pathAttributes struct {
-	allowNoLogin       bool
-	ignoreUserNotFound bool
-	isUpdatePath       bool
-	ignoreSiteID       bool
-	optionalSiteID     bool
-	allowAllSites      bool
-	allowAppToken      bool
-	requireAppToken    bool
-	allowQueryToken    bool
+	allowNoLogin          bool
+	ignoreUserNotFound    bool
+	isUpdatePath          bool
+	requireUpdateSpecific bool
+	ignoreSiteID          bool
+	optionalSiteID        bool
+	allowAllSites         bool
+	allowAppToken         bool
+	requireAppToken       bool
+	allowQueryToken       bool
 }
 
 var routeAuthAttributes = map[string]pathAttributes{
@@ -41,7 +43,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/report/browser":               {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/join":                         {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/update":                       {isUpdatePath: true},
-	"/api/updateSites":                  {isUpdatePath: true, ignoreSiteID: true},
+	"/api/updateSites":                  {isUpdatePath: true, requireUpdateSpecific: true, ignoreSiteID: true},
 	"/api/list/sites":                   {ignoreSiteID: true},
 	"/api/feedback":                     {ignoreUserNotFound: true, optionalSiteID: true, allowAllSites: true},
 	"/api/list/feedback":                {ignoreSiteID: true},
@@ -85,6 +87,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		allowNoLogin := attrs.allowNoLogin
 		ignoreUserNotFound := attrs.ignoreUserNotFound
 		isUpdatePath := attrs.isUpdatePath
+		requireUpdateSpecific := attrs.requireUpdateSpecific
 		ignoreSiteID := attrs.ignoreSiteID
 		optionalSiteID := attrs.optionalSiteID
 		allowAllSites := attrs.allowAllSites
@@ -110,13 +113,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Authorization header as an app token attempt so malformed or non-rr_ Bearer tokens fail
 		// immediately instead of silently falling back to session cookies.
 		var rawAppToken string
+		var hasAppTokenAttempt bool
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			if strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) || !isUpdatePath {
+				hasAppTokenAttempt = true
 				rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
 			}
 		} else if allowQueryToken {
 			q := r.URL.Query()
 			if q.Has("token") {
+				hasAppTokenAttempt = true
 				rawAppToken = q.Get("token")
 				// remove token so it doesn't end up in logs
 				q.Del("token")
@@ -124,7 +130,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		if rawAppToken != "" && !allowAppToken {
+		if hasAppTokenAttempt && !allowAppToken {
 			log.Ctx(ctx).WarnContext(ctx, "app token not allowed on endpoint", slog.String("path", r.URL.Path))
 			writeJSONError(w, "app token not allowed on this endpoint", http.StatusForbidden)
 			return
@@ -190,15 +196,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			authSuccess = true
 			ctx = context.WithValue(ctx, userContextKey, user)
 		} else {
-			if requireAppToken && rawAppToken == "" {
-				log.Ctx(ctx).WarnContext(ctx, "missing app token on endpoint requiring app token", slog.String("path", r.URL.Path))
+			if requireAppToken && !hasAppTokenAttempt {
+				log.Ctx(ctx).DebugContext(ctx, "missing app token on endpoint requiring app token", slog.String("path", r.URL.Path))
 				setWWWAuthenticate()
 				writeJSONError(w, "missing app token", http.StatusUnauthorized)
 				return
 			}
 
 			// Check app token auth on allowed endpoints
-			if rawAppToken != "" && allowAppToken {
+			if hasAppTokenAttempt && allowAppToken {
 				if len(s.appsEncryptionKey) != 32 {
 					writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 					return
@@ -221,8 +227,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				authSuccess = true
 			}
 
-			// Check /api/update specific auth
-			if !authSuccess && isUpdatePath && s.updateSpecificEmail != "" {
+			// Check /api/update and /api/updateSites scheduler auth.
+			// /api/updateSites always requires updateSpecificEmail; /api/update uses it when configured
+			// (without falling back to cookies) and otherwise proceeds as a normal siteID cookie call.
+			useUpdateSpecific := isUpdatePath && (requireUpdateSpecific || s.updateSpecificEmail != "")
+			if !authSuccess && useUpdateSpecific {
+				if s.updateSpecificEmail == "" {
+					log.Ctx(ctx).WarnContext(ctx, "update endpoint called without update-specific email configured", slog.String("path", r.URL.Path))
+					writeJSONError(w, "authentication required", http.StatusUnauthorized)
+					return
+				}
 				authHeader := r.Header.Get("Authorization")
 				if authHeader != "" {
 					if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -261,11 +275,20 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						return
 					}
 				}
+				if !authViaUpdateSpecific {
+					log.Ctx(ctx).WarnContext(ctx, "missing update-specific authentication", slog.String("path", r.URL.Path))
+					writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+					return
+				}
+			} else if !authSuccess && isUpdatePath && r.Header.Get("Authorization") != "" {
+				log.Ctx(ctx).WarnContext(ctx, "authorization header not allowed without update-specific email", slog.String("path", r.URL.Path))
+				writeJSONError(w, "update-specific authentication not configured", http.StatusUnauthorized)
+				return
 			}
 
 			// normal user auth (cookie)
 			// ignore login so that a login request can overwrite a broken cookie
-			if !authSuccess && r.URL.Path != "/api/auth/login" {
+			if !authSuccess && !useUpdateSpecific && r.URL.Path != "/api/auth/login" {
 				// 1. Check sessionTokenCookie
 				sessionCookie, err := r.Cookie(sessionTokenCookie)
 				if err != nil && !errors.Is(err, http.ErrNoCookie) {
@@ -317,7 +340,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				}
 			}
 
-			if authViaUpdateSpecific && isUpdatePath {
+			if useUpdateSpecific {
+				if !authViaUpdateSpecific {
+					writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+					return
+				}
 				// allowed to update
 			} else if authSuccess {
 				// fetch user
@@ -482,6 +509,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	contentType := r.Header.Get("Content-Type")
+	if mediaType, _, err := mime.ParseMediaType(contentType); err != nil || mediaType != "application/json" {
+		log.Ctx(r.Context()).ErrorContext(
+			r.Context(),
+			"login request without application/json Content-Type would be blocked",
+			slog.String("contentType", contentType),
+			slog.Any("error", err),
+		)
+	}
+
 	// Parse Parse Form to get the token, expecting JSON body
 	var req struct {
 		Token  string `json:"token"`
@@ -804,6 +841,9 @@ func (s *Server) getOIDCProvider(ctx context.Context, issuer string) (*oidc.Prov
 // concurrently. Failures are logged and ignored so startup can continue and
 // subsequent requests can lazily discover the provider on demand.
 func (s *Server) warmOIDC(ctx context.Context) {
+	if s.onWarmOIDCDone != nil {
+		defer s.onWarmOIDCDone()
+	}
 	s.oidcMu.RLock()
 	var clients []string
 	for _, client := range userOIDCClients {

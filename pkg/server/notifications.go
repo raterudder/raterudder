@@ -3293,16 +3293,28 @@ func (s *Server) handleHighHomeLoadNotifications(
 			tSim := nowLocal.Add(time.Duration(m) * time.Minute)
 			simEnergy -= data.status.BatteryKW * (1.0 / 60.0)
 			targetReserveSOC := effectiveReserveSOC
-			if tSim.Hour() != nowLocal.Hour() {
-				var nextPrice types.Price
+
+			var simPrice types.Price
+			foundPrice := false
+			if !data.currentPrice.TSStart.IsZero() && !data.currentPrice.TSEnd.IsZero() && data.currentPrice.Contains(tSim) {
+				simPrice = data.currentPrice
+				foundPrice = true
+			} else {
 				for _, fp := range data.futurePrices {
-					fpLocal := fp.TSStart.In(siteLoc)
-					if fpLocal.Hour() == tSim.Hour() && fpLocal.Day() == tSim.Day() {
-						nextPrice = fp
+					if !fp.TSStart.IsZero() && fp.Contains(tSim) {
+						simPrice = fp
+						foundPrice = true
 						break
 					}
 				}
-				if nextSOC := data.settings.GetMinBatterySOC(ctx, tSim, siteLoc, nextPrice); nextSOC > 0 {
+				if !foundPrice && !data.currentPrice.TSStart.IsZero() && data.currentPrice.Contains(tSim) {
+					simPrice = data.currentPrice
+					foundPrice = true
+				}
+			}
+
+			if foundPrice || tSim.Hour() != nowLocal.Hour() {
+				if nextSOC := data.settings.GetMinBatterySOC(ctx, tSim, siteLoc, simPrice); nextSOC > 0 {
 					targetReserveSOC = nextSOC + reserveBufferPct
 					if targetReserveSOC > 100.0 {
 						targetReserveSOC = 100.0
@@ -3529,11 +3541,27 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Subscription.TSCreated = s.now().UTC()
 
+	isNewDevice := true
+	for _, existing := range user.Subscriptions {
+		if existing.ID == req.Subscription.ID || existing.Endpoint == req.Subscription.Endpoint {
+			isNewDevice = false
+			break
+		}
+	}
+
 	ctx := r.Context()
 	if err := s.storage.AddUserPushSubscription(ctx, userID, req.Subscription); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save push subscription", slog.Any("error", err))
 		writeJSONError(w, "failed to save subscription", http.StatusInternalServerError)
 		return
+	}
+
+	if isNewDevice {
+		log.Ctx(ctx).InfoContext(ctx, "notification device subscribed",
+			slog.String("event", eventNotificationDeviceSubscribed),
+			slog.String("userID", userID),
+			slog.String("appType", req.Subscription.AppType),
+		)
 	}
 
 	// If sendTest is requested, dispatch an immediate test notification
@@ -3600,6 +3628,11 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to remove subscription", http.StatusInternalServerError)
 		return
 	}
+
+	log.Ctx(ctx).InfoContext(ctx, "notification device unsubscribed",
+		slog.String("event", eventNotificationDeviceUnsubscribed),
+		slog.String("userID", userID),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

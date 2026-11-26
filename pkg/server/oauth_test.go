@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -549,6 +551,72 @@ func TestHandleOAuthClientInfo(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, wHTTPSPort.Code)
 	})
 
+	t.Run("CIMDVerifiedCrossOriginAndLoopbackSuppressWarnings", func(t *testing.T) {
+		cimdURL := "https://auth.vendor.example.com/oauth/client.json"
+		srv.cimdHTTPClient = newMockCIMDHTTPClient(func(r *http.Request) (*http.Response, error) {
+			body := `{
+				"client_id": "https://auth.vendor.example.com/oauth/client.json",
+				"client_name": "Vendor MCP",
+				"redirect_uris": [
+					"https://app.vendor.example.com/oauth/callback",
+					"https://localhost:8443/callback",
+					"https://127.0.0.1:8443/callback",
+					"https://[::1]:8443/callback",
+					"http://localhost/callback"
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})
+
+		doLoggedClientReq := func(redirect string) (*httptest.ResponseRecorder, string) {
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			q := url.Values{
+				"client_id":             {cimdURL},
+				"redirect_uri":          {redirect},
+				"response_type":         {"code"},
+				"code_challenge":        {codeChallenge},
+				"code_challenge_method": {"S256"},
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+q.Encode(), nil)
+			req = req.WithContext(log.With(req.Context(), bufLogger))
+			req.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			return w, logBuf.String()
+		}
+
+		// Verified cross-origin HTTPS redirect_uri succeeds with DEBUG log and zero WARN logs
+		wCross, logsCross := doLoggedClientReq("https://app.vendor.example.com/oauth/callback")
+		require.Equal(t, http.StatusOK, wCross.Code)
+		assert.NotContains(t, logsCross, `"level":"WARN"`)
+		assert.Contains(t, logsCross, `"level":"DEBUG"`)
+		assert.Contains(t, logsCross, "oauth cimd redirect_uri origin differs from client domain")
+
+		// HTTPS and HTTP loopback redirect_uris are exempt from origin-mismatch logs altogether
+		for _, loopbackURI := range []string{
+			"https://localhost:8443/callback",
+			"https://127.0.0.1:8443/callback",
+			"https://[::1]:8443/callback",
+			"http://localhost:51234/callback",
+		} {
+			wLoopback, logsLoopback := doLoggedClientReq(loopbackURI)
+			require.Equal(t, http.StatusOK, wLoopback.Code, "loopback %s", loopbackURI)
+			assert.NotContains(t, logsLoopback, `"level":"WARN"`, "loopback %s", loopbackURI)
+			assert.NotContains(t, logsLoopback, "oauth cimd redirect_uri origin differs from client domain", "loopback %s", loopbackURI)
+		}
+
+		// Unauthorized redirect_uri still returns 400 and logs WARN
+		wUnauth, logsUnauth := doLoggedClientReq("https://evil.example.com/callback")
+		assert.Equal(t, http.StatusBadRequest, wUnauth.Code)
+		assert.Contains(t, logsUnauth, `"level":"WARN"`)
+		assert.Contains(t, logsUnauth, "oauth client info rejected")
+	})
+
 	t.Run("CIMDRejectsInvalidMetadata", func(t *testing.T) {
 		makeQuery := func(cid string) string {
 			return url.Values{
@@ -1022,6 +1090,126 @@ func TestHandleOAuthApprove(t *testing.T) {
 		handler.ServeHTTP(wApprove, reqApprove)
 		assert.Equal(t, http.StatusBadRequest, wApprove.Code)
 		assert.Contains(t, wApprove.Body.String(), "resource does not match")
+	})
+
+	t.Run("CIMDConsentFlowSuppressesWarningsAndWarnsOnUnauthorizedRedirect", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newTestAppsServer(mockS, now)
+		handler := srv.setupHandler()
+
+		cimdURL := "https://auth.vendor.example.com/oauth/approve-client.json"
+		srv.cimdHTTPClient = newMockCIMDHTTPClient(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`{
+					"client_id": "https://auth.vendor.example.com/oauth/approve-client.json",
+					"client_name": "Vendor MCP",
+					"redirect_uris": [
+						"https://app.vendor.example.com/oauth/callback",
+						"https://localhost:8443/callback"
+					]
+				}`)),
+				Header: http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})
+
+		sessionToken, err := srv.createSessionToken("user-1", "user1@example.com", "sec-1", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:            "user-1",
+			Email:         "user1@example.com",
+			SessionSecret: "sec-1",
+			Sites:         []types.UserSite{{ID: "site-1", Name: "Home"}},
+		}, nil).Times(4)
+		mockS.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "user-1"}},
+		}, nil).Times(4)
+
+		codeChallenge := computePKCES256Challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk-valid-pkce-verifier")
+		mockS.On("AddUserApp", mock.Anything, "user-1", mock.Anything).Return(nil).Twice()
+
+		// 1. Consent flow for verified cross-origin HTTPS redirect_uri emits zero WARN logs across client + approve
+		var crossLogBuf bytes.Buffer
+		crossLogger := slog.New(slog.NewJSONHandler(&crossLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		qClient := url.Values{
+			"client_id":             {cimdURL},
+			"redirect_uri":          {"https://app.vendor.example.com/oauth/callback"},
+			"response_type":         {"code"},
+			"code_challenge":        {codeChallenge},
+			"code_challenge_method": {"S256"},
+		}
+		reqInfo := httptest.NewRequest(http.MethodGet, "/api/oauth/client?"+qClient.Encode(), nil)
+		reqInfo = reqInfo.WithContext(log.With(reqInfo.Context(), crossLogger))
+		reqInfo.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wInfo := httptest.NewRecorder()
+		handler.ServeHTTP(wInfo, reqInfo)
+		require.Equal(t, http.StatusOK, wInfo.Code)
+
+		approveCrossPayload, err := json.Marshal(map[string]string{
+			"siteID":              "site-1",
+			"clientID":            cimdURL,
+			"redirectURI":         "https://app.vendor.example.com/oauth/callback",
+			"responseType":        "code",
+			"codeChallenge":       codeChallenge,
+			"codeChallengeMethod": "S256",
+			"state":               "cross-state",
+		})
+		require.NoError(t, err)
+		reqApproveCross := httptest.NewRequest(http.MethodPost, "/api/oauth/approve", bytes.NewReader(approveCrossPayload))
+		reqApproveCross = reqApproveCross.WithContext(log.With(reqApproveCross.Context(), crossLogger))
+		reqApproveCross.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wApproveCross := httptest.NewRecorder()
+		handler.ServeHTTP(wApproveCross, reqApproveCross)
+		require.Equal(t, http.StatusOK, wApproveCross.Code)
+		assert.NotContains(t, crossLogBuf.String(), `"level":"WARN"`)
+
+		// 2. Approve with HTTPS loopback redirect_uri emits zero WARN logs and no origin-mismatch debug log
+		var loopbackLogBuf bytes.Buffer
+		loopbackLogger := slog.New(slog.NewJSONHandler(&loopbackLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		approveLoopbackPayload, err := json.Marshal(map[string]string{
+			"siteID":              "site-1",
+			"clientID":            cimdURL,
+			"redirectURI":         "https://localhost:8443/callback",
+			"responseType":        "code",
+			"codeChallenge":       codeChallenge,
+			"codeChallengeMethod": "S256",
+			"state":               "https-loopback-state",
+		})
+		require.NoError(t, err)
+		reqApproveLoopback := httptest.NewRequest(http.MethodPost, "/api/oauth/approve", bytes.NewReader(approveLoopbackPayload))
+		reqApproveLoopback = reqApproveLoopback.WithContext(log.With(reqApproveLoopback.Context(), loopbackLogger))
+		reqApproveLoopback.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wApproveLoopback := httptest.NewRecorder()
+		handler.ServeHTTP(wApproveLoopback, reqApproveLoopback)
+		require.Equal(t, http.StatusOK, wApproveLoopback.Code)
+		assert.NotContains(t, loopbackLogBuf.String(), `"level":"WARN"`)
+		assert.NotContains(t, loopbackLogBuf.String(), "oauth cimd redirect_uri origin differs from client domain")
+
+		// 3. Approve with unauthorized redirect_uri returns 400 and logs WARN
+		var unauthLogBuf bytes.Buffer
+		unauthLogger := slog.New(slog.NewJSONHandler(&unauthLogBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		approveUnauthPayload, err := json.Marshal(map[string]string{
+			"siteID":              "site-1",
+			"clientID":            cimdURL,
+			"redirectURI":         "https://evil.example.com/callback",
+			"responseType":        "code",
+			"codeChallenge":       codeChallenge,
+			"codeChallengeMethod": "S256",
+		})
+		require.NoError(t, err)
+		reqApproveUnauth := httptest.NewRequest(http.MethodPost, "/api/oauth/approve", bytes.NewReader(approveUnauthPayload))
+		reqApproveUnauth = reqApproveUnauth.WithContext(log.With(reqApproveUnauth.Context(), unauthLogger))
+		reqApproveUnauth.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		wApproveUnauth := httptest.NewRecorder()
+		handler.ServeHTTP(wApproveUnauth, reqApproveUnauth)
+		assert.Equal(t, http.StatusBadRequest, wApproveUnauth.Code)
+		assert.Contains(t, unauthLogBuf.String(), `"level":"WARN"`)
+		assert.Contains(t, unauthLogBuf.String(), "oauth approve rejected")
+
+		mockS.AssertExpectations(t)
 	})
 }
 

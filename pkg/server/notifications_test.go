@@ -986,6 +986,53 @@ func TestHandleSubscribe(t *testing.T) {
 		assertRejected("https://fcm.googleapis.com/fcm/send/test-sub-id#frag")
 		mockS.AssertNotCalled(t, "AddUserPushSubscription", mock.Anything, mock.Anything, mock.Anything)
 	})
+
+	t.Run("EmitsEventOnlyForNewDevice", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+
+		endpoint := "https://fcm.googleapis.com/fcm/send/device-1"
+		subReq := subscribeRequest{
+			Subscription: types.PushSubscription{
+				Endpoint: endpoint,
+				AppType:  types.PushSubscriptionAppTypeStandalone,
+				Keys:     types.PushSubscriptionKeys{P256DH: "test-p256dh", Auth: "test-auth"},
+			},
+		}
+		body, err := json.Marshal(subReq)
+		require.NoError(t, err)
+
+		mockS.On("AddUserPushSubscription", mock.Anything, "user1", mock.Anything).Return(nil).Twice()
+
+		// 1. New device -> emits notification_device_subscribed
+		ctx1, logBuf1 := captureJSONLogs(context.Background())
+		ctx1 = context.WithValue(ctx1, userContextKey, types.User{ID: "user1"})
+		req1 := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body)).WithContext(ctx1)
+		rec1 := httptest.NewRecorder()
+		srv.handleSubscribe(rec1, req1)
+		assert.Equal(t, http.StatusOK, rec1.Code)
+		if entry, ok := findLoggedEvent(t, logBuf1.String(), eventNotificationDeviceSubscribed); assert.True(t, ok) {
+			assert.Equal(t, "user1", entry["userID"])
+			assert.Equal(t, types.PushSubscriptionAppTypeStandalone, entry["appType"])
+		}
+
+		// 2. Existing device re-subscribing -> does NOT emit notification_device_subscribed
+		ctx2, logBuf2 := captureJSONLogs(context.Background())
+		ctx2 = context.WithValue(ctx2, userContextKey, types.User{
+			ID: "user1",
+			Subscriptions: []types.PushSubscription{
+				{Endpoint: endpoint},
+			},
+		})
+		req2 := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body)).WithContext(ctx2)
+		rec2 := httptest.NewRecorder()
+		srv.handleSubscribe(rec2, req2)
+		assert.Equal(t, http.StatusOK, rec2.Code)
+		_, found := findLoggedEvent(t, logBuf2.String(), eventNotificationDeviceSubscribed)
+		assert.False(t, found, "re-subscribing an existing device should not emit notification_device_subscribed")
+
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleUnsubscribe(t *testing.T) {
@@ -8149,6 +8196,126 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 		assert.Contains(t, recordedLog.Body, "Battery will run out in ~10 min (SOC 35%). Grid will be used.")
 		assert.Equal(t, "10", recordedLog.Metadata["minutesRemaining"])
+	})
+
+	t.Run("RateBasedReserve_Spanning30MinAndMultiHourIntervals_MatchesViaContains", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		// 15:20 local time: currentPrice is 15:00-15:30 (Shoulder, $0.20, 20% reserve),
+		// next futurePrice is a multi-hour spanning :30 interval 15:30-17:30 (Peak, $0.40, 50% reserve),
+		// followed by an Off-Peak interval 23:00-24:00 ($0.08) so currentPrice is not the cheapest rate of the day.
+		// At 15:30 (minute 10), battery is still in hour 15; using fp.Contains(tSim) matches the :30 boundary cleanly.
+		nowSpan := time.Date(2026, 9, 19, 15, 20, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowSpan)
+		user := createTestPushUser(t, "user1@test.com", testPushBaseURL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "medium",
+			},
+		}
+
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Twice()
+
+		var recordedLogs []types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeHighHomeLoad
+		})).Run(func(args mock.Arguments) {
+			recordedLogs = append(recordedLogs, args.Get(2).(types.NotificationLog))
+		}).Return(nil).Twice()
+
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError}))
+		testCtx := log.With(context.Background(), logger)
+
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowSpan,
+				HomeKW:             6.2,
+				BatterySOC:         35.0,
+				BatteryKW:          6.0,
+				BatteryCapacityKWH: 13.6,
+			},
+			currentPrice: types.Price{
+				TSStart:       time.Date(2026, 9, 19, 15, 0, 0, 0, loc),
+				TSEnd:         time.Date(2026, 9, 19, 15, 30, 0, 0, loc),
+				DollarsPerKWH: 0.20,
+				PeriodName:    "Shoulder",
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:       time.Date(2026, 9, 19, 15, 30, 0, 0, loc),
+					TSEnd:         time.Date(2026, 9, 19, 17, 30, 0, 0, loc),
+					DollarsPerKWH: 0.40,
+					PeriodName:    "Peak",
+				},
+				{
+					TSStart:       time.Date(2026, 9, 19, 23, 0, 0, 0, loc),
+					TSEnd:         time.Date(2026, 9, 20, 0, 0, 0, 0, loc),
+					DollarsPerKWH: 0.08,
+					PeriodName:    "Off-Peak",
+				},
+			},
+			settings: types.Settings{
+				MinBatterySOC: 20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+					{UtilityPeriodName: "Shoulder", MinBatterySOC: 20.0},
+					{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+				},
+			},
+			energyHistory: baseHistory,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(testCtx, siteID, nowSpan)
+		srv.handleHighHomeLoadNotifications(testCtx, siteID, notifications, data, nowSpan, getNotifState, mockUserGetter(user))
+
+		// Second scenario: now is 15:50 inside multi-hour spanning :30 currentPrice (15:30-17:30, Peak, 50% reserve).
+		// Battery starts at 62% SOC discharging at 6.0 kW; it crosses 16:00 (still inside 15:30-17:30) and hits 50% at ~17 min.
+		// Previously fpLocal.Hour() == tSim.Hour() failed at 16:00 and fell back to 20% MinBatterySOC with ERROR logs.
+		nowMultiHour := time.Date(2026, 9, 19, 15, 50, 0, 0, loc)
+		srv2 := createTestNotificationServer(t, mockS, nowMultiHour)
+		data2 := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowMultiHour,
+				HomeKW:             6.2,
+				BatterySOC:         62.0,
+				BatteryKW:          6.0,
+				BatteryCapacityKWH: 13.6,
+			},
+			currentPrice: types.Price{
+				TSStart:       time.Date(2026, 9, 19, 15, 30, 0, 0, loc),
+				TSEnd:         time.Date(2026, 9, 19, 17, 30, 0, 0, loc),
+				DollarsPerKWH: 0.40,
+				PeriodName:    "Peak",
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:       time.Date(2026, 9, 19, 17, 30, 0, 0, loc),
+					TSEnd:         time.Date(2026, 9, 19, 23, 0, 0, 0, loc),
+					DollarsPerKWH: 0.20,
+					PeriodName:    "Shoulder",
+				},
+				{
+					TSStart:       time.Date(2026, 9, 19, 23, 0, 0, 0, loc),
+					TSEnd:         time.Date(2026, 9, 20, 0, 0, 0, 0, loc),
+					DollarsPerKWH: 0.08,
+					PeriodName:    "Off-Peak",
+				},
+			},
+			settings:      data.settings,
+			energyHistory: baseHistory,
+		}
+		getNotifState2 := srv2.newSiteRecentNotificationsFetcher(testCtx, siteID, nowMultiHour)
+		srv2.handleHighHomeLoadNotifications(testCtx, siteID, notifications, data2, nowMultiHour, getNotifState2, mockUserGetter(user))
+
+		mockS.AssertExpectations(t)
+		assert.Empty(t, logBuf.String(), "should not log any errors when matching spanning :30 / multi-hour price intervals")
+		if assert.Len(t, recordedLogs, 2) {
+			assert.Contains(t, recordedLogs[0].Body, "Battery will run out in ~10 min (SOC 35%). Grid will be used.")
+			assert.Equal(t, "10", recordedLogs[0].Metadata["minutesRemaining"])
+			assert.Contains(t, recordedLogs[1].Body, "Battery will run out in ~17 min (SOC 62%). Grid will be used.")
+			assert.Equal(t, "17", recordedLogs[1].Metadata["minutesRemaining"])
+		}
 	})
 
 	t.Run("calculateTODReserveRatio", func(t *testing.T) {

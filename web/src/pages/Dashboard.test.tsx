@@ -1275,6 +1275,122 @@ describe('Dashboard', () => {
         expect(localStorage.getItem('location_warning_dismissed_site1')).toBe('true');
     });
 
+    it('shows SDG&E SBP application year warning banner when applicationYear is unset (including SDCP)', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'sdge',
+            utilityRate: 'sdge_tou_dr1',
+            utilityRateOptions: {
+                netMeteringScheme: 'sbp',
+                generationRate: 'sdcp_power_on',
+            },
+            countryCode: 'US',
+            postalCode: '92101',
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            const banner = screen.getByTestId('sbp-application-year-warning-banner');
+            expect(banner).toBeInTheDocument();
+            expect(banner).toHaveClass('warning-banner');
+            expect(banner).toHaveTextContent(/Solar Billing Plan export credits vary significantly/i);
+            const link = screen.getByRole('link', { name: /Select your application year in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?tariff=1');
+        });
+    });
+
+    it('does not show SDG&E SBP application year warning banner when applicationYear is set or scheme is nem2/net', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+
+        const { unmount } = renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'sdge',
+                    utilityRate: 'sdge_tou_dr1',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'sbp',
+                        generationRate: 'sdcp_power_on',
+                        applicationYear: '2026',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('sbp-application-year-warning-banner')).not.toBeInTheDocument();
+        unmount();
+
+        const { unmount: unmountNem2 } = renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'sdge',
+                    utilityRate: 'sdge_tou_dr1',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'nem2',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('sbp-application-year-warning-banner')).not.toBeInTheDocument();
+        unmountNem2();
+
+        renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'sdge',
+                    utilityRate: 'sdge_tou_dr1',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'net',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('sbp-application-year-warning-banner')).not.toBeInTheDocument();
+    });
+
+    it('can dismiss the SDG&E SBP application year warning banner and persists dismissal per siteID', async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'sdge',
+            utilityRate: 'sdge_tou_dr1',
+            utilityRateOptions: {
+                netMeteringScheme: 'sbp',
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('sbp-application-year-warning-banner')).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss SDG&E application year warning/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('sbp-application-year-warning-banner')).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('sbp_application_year_warning_dismissed_site1')).toBe('true');
+    });
+
     it('shows warning when ESS is connected and automation is paused', async () => {
         mockActionsAndSavings([]);
         const settings = {

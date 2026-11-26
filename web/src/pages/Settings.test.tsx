@@ -3841,6 +3841,111 @@ describe('App & Settings', () => {
             expect(essSection).toHaveClass('highlighted-section');
             expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
         });
+
+        it('automatically expands and highlights utility section on /settings?tariff=1 and persists default 2026 on save', async () => {
+            (api.fetchUtilities as any).mockResolvedValue([
+                {
+                    id: 'sdge',
+                    name: 'San Diego Gas & Electric (SDG&E)',
+                    rates: [
+                        {
+                            id: 'sdge_tou_dr1',
+                            name: 'Schedule TOU-DR1',
+                            options: [
+                                {
+                                    field: 'generationRate',
+                                    name: 'Generation Rate',
+                                    type: 'select',
+                                    choices: [
+                                        { value: 'sdge', name: 'SDG&E Bundled' },
+                                        { value: 'sdcp_power_on', name: 'SDCP PowerOn' },
+                                    ],
+                                    default: 'sdge',
+                                },
+                                {
+                                    field: 'netMeteringScheme',
+                                    name: 'Net Metering / Export Scheme',
+                                    type: 'select',
+                                    choices: [
+                                        { value: 'net', name: 'NEM 1.0' },
+                                        { value: 'nem2', name: 'NEM 2.0' },
+                                        { value: 'sbp', name: 'Solar Billing Plan (NEM 3.0)' },
+                                    ],
+                                    default: 'sbp',
+                                },
+                                {
+                                    field: 'applicationYear',
+                                    name: 'Interconnection Application Year',
+                                    type: 'select',
+                                    choices: [
+                                        { value: '2023', name: '2023' },
+                                        { value: '2024', name: '2024' },
+                                        { value: '2025', name: '2025' },
+                                        { value: '2026', name: '2026' },
+                                        { value: '2027', name: '2027+' },
+                                    ],
+                                    default: '2026',
+                                    dependsOn: {
+                                        netMeteringScheme: ['sbp'],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ] as any);
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                utilityProvider: 'sdge',
+                utilityRate: 'sdge_tou_dr1',
+                utilityRateOptions: {
+                    generationRate: 'sdcp_power_on',
+                    netMeteringScheme: 'sbp',
+                },
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                release: 'production',
+            });
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+            (updateSettings as any).mockResolvedValue(undefined);
+
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            window.history.pushState(null, '', '/settings?tariff=1');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /^Settings$/i });
+
+            // Utility section should automatically be expanded without clicking Change
+            const appYearTrigger = await waitFor(() => {
+                const el = document.getElementById('opt-applicationYear');
+                expect(el).toBeInTheDocument();
+                return el!;
+            });
+
+            // Utility section container should have the highlighted-section class and be scrolled into view
+            const utilitySection = screen.getByTestId('utility-section');
+            expect(utilitySection).toHaveClass('highlighted-section');
+            expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+            expect(appYearTrigger).toHaveTextContent('2026');
+
+            // Clicking Save Settings without changing the dropdown should persist applicationYear: "2026"
+            fireEvent.click(screen.getByText('Save Settings'));
+
+            await waitFor(() => {
+                expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+                expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                    utilityProvider: 'sdge',
+                    utilityRate: 'sdge_tou_dr1',
+                    utilityRateOptions: expect.objectContaining({
+                        generationRate: 'sdcp_power_on',
+                        netMeteringScheme: 'sbp',
+                        applicationYear: '2026',
+                    }),
+                }), expect.any(String), undefined);
+            });
+        });
     });
 
     describe('Unsaved Changes Confirmation', () => {

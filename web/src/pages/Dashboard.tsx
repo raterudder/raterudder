@@ -77,6 +77,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [showTOUNotice, setShowTOUNotice] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
     const [showLocationWarning, setShowLocationWarning] = useState(false);
+    const [showSBPApplicationYearWarning, setShowSBPApplicationYearWarning] = useState(false);
     const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
 
     const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -146,12 +147,26 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 (settings.ess === 'enphase' && enphaseExportSchedules);
             const canExport = Boolean(settings.gridExportSolar || settings.gridExportBatteries);
             setShowTOUNotice(supportsTOU && canExport && !settings.manageTOUSchedules && !isTOUDismissed);
+
+            const sbpYearKey = siteID ? `sbp_application_year_warning_dismissed_${siteID}` : 'sbp_application_year_warning_dismissed';
+            const isSBPYearDismissed = localStorage.getItem(sbpYearKey) === 'true';
+            const missingSDGESBPYear = settings.utilityProvider === 'sdge' &&
+                settings.utilityRateOptions?.netMeteringScheme === 'sbp' &&
+                !settings.utilityRateOptions?.applicationYear;
+            setShowSBPApplicationYearWarning(missingSDGESBPYear && !isSBPYearDismissed);
         } else {
             setShowGridWarning(false);
             setShowLocationWarning(false);
             setShowTOUNotice(false);
+            setShowSBPApplicationYearWarning(false);
         }
     }, [settings, siteID, enphaseExportSchedules]);
+
+    const dismissSBPApplicationYearWarning = () => {
+        const key = siteID ? `sbp_application_year_warning_dismissed_${siteID}` : 'sbp_application_year_warning_dismissed';
+        localStorage.setItem(key, 'true');
+        setShowSBPApplicationYearWarning(false);
+    };
 
     const dismissTOUNotice = () => {
         const key = siteID ? `tou_notice_dismissed_${siteID}` : 'tou_notice_dismissed';
@@ -587,6 +602,19 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                                 <span><strong>Warning:</strong> Location is not specified. <Link href="/settings">Configure it in Settings</Link> to improve solar forecasting accuracy.</span>
                             </p>
                             <button onClick={dismissLocationWarning} className="banner-dismiss-btn" aria-label="Dismiss location warning">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    )}
+                    {showSBPApplicationYearWarning && (
+                        <div className="banner warning-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="sbp-application-year-warning-banner">
+                            <p>
+                                <span>
+                                    <strong>Warning:</strong> SDG&amp;E Solar Billing Plan export credits vary significantly by interconnection year (e.g., 2023/2024 vs. 2025/2026 vs. 2027+).{' '}
+                                    <Link href="/settings?tariff=1">Select your application year in Settings</Link> for accurate export pricing.
+                                </span>
+                            </p>
+                            <button onClick={dismissSBPApplicationYearWarning} className="banner-dismiss-btn" aria-label="Dismiss SDG&E application year warning">
                                 <span aria-hidden="true">&times;</span>
                             </button>
                         </div>

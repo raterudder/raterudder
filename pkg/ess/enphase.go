@@ -3109,7 +3109,7 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 
 		res, err := e.getDailyEnergy(ctx, startDay, histEndDay)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase daily energy data",
+			log.Ctx(ctx).WarnContext(ctx, "failed to get enphase daily energy data",
 				slog.Time("start", startDay),
 				slog.Time("end", histEndDay),
 				slog.Any("error", err),
@@ -3128,7 +3128,7 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 	if !lastDayToFetch.Before(todayMidnight) {
 		res, err := e.getToday(ctx, todayMidnight, false)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase today data",
+			log.Ctx(ctx).WarnContext(ctx, "failed to get enphase today data",
 				slog.Time("date", todayMidnight),
 				slog.Any("error", err),
 			)

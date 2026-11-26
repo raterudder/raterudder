@@ -1184,13 +1184,17 @@ func isBlockActionAllowed(
 		// minimum price-spread hurdle over this block's minimum import rate.
 		hasArbitrageAhead := false
 		cumNetKWH := block.netSolarKWH
-		oneWayEff := math.Sqrt(effRT)
+		_, dischargeEff, dischargeFixedKW := startState.batteryModel.resolveEfficiencies(effRT)
+		cumDisHours := 0.0
 		for j := blockIdx + 1; j < len(blocks); j++ {
 			// if we are going to hit reserve, then this isn't arbitrage and instead it's deficit avoidance which
 			// is a smaller gate
 			cumNetKWH += blocks[j].netSolarKWH
-			usableKWH := (startState.soc - blocks[j].minSOC) / 100.0 * startState.capacityKWH
-			willHitDeficit := -cumNetKWH >= usableKWH*oneWayEff
+			if blocks[j].netSolarKWH < 0 {
+				cumDisHours += blocks[j].durationHours
+			}
+			usableKWH := max(0.0, (startState.soc-blocks[j].minSOC)/100.0*startState.capacityKWH-dischargeFixedKW*cumDisHours)
+			willHitDeficit := -cumNetKWH >= usableKWH*dischargeEff
 			requiredImportGate := wear.arbitrageGatePerKWH
 			if willHitDeficit {
 				requiredImportGate = wear.gridChargePerKWH
@@ -1813,12 +1817,13 @@ func scoreCandidateTrajectory(
 	}
 
 	// Mandatory VPP deadline deficit score
+	chargeEff, _, _ := initial.batteryModel.resolveEfficiencies(roundTripEff)
 	var vppDeficitSOC int
 	for _, vpp := range vppEvents {
 		if vpp.mandatory && settings.GridChargeBatteries && !initial.chargingDisabled {
 			for i := 0; i < len(timeline); i++ {
 				if timeline[i].endTime.Equal(vpp.deadline) || (timeline[i].startTime.Before(vpp.deadline) && timeline[i].endTime.After(vpp.deadline)) {
-					vppDeficitSOC += calculateVPPDeficitSOC(initial, states[i+1], vpp.deadline, math.Sqrt(roundTripEff), settings.GridChargeBatteries)
+					vppDeficitSOC += calculateVPPDeficitSOC(initial, states[i+1], vpp.deadline, chargeEff, settings.GridChargeBatteries)
 				}
 			}
 		}
@@ -1858,6 +1863,7 @@ func estimatePairedBlockStartState(
 		stateB = currentStates[blocks[b].startIdx]
 	}
 
+	chargeEff, dischargeEff, dischargeFixedKW := initialState.batteryModel.resolveEfficiencies(roundTripEff)
 	switch pt[0].actionType {
 	case blockActionCharge:
 		if pt[1].actionType == blockActionCharge {
@@ -1865,11 +1871,12 @@ func estimatePairedBlockStartState(
 			if maxGridImportKW := resolveGridLimitKW(initialState.maxGridImportKW); maxGridImportKW > 0 && maxGridImportKW < maxChargeKW {
 				maxChargeKW = maxGridImportKW
 			}
-			maxGainSOC := (maxChargeKW * blocks[a].durationHours * math.Sqrt(roundTripEff) / initialState.capacityKWH) * 100.0
+			maxGainSOC := (maxChargeKW * blocks[a].durationHours * chargeEff / initialState.capacityKWH) * 100.0
 			simSOCB := min(pt[0].targetSOC, stateA.soc+maxGainSOC)
 			for k := a + 1; k < b; k++ {
 				if currentChoices[k].actionType == blockActionLoad && blocks[k].netSolarKWH < 0 {
-					drainSOC := (-blocks[k].netSolarKWH / math.Sqrt(roundTripEff) / initialState.capacityKWH) * 100.0
+					drainKWH := -blocks[k].netSolarKWH/dischargeEff + dischargeFixedKW*blocks[k].durationHours
+					drainSOC := (drainKWH / initialState.capacityKWH) * 100.0
 					simSOCB = max(blocks[k].minSOC, simSOCB-drainSOC)
 				}
 			}
@@ -1887,7 +1894,8 @@ func estimatePairedBlockStartState(
 		simSOCB := stateA.soc
 		for k := a; k < b; k++ {
 			if (k == a || currentChoices[k].actionType == blockActionLoad) && blocks[k].netSolarKWH < 0 {
-				drainSOC := (-blocks[k].netSolarKWH / math.Sqrt(roundTripEff) / initialState.capacityKWH) * 100.0
+				drainKWH := -blocks[k].netSolarKWH/dischargeEff + dischargeFixedKW*blocks[k].durationHours
+				drainSOC := (drainKWH / initialState.capacityKWH) * 100.0
 				simSOCB = max(blocks[k].minSOC, simSOCB-drainSOC)
 			}
 		}
@@ -3061,10 +3069,10 @@ func optimizeBlockTargets(
 						// Do not liquidate multi-day battery cushion sitting in Tier 2 of terminal valuation
 						// (above the 4-hour postHorizonSlices Tier 1 window, where terminalSurplusDiscountFactor = 0.70
 						// applies a 30% haircut meant to discourage grid overcharging) unless downstream solar caps at 100%.
-						oneWayEff := math.Sqrt(roundTripEff)
+						_, dischargeEff, _ := initial.batteryModel.resolveEfficiencies(roundTripEff)
 						var tier1LoadKWH float64
 						for _, slice := range postHorizon.postHorizonSlices {
-							tier1LoadKWH += slice.loadKWH / oneWayEff
+							tier1LoadKWH += slice.loadKWH / dischargeEff
 						}
 						tier1CeilingSOC := timeline[len(timeline)-1].minSOC + (tier1LoadKWH/initial.capacityKWH)*100.0
 						initEndSOC := initStates[len(initStates)-1].soc

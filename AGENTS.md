@@ -57,6 +57,12 @@
 ## Testing Guidelines
 
 ### Go Tests
+- **Offline Unit Tests with Race Detector**: Run fast offline unit tests across all packages (skipping controller history replays and live external API calls):
+  `go test -race -short -skip '^Test(Plan|Energy)History$' ./...`
+- **Controller Historical Replays**: Run recorded plan and energy model replay datasets separately without `-race`:
+  `go test ./pkg/controller -run '^Test(Plan|Energy)History$'`
+- **Live External API Tests (Opt-In)**: Live weather and utility provider subtests are skipped by default and under `-short`. Opt in explicitly when verifying upstream APIs:
+  `RATERUDDER_LIVE_API_TESTS=1 go test ./pkg/weather ./pkg/utility -run '^Test(OpenMeteoService|OctopusUtility|ComEd|Ameren)$/^Integration_Real'`
 - **Run Single Tests**: Run a single test at a time using regex:
   `go test ./pkg/server -run "^TestFunctionName$"`
   (Do not pass `-name`; `go test` uses `-run`).
@@ -80,9 +86,24 @@
     `go build -tags timetzdata ./cmd/...`
   - Build static production `raterudder` binary with embedded `web/dist` (run frontend build first):
     `CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o /tmp/raterudder ./cmd/raterudder`
+- **Fixture Privacy Checks**:
+  - Verify synthetic `^site[0-9]+$` IDs, redacted PII/credentials, and 2-decimal weather coordinates across `pkg/controller/testdata/`:
+    `go test ./pkg/controller -run "^TestFixturePrivacy$"`
+
+### Secret & Privacy Scans
+- **Synthetic Test Credentials**: Prefix all fake API keys, tokens, and secrets in unit tests (`*_test.go`, `*.test.ts(x)`, `web/src/test/*`) with `MOCK_`, `FAKE_`, `mock-`, or `fake-` (e.g., `FAKE_GMAPS_API_KEY`, `mock-oauth-token`) so `.gitleaks.toml` allowlists them automatically without per-file exceptions.
+- **Install Pre-Commit Hook**: Configure Git to run the versioned pre-commit secret and PII check (`gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --verbose`):
+  `./scripts/setup-hooks.sh`
+- **Local Gitleaks Scans**:
+  - Scan full git commit history of current HEAD (matches CI `secret-scan` job):
+    `gitleaks git --log-opts="HEAD" --config .gitleaks.toml --redact`
+  - Scan working tree files (including untracked files not ignored by `.gitignore`):
+    `gitleaks dir --config .gitleaks.toml --redact`
+  - Scan staged changes manually before committing:
+    `gitleaks git --pre-commit --staged --config .gitleaks.toml --redact`
 
 ### Frontend Tests
-- **Vitest**: Run single test files with `npm test path/to/test.test.tsx`.
+- **Vitest**: Run single test files with `npm test path/to/test.test.tsx`, or run the full suite with capped workers matching CI (`npx vitest run --maxWorkers=2` or `npm test` in `web/`).
 - **Implicit Vitest Imports**: Always import Vitest functions explicitly:
   `import { describe, it, expect, beforeEach, vi } from 'vitest';`
 - **Mock Setup**: Update `web/src/test/apiMocks.ts` whenever shared settings or notification types are modified.
@@ -107,4 +128,6 @@
 - **GCP Project**: Cloud Logging and Firestore run under project `raterudder` (`projects/raterudder`).
 - **Polling Interval**: RateRudder site updates (`/api/updateSites`) run every **20 minutes** (not every 5 minutes; do not confuse 5-minute utility price feeds or cache TTLs with the control loop interval).
 - **Site Debugging Skill**: Use the `debug-site` skill (`cmd/inspectsite` and `cmd/replayplan`) to inspect site settings, action history, cloud logs, and re-run `controller.Plan` across historical polls.
+- **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files. Before committing fixture updates or site debugging changes, install the pre-commit hook (`./scripts/setup-hooks.sh`), verify `gitleaks git --pre-commit --staged --config .gitleaks.toml --redact` and `gitleaks dir --config .gitleaks.toml --redact` exit `0`, and run `go test ./pkg/controller -run "^TestFixturePrivacy$"` (`cmd/fetchhistory` maps sites to synthetic `site<N>` IDs and rounds weather `latitude`/`longitude` to 2 decimal places).
+- **Event Analytics Skill**: Use the `query-events` skill (`.agents/skills/query-events/SKILL.md`, event catalog in `pkg/server/events.go`) to query and aggregate structured `jsonPayload.event` logs in Cloud Logging.
 - **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files.

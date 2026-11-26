@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -663,6 +664,9 @@ func TestOpenMeteoService(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping integration test in short mode")
 		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("Skipping integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
+		}
 
 		geoURL, parseErr := url.Parse("https://geocoding-api.open-meteo.com/v1/search")
 		require.NoError(t, parseErr)
@@ -686,6 +690,9 @@ func TestOpenMeteoService(t *testing.T) {
 	t.Run("Integration_RealAPI_FetchWeatherForecast", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping integration test in short mode")
+		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("Skipping integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
 		}
 
 		loc, err := time.LoadLocation("America/Los_Angeles")
