@@ -13,4 +13,4 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 1
 fi
 
-exec gitleaks git --pre-commit --staged --config .gitleaks.toml --redact
+exec gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --verbose
