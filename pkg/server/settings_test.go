@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -20,10 +23,29 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
+
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func TestHandleGetSettings(t *testing.T) {
 	mockU := &mockUtility{}
@@ -1759,6 +1781,370 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockW.AssertExpectations(t))
+	})
+
+	t.Run("Update Location - Rejects Invalid and Oversized Inputs Early", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+		}
+
+		postSettings := func(countryCode, postalCode string) *httptest.ResponseRecorder {
+			payload, err := json.Marshal(map[string]any{
+				"countryCode":        countryCode,
+				"postalCode":         postalCode,
+				"solarTrendRatioMax": 3,
+			})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(payload))
+			req = withUser(req, "test@test.com", true)
+			rec := httptest.NewRecorder()
+			srv.handleUpdateSettings(rec, req)
+			return rec
+		}
+
+		recOversized := postSettings("US", strings.Repeat("%", 400000))
+		assert.Equal(t, http.StatusBadRequest, recOversized.Code)
+		assert.Contains(t, recOversized.Body.String(), "postal code")
+
+		recCtrlPostal := postSettings("US", "60601\n")
+		assert.Equal(t, http.StatusBadRequest, recCtrlPostal.Code)
+		assert.Contains(t, recCtrlPostal.Body.String(), "control characters")
+
+		recCtrlCountry := postSettings("U\x00", "60601")
+		assert.Equal(t, http.StatusBadRequest, recCtrlCountry.Code)
+		assert.Contains(t, recCtrlCountry.Body.String(), "control characters")
+
+		recLongCountry := postSettings("USA1", "60601")
+		assert.Equal(t, http.StatusBadRequest, recLongCountry.Code)
+		assert.Contains(t, recLongCountry.Body.String(), "country code")
+
+		mockS.AssertNotCalled(t, "GetSettings", mock.Anything, mock.Anything)
+		mockW.AssertNotCalled(t, "Location", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("Update Location - Allows International Alphanumeric Postal Codes", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockW := &mockWeather{}
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+		}
+
+		loc := types.SiteLocation{
+			PostalCode:  "SW1A 1AA",
+			CountryCode: "GB",
+			Latitude:    51.5014,
+			Longitude:   -0.1419,
+			TimeZone:    "Europe/London",
+		}
+		mockW.On("Location", mock.Anything, "GB", "SW1A 1AA").Return(loc, nil).Once()
+		mockW.On("Forecast", mock.Anything, loc, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Once()
+		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.Location != nil && s.Location.PostalCode == "SW1A 1AA" && s.Location.CountryCode == "GB"
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		payload, err := json.Marshal(types.Settings{
+			CountryCode:        "GB",
+			PostalCode:         "SW1A 1AA",
+			SolarTrendRatioMax: 3,
+		})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(payload))
+		req = withUser(req, "test@test.com", true)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		// Also verify hyphenated postal codes (e.g. "K1A-0B1")
+		locHyphen := types.SiteLocation{
+			PostalCode:  "K1A-0B1",
+			CountryCode: "CA",
+			Latitude:    45.4215,
+			Longitude:   -75.6972,
+			TimeZone:    "America/Toronto",
+		}
+		mockW.On("Location", mock.Anything, "CA", "K1A-0B1").Return(locHyphen, nil).Once()
+		mockW.On("Forecast", mock.Anything, locHyphen, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Once()
+		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.Location != nil && s.Location.PostalCode == "K1A-0B1" && s.Location.CountryCode == "CA"
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		payloadHyphen, err := json.Marshal(types.Settings{
+			CountryCode:        "CA",
+			PostalCode:         "K1A-0B1",
+			SolarTrendRatioMax: 3,
+		})
+		require.NoError(t, err)
+		reqHyphen := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(payloadHyphen))
+		reqHyphen = withUser(reqHyphen, "test@test.com", true)
+		wHyphen := httptest.NewRecorder()
+		srv.handleUpdateSettings(wHyphen, reqHyphen)
+		require.Equal(t, http.StatusOK, wHyphen.Code, wHyphen.Body.String())
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockW.AssertExpectations(t))
+	})
+
+	t.Run("Update Location - Preserves No Location Found Message", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockW := &mockWeather{}
+		mockW.On("Location", mock.Anything, "US", "00000").Return(
+			types.SiteLocation{},
+			fmt.Errorf("%w for zip code 00000 and country code US", weather.ErrNoLocationFound),
+		).Once()
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+		}
+
+		payload, err := json.Marshal(types.Settings{
+			CountryCode:        "US",
+			PostalCode:         "00000",
+			SolarTrendRatioMax: 3,
+		})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(payload))
+		req = withUser(req, "test@test.com", true)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "no location found")
+	})
+
+	t.Run("Update Location - Redacts Weather API Keys Across HTTP2 TLS and Closed Port", func(t *testing.T) {
+		const (
+			gmapsMarker     = "FAKE_GMAPS_KEY_MARKER_9911"
+			openMeteoMarker = "FAKE_OPENMETEO_KEY_MARKER_8822"
+			siteID          = "site-weather-redact"
+		)
+
+		logBuf := &lockedLogBuffer{}
+		testLogger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		// Start a loopback HTTP/2 TLS server that aborts streams (triggering HTTP/2 *url.Error)
+		// and a closed loopback listener (triggering dial *url.Error).
+		h2Upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic(http.ErrAbortHandler)
+		}))
+		h2Upstream.EnableHTTP2 = true
+		h2Upstream.StartTLS()
+		defer h2Upstream.Close()
+
+		closedUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		closedBaseURL := closedUpstream.URL
+		closedClient := closedUpstream.Client()
+		closedUpstream.Close()
+
+		h2GeoURL, err := url.Parse(h2Upstream.URL + "/v4/geocode/address")
+		require.NoError(t, err)
+		h2TZURL, err := url.Parse(h2Upstream.URL + "/maps/api/timezone/json")
+		require.NoError(t, err)
+		closedGeoURL, err := url.Parse(closedBaseURL + "/v4/geocode/address")
+		require.NoError(t, err)
+		closedTZURL, err := url.Parse(closedBaseURL + "/maps/api/timezone/json")
+		require.NoError(t, err)
+		closedOMGeoURL, err := url.Parse(closedBaseURL + "/v1/search")
+		require.NoError(t, err)
+		closedOMForecastURL, err := url.Parse(closedBaseURL + "/v1/forecast")
+		require.NoError(t, err)
+
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetUser", mock.Anything, "admin-1").Return(types.User{
+			ID:            "admin-1",
+			Email:         "admin@example.com",
+			SessionSecret: "fake-sec-weather",
+			Sites:         []types.UserSite{{ID: siteID, Name: "Home"}},
+		}, nil)
+		mockS.On("GetSite", mock.Anything, siteID).Return(types.Site{
+			ID:          siteID,
+			Permissions: []types.SitePermissions{{UserID: "admin-1"}},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, siteID).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		omClosed := &weather.OpenMeteo{
+			GeocodingURL: closedOMGeoURL,
+			ForecastURL:  closedOMForecastURL,
+			HTTPClient:   closedClient,
+			APIKey:       openMeteoMarker,
+		}
+		gmapsH2 := &weather.GoogleGeocodingWrapper{
+			OpenMeteo:    omClosed,
+			APIKey:       gmapsMarker,
+			GeocodingURL: h2GeoURL,
+			TimezoneURL:  h2TZURL,
+			HTTPClient:   h2Upstream.Client(),
+		}
+
+		srv := &Server{
+			storage:              mockS,
+			weather:              gmapsH2,
+			adminEmails:          []string{"admin@example.com"},
+			oidcAudiences:        map[string]string{"google": "test-client"},
+			encryptionKey:        "12345678901234567890123456789012",
+			sessionEncryptionKey: "fake-session-key-123456789012345",
+			sessionDuration:      time.Hour,
+			release:              "production",
+			generalRateLimit:     rate.Inf,
+			generalBurst:         100,
+			sensitiveRateLimit:   rate.Inf,
+			sensitiveBurst:       100,
+		}
+
+		sessionToken, err := srv.createSessionToken("admin-1", "admin@example.com", "fake-sec-weather", time.Hour)
+		require.NoError(t, err)
+
+		apiServer := httptest.NewUnstartedServer(srv.setupHandler())
+		apiServer.Config.BaseContext = func(net.Listener) context.Context {
+			return log.With(context.Background(), testLogger)
+		}
+		apiServer.Start()
+		defer apiServer.Close()
+
+		reqWithSessionCookie := func(method, targetURL string, payload []byte) *http.Request {
+			req, reqErr := http.NewRequest(method, targetURL, bytes.NewReader(payload))
+			require.NoError(t, reqErr)
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+			return req
+		}
+
+		// 1. Oversized postalCode against loopback HTTP/2 TLS Google geocoder
+		oversizedPayload, err := json.Marshal(map[string]any{
+			"countryCode":        "US",
+			"postalCode":         strings.Repeat("%", 400000),
+			"solarTrendRatioMax": 3,
+		})
+		require.NoError(t, err)
+		resp1, err := apiServer.Client().Do(reqWithSessionCookie(http.MethodPost, apiServer.URL+"/api/settings?siteID="+siteID, oversizedPayload))
+		require.NoError(t, err)
+		body1, err := io.ReadAll(resp1.Body)
+		_ = resp1.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp1.StatusCode)
+		assert.NotContains(t, string(body1), gmapsMarker)
+		assert.NotContains(t, string(body1), openMeteoMarker)
+
+		// 2. Valid postalCode ("60601") against loopback HTTP/2 TLS stream error
+		validPayload, err := json.Marshal(map[string]any{
+			"countryCode":        "US",
+			"postalCode":         "60601",
+			"solarTrendRatioMax": 3,
+		})
+		require.NoError(t, err)
+		respH2, err := apiServer.Client().Do(reqWithSessionCookie(http.MethodPost, apiServer.URL+"/api/settings?siteID="+siteID, validPayload))
+		require.NoError(t, err)
+		bodyH2, err := io.ReadAll(respH2.Body)
+		_ = respH2.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, respH2.StatusCode)
+		assert.Contains(t, string(bodyH2), "failed to fetch location data")
+		assert.NotContains(t, string(bodyH2), gmapsMarker)
+		assert.NotContains(t, string(bodyH2), openMeteoMarker)
+		assert.NotContains(t, string(bodyH2), h2Upstream.URL)
+
+		// 3. Valid postalCode ("60601") against closed loopback port with GoogleGeocodingWrapper
+		srv.weather = &weather.GoogleGeocodingWrapper{
+			OpenMeteo:    omClosed,
+			APIKey:       gmapsMarker,
+			GeocodingURL: closedGeoURL,
+			TimezoneURL:  closedTZURL,
+			HTTPClient:   closedClient,
+		}
+		resp2, err := apiServer.Client().Do(reqWithSessionCookie(http.MethodPost, apiServer.URL+"/api/settings?siteID="+siteID, validPayload))
+		require.NoError(t, err)
+		body2, err := io.ReadAll(resp2.Body)
+		_ = resp2.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp2.StatusCode)
+		assert.Contains(t, string(body2), "failed to fetch location data")
+		assert.NotContains(t, string(body2), gmapsMarker)
+		assert.NotContains(t, string(body2), openMeteoMarker)
+		assert.NotContains(t, string(body2), closedBaseURL)
+
+		// 4. Valid postalCode ("60601") against closed loopback port with OpenMeteo directly
+		srv.weather = omClosed
+		resp3, err := apiServer.Client().Do(reqWithSessionCookie(http.MethodPost, apiServer.URL+"/api/settings?siteID="+siteID, validPayload))
+		require.NoError(t, err)
+		body3, err := io.ReadAll(resp3.Body)
+		_ = resp3.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp3.StatusCode)
+		assert.Contains(t, string(body3), "failed to fetch location data")
+		assert.NotContains(t, string(body3), gmapsMarker)
+		assert.NotContains(t, string(body3), openMeteoMarker)
+
+		// 5. Geocoding succeeds while Forecast fails in updateWeatherHistory: Open-Meteo key must not leak in logs
+		okGeoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v4/geocode/address" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"results": []map[string]any{
+						{
+							"postalAddress": map[string]any{"locality": "Chicago"},
+							"location":      map[string]any{"latitude": 41.8818, "longitude": -87.6231},
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/maps/api/timezone/json" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status":     "OK",
+					"timeZoneId": "America/Chicago",
+				})
+				return
+			}
+		}))
+		defer okGeoServer.Close()
+
+		okGeoURL, err := url.Parse(okGeoServer.URL + "/v4/geocode/address")
+		require.NoError(t, err)
+		okTZURL, err := url.Parse(okGeoServer.URL + "/maps/api/timezone/json")
+		require.NoError(t, err)
+
+		mockS.On("GetLatestWeatherTime", mock.Anything, siteID).Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockS.On("GetWeather", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, siteID, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("SetSettings", mock.Anything, siteID, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		srv.weather = &weather.GoogleGeocodingWrapper{
+			OpenMeteo:    omClosed,
+			APIKey:       gmapsMarker,
+			GeocodingURL: okGeoURL,
+			TimezoneURL:  okTZURL,
+			HTTPClient:   okGeoServer.Client(),
+		}
+		resp4, err := apiServer.Client().Do(reqWithSessionCookie(http.MethodPost, apiServer.URL+"/api/settings?siteID="+siteID, validPayload))
+		require.NoError(t, err)
+		body4, err := io.ReadAll(resp4.Body)
+		_ = resp4.Body.Close()
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp4.StatusCode)
+		assert.NotContains(t, string(body4), gmapsMarker)
+		assert.NotContains(t, string(body4), openMeteoMarker)
+
+		loggedOutput := logBuf.String()
+		assert.NotEmpty(t, loggedOutput)
+		assert.NotContains(t, loggedOutput, gmapsMarker)
+		assert.NotContains(t, loggedOutput, openMeteoMarker)
+		assert.Contains(t, loggedOutput, "failed to sync weather history after settings update")
+		assert.Contains(t, loggedOutput, "REDACTED")
 	})
 
 	t.Run("ESS Rate Limit First Retry Allowed (200)", func(t *testing.T) {

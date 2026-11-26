@@ -179,7 +179,7 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Synthetic test secrets/keys prefixed with MOCK_, FAKE_, mock-, or fake- in unit tests"
+description = "Synthetic test secrets/keys prefixed with MOCK_, FAKE_, DUMMY_, mock-, fake-, or dummy- in unit tests"
 condition = "AND"
 paths = [
   '''_test\.go$''',
@@ -188,7 +188,7 @@ paths = [
 ]
 regexTarget = "secret"
 regexes = [
-  '''^(?:MOCK_|FAKE_|mock-|fake-)[A-Za-z0-9_-]+$''',
+  '''^(?:MOCK_|FAKE_|DUMMY_|mock-|fake-|dummy-)[A-Za-z0-9_-]+$''',
 ]
 
 [[allowlists]]

@@ -658,6 +658,67 @@ func TestOpenMeteoService(t *testing.T) {
 			_, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
 			require.NoError(t, err)
 		})
+
+		t.Run("Location transport error redacts APIKey and preserves Unwrap", func(t *testing.T) {
+			secretKey := "FAKE_OPENMETEO_KEY_MARKER_8822"
+			closedTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+			closedURL := closedTS.URL
+			closedClient := closedTS.Client()
+			closedTS.Close()
+
+			geoURL, err := url.Parse(closedURL + "/v1/search")
+			require.NoError(t, err)
+
+			s := &OpenMeteo{
+				GeocodingURL: geoURL,
+				HTTPClient:   closedClient,
+				APIKey:       secretKey,
+			}
+
+			_, err = s.Location(context.Background(), "US", "60601")
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), secretKey)
+			assert.Contains(t, err.Error(), "apikey=REDACTED")
+			assert.True(t, isTransientOpenMeteoErr(err))
+
+			_, err = s.Location(context.Background(), "US", strings.Repeat("%", 400000))
+			require.ErrorIs(t, err, ErrInvalidLocation)
+			assert.NotContains(t, err.Error(), secretKey)
+		})
+
+		t.Run("Forecast transport error redacts APIKey and preserves Unwrap", func(t *testing.T) {
+			secretKey := "FAKE_OPENMETEO_KEY_MARKER_8822"
+			slowTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				<-r.Context().Done()
+			}))
+			defer slowTS.Close()
+
+			forecastURL, err := url.Parse(slowTS.URL + "/v1/forecast")
+			require.NoError(t, err)
+
+			s := &OpenMeteo{
+				ForecastURL: forecastURL,
+				HTTPClient:  slowTS.Client(),
+				APIKey:      secretKey,
+			}
+
+			timezone := "America/Los_Angeles"
+			loc, err := time.LoadLocation(timezone)
+			require.NoError(t, err)
+			targetDay := time.Now().In(loc)
+			startDay := targetDay.AddDate(0, 0, -1)
+			endDay := targetDay.AddDate(0, 0, 1)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+
+			_, err = s.Forecast(ctx, types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), secretKey)
+			assert.Contains(t, err.Error(), "apikey=REDACTED")
+			assert.True(t, errors.Is(err, context.DeadlineExceeded))
+			assert.True(t, isTransientOpenMeteoErr(err))
+		})
 	})
 
 	t.Run("Integration_RealAPI_GetLocationData", func(t *testing.T) {
