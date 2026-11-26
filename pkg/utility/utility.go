@@ -209,7 +209,7 @@ func (m *Map) buildUtility(ctx context.Context, siteID string, settings types.Se
 			}
 		}
 	case "octopus":
-		if settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && m.baseOctopus != nil {
+		if octopusSupportsGenerationRate(settings.UtilityRate) && settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && m.baseOctopus != nil {
 			regionProvider, err := m.baseOctopus.Region(settings.UtilityRateOptions.Location)
 			if err != nil {
 				return nil, err
