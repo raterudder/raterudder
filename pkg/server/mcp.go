@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -192,6 +194,57 @@ func mcpSiteID(ctx context.Context) string {
 	return siteID
 }
 
+func parseAcceptWeight(params []string) float64 {
+	weight := 1.0
+	seenQ := false
+	for _, rawParam := range params {
+		param := strings.TrimSpace(rawParam)
+		if param == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(param, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+			continue
+		}
+		if seenQ {
+			return 0
+		}
+		seenQ = true
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil || math.IsNaN(parsed) || parsed <= 0 || parsed > 1 {
+			return 0
+		}
+		weight = parsed
+	}
+	return weight
+}
+
+func inspectMCPAccept(acceptHeaders []string) (acceptsHTML, rejectsHTML, hasEventStream bool) {
+	for _, headerVal := range acceptHeaders {
+		for _, rawPart := range strings.Split(headerVal, ",") {
+			part := strings.TrimSpace(rawPart)
+			if part == "" {
+				continue
+			}
+			segments := strings.Split(part, ";")
+			mediaRange := strings.ToLower(strings.TrimSpace(segments[0]))
+			if mediaRange == "text/event-stream" {
+				hasEventStream = true
+				continue
+			}
+			if mediaRange != "text/html" {
+				continue
+			}
+			if parseAcceptWeight(segments[1:]) > 0 {
+				acceptsHTML = true
+			} else {
+				rejectsHTML = true
+			}
+		}
+	}
+	return acceptsHTML, rejectsHTML, hasEventStream
+}
+
 func isMCPBrowserNavigation(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
@@ -206,8 +259,19 @@ func isMCPBrowserNavigation(r *http.Request) bool {
 	}
 
 	secFetchMode := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Mode")))
+	if secFetchMode != "" && secFetchMode != "navigate" {
+		return false
+	}
 	secFetchDest := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
-	return secFetchMode == "navigate" || secFetchDest == "document"
+	if secFetchDest != "" && secFetchDest != "document" {
+		return false
+	}
+
+	acceptsHTML, rejectsHTML, hasEventStream := inspectMCPAccept(r.Header.Values("Accept"))
+	if hasEventStream || (rejectsHTML && !acceptsHTML) {
+		return false
+	}
+	return secFetchMode == "navigate" || secFetchDest == "document" || acceptsHTML
 }
 
 func (s *Server) mcpRouteHandler() http.Handler {
@@ -244,6 +308,7 @@ func (s *Server) handleMCPHelpPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Add("Vary", "Accept")
 	w.Header().Add("Vary", "Sec-Fetch-Mode")
 	w.Header().Add("Vary", "Sec-Fetch-Dest")
 	w.WriteHeader(http.StatusOK)

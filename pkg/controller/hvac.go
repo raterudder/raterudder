@@ -352,8 +352,9 @@ func detectSingleHVACMode(
 			}
 		}
 		r, slopeKWHPerC, interceptKWH := linearRegression(xsHr[hr], ysHr[hr])
-		standaloneNightOK := !isNighttimeEVHour(hr) || floorPercentileSortedOrCopy(activeLoadsHr[hr], hourlyOutlierBaselinePercentile) >= p.standaloneNightMinActiveP30KWH
-		standaloneMatch := standaloneNightOK && r >= p.hourMinCorrR && slopeKWHPerC >= p.hourMinSlopeKWHPerC && activeMedKWH >= p.minActiveMedianKWH
+		standaloneHourOK := !p.isCold || hr <= 9
+		standaloneP30OK := (!p.isCold && !isNighttimeEVHour(hr)) || floorPercentileSortedOrCopy(activeLoadsHr[hr], hourlyOutlierBaselinePercentile) >= p.standaloneNightMinActiveP30KWH
+		standaloneMatch := standaloneHourOK && standaloneP30OK && r >= p.hourMinCorrR && slopeKWHPerC >= p.hourMinSlopeKWHPerC && activeMedKWH >= p.minActiveMedianKWH
 		windowConfirmedMatch := windowDetected && r >= p.confirmedHourMinCorrR && slopeKWHPerC >= p.confirmedHourMinSlopeKWHPerC
 		if standaloneMatch || windowConfirmedMatch {
 			hourActive[hr] = true

@@ -1,12 +1,14 @@
 package utility
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +25,9 @@ import (
 
 const (
 	// Eversource VPP defines on-peak hours as 12:00 PM to 8:00 PM (hours 12 to 20) on weekdays.
-	eversourceVPPOnPeakStartHour = 12
-	eversourceVPPOnPeakEndHour   = 20
+	eversourceVPPOnPeakStartHour      = 12
+	eversourceVPPOnPeakEndHour        = 20
+	eversourceVPPHistoryFetchCooldown = 15 * time.Minute
 )
 
 type vppDailyRate struct {
@@ -37,10 +40,19 @@ type baseEversourceVPP struct {
 	vppHistoryURL string
 	client        *http.Client
 	db            storage.Database
+	nowFunc       func() time.Time
 
-	mu           sync.Mutex
-	cachedPrices map[string][]types.Price // key: YYYY-MM-DD
-	sfGroup      singleflight.Group
+	mu               sync.Mutex
+	cachedPrices     map[string][]types.Price // key: YYYY-MM-DD
+	lastHistoryFetch time.Time
+	sfGroup          singleflight.Group
+}
+
+func (c *baseEversourceVPP) now() time.Time {
+	if c.nowFunc != nil {
+		return c.nowFunc()
+	}
+	return time.Now()
 }
 
 func configuredEversourceVPP(db storage.Database) *baseEversourceVPP {
@@ -116,29 +128,372 @@ func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.Uti
 	}, nil
 }
 
-// parseVPPHistory parses raw HTML from Eversource's VPP history page and extracts
-// daily rates found across month tables. If targetStart or targetEnd are provided (non-zero),
-// parsing will filter to dates in [targetStart, targetEnd] and short-circuit early once older dates are encountered.
-func parseVPPHistory(ctx context.Context, r io.Reader, targetStart, targetEnd time.Time) ([]vppDailyRate, error) {
-	doc, err := html.Parse(r)
-	if err != nil {
-		return nil, err
+type vppHeaderCell struct {
+	text    string
+	colspan int
+}
+
+type vppTableSection int
+
+const (
+	vppSectionNone vppTableSection = iota
+	vppSectionThead
+	vppSectionTbody
+	vppSectionTfoot
+)
+
+type vppTableState struct {
+	hasThead        bool
+	skipTable       bool
+	checkedSample   bool
+	headerValidated bool
+	resOnPeakCol    int
+	resOffPeakCol   int
+
+	section       vppTableSection
+	inRow         bool
+	skipRow       bool
+	rowCellCount  int
+	rowDate       time.Time
+	rowDateStr    string
+	rowOnPeakStr  string
+	rowOffPeakStr string
+
+	inCell      bool
+	captureCell bool
+	cellColspan int
+	cellBuf     []byte
+
+	theadRows   [][]vppHeaderCell
+	currHeadRow []vppHeaderCell
+}
+
+func (t *vppTableState) validateHeaders(ctx context.Context) {
+	if t.headerValidated || t.skipTable {
+		return
+	}
+	if len(t.theadRows) < 2 {
+		t.skipTable = true
+		return
 	}
 
-	var rates []vppDailyRate
-	// Recursively traverse the DOM tree to locate all <table> elements.
-	var parseTable func(*html.Node)
-	parseTable = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "table" {
-			ratesFromTable := parseSingleVPPTable(ctx, n, targetStart, targetEnd)
-			rates = append(rates, ratesFromTable...)
+	categoryRow := t.theadRows[0]
+	subCategoryRow := t.theadRows[1]
+
+	t.resOnPeakCol = -1
+	t.resOffPeakCol = -1
+	foundResidential := false
+
+	currCol := 0
+	for _, cell := range categoryRow {
+		if strings.EqualFold(cell.text, "residential") {
+			foundResidential = true
+			subCol := 0
+			for _, subCell := range subCategoryRow {
+				if subCol >= currCol && subCol < currCol+cell.colspan {
+					if strings.EqualFold(subCell.text, "on-peak") || strings.EqualFold(subCell.text, "on peak") {
+						t.resOnPeakCol = subCol
+					} else if strings.EqualFold(subCell.text, "off-peak") || strings.EqualFold(subCell.text, "off peak") {
+						t.resOffPeakCol = subCol
+					}
+				}
+				subCol += subCell.colspan
+			}
+			break
 		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			parseTable(c)
+		currCol += cell.colspan
+	}
+
+	if !foundResidential {
+		log.Ctx(ctx).WarnContext(ctx, "failed to find residential category header in eversource vpp table")
+		t.skipTable = true
+		return
+	}
+
+	if t.resOnPeakCol < 0 || t.resOffPeakCol < 0 {
+		log.Ctx(ctx).WarnContext(
+			ctx,
+			"failed to find on-peak or off-peak sub-header for residential in eversource vpp table",
+			slog.Int("onPeakCol", t.resOnPeakCol),
+			slog.Int("offPeakCol", t.resOffPeakCol),
+		)
+		t.skipTable = true
+		return
+	}
+
+	t.headerValidated = true
+}
+
+func (t *vppTableState) flushCell(ctx context.Context, targetStart, targetEnd time.Time) {
+	if !t.inCell {
+		return
+	}
+	t.inCell = false
+	if !t.captureCell || t.skipTable {
+		return
+	}
+
+	trimmed := bytes.TrimSpace(t.cellBuf)
+	if t.section == vppSectionThead {
+		t.currHeadRow = append(t.currHeadRow, vppHeaderCell{
+			text:    string(trimmed),
+			colspan: t.cellColspan,
+		})
+		return
+	}
+
+	if t.section != vppSectionTbody || !t.headerValidated || t.skipRow {
+		return
+	}
+
+	colIdx := t.rowCellCount - 1
+	if colIdx == 0 {
+		dateStr := string(trimmed)
+		date, err := time.ParseInLocation("01/02/2006", dateStr, etLocation)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to parse date from eversource vpp row", slog.String("dateStr", dateStr), slog.Any("error", err))
+			t.skipRow = true
+			return
+		}
+
+		// Each table on Eversource's VPP history page corresponds to a single calendar month
+		// (e.g. June) containing multi-year rate history (2026, 2025, 2024, ...).
+		// Once we see the first valid date cell, skip the entire table if its month cannot overlap.
+		if !t.checkedSample {
+			t.checkedSample = true
+			if !monthOverlaps(date.Month(), targetStart, targetEnd) {
+				t.skipTable = true
+				return
+			}
+		}
+
+		if (!targetEnd.IsZero() && date.After(targetEnd)) || (!targetStart.IsZero() && date.Before(targetStart)) {
+			t.skipRow = true
+			return
+		}
+
+		t.rowDate = date
+		t.rowDateStr = dateStr
+		return
+	}
+
+	if colIdx == t.resOnPeakCol {
+		t.rowOnPeakStr = string(trimmed)
+	}
+	if colIdx == t.resOffPeakCol {
+		t.rowOffPeakStr = string(trimmed)
+	}
+}
+
+func (t *vppTableState) flushRow(ctx context.Context, targetStart, targetEnd time.Time, rates *[]vppDailyRate) {
+	if !t.inRow {
+		return
+	}
+	t.flushCell(ctx, targetStart, targetEnd)
+	t.inRow = false
+
+	if t.section == vppSectionThead {
+		rowCopy := make([]vppHeaderCell, len(t.currHeadRow))
+		copy(rowCopy, t.currHeadRow)
+		t.theadRows = append(t.theadRows, rowCopy)
+		t.currHeadRow = t.currHeadRow[:0]
+		return
+	}
+
+	if t.section != vppSectionTbody || !t.headerValidated || t.skipTable || t.skipRow || t.rowCellCount == 0 {
+		return
+	}
+
+	if t.rowCellCount <= t.resOnPeakCol || t.rowCellCount <= t.resOffPeakCol {
+		log.Ctx(ctx).WarnContext(
+			ctx,
+			"row matching target date has insufficient cells for residential on-peak/off-peak prices",
+			slog.String("dateStr", t.rowDateStr),
+			slog.Int("numCells", t.rowCellCount),
+			slog.Int("onPeakCol", t.resOnPeakCol),
+			slog.Int("offPeakCol", t.resOffPeakCol),
+		)
+		return
+	}
+
+	onPeakDollarsPerKWH, err1 := strconv.ParseFloat(t.rowOnPeakStr, 64)
+	offPeakDollarsPerKWH, err2 := strconv.ParseFloat(t.rowOffPeakStr, 64)
+	if err1 != nil || err2 != nil {
+		log.Ctx(ctx).WarnContext(
+			ctx,
+			"failed to parse prices from eversource vpp row",
+			slog.String("dateStr", t.rowDateStr),
+			slog.String("onPeakStr", t.rowOnPeakStr),
+			slog.String("offPeakStr", t.rowOffPeakStr),
+			slog.Any("errOnPeak", err1),
+			slog.Any("errOffPeak", err2),
+		)
+		return
+	}
+
+	*rates = append(*rates, vppDailyRate{
+		date:         t.rowDate,
+		onPeakPrice:  onPeakDollarsPerKWH,
+		offPeakPrice: offPeakDollarsPerKWH,
+	})
+}
+
+// parseVPPHistory streams HTML tokens from Eversource's VPP history page and extracts
+// daily rates found across month tables without building a full DOM tree. If targetStart
+// or targetEnd are provided (non-zero), non-overlapping month tables are skipped after
+// their first date row and rows are filtered to [targetStart, targetEnd].
+func parseVPPHistory(ctx context.Context, r io.Reader, targetStart, targetEnd time.Time) ([]vppDailyRate, error) {
+	z := html.NewTokenizer(r)
+
+	var rates []vppDailyRate
+	var stack []vppTableState
+
+	tagTable := []byte("table")
+	tagThead := []byte("thead")
+	tagTbody := []byte("tbody")
+	tagTfoot := []byte("tfoot")
+	tagTr := []byte("tr")
+	tagTh := []byte("th")
+	tagTd := []byte("td")
+	attrColspan := []byte("colspan")
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			err := z.Err()
+			if err == io.EOF {
+				for i := len(stack) - 1; i >= 0; i-- {
+					stack[i].flushRow(ctx, targetStart, targetEnd, &rates)
+				}
+				return rates, nil
+			}
+			return nil, err
+
+		case html.StartTagToken:
+			tn, hasAttr := z.TagName()
+			if bytes.Equal(tn, tagTable) {
+				skip := len(stack) > 0 && stack[len(stack)-1].skipTable
+				stack = append(stack, vppTableState{
+					skipTable:     skip,
+					resOnPeakCol:  -1,
+					resOffPeakCol: -1,
+				})
+				continue
+			}
+
+			if len(stack) == 0 {
+				continue
+			}
+			t := &stack[len(stack)-1]
+			if t.skipTable {
+				continue
+			}
+
+			switch {
+			case bytes.Equal(tn, tagThead):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				t.hasThead = true
+				t.section = vppSectionThead
+
+			case bytes.Equal(tn, tagTbody):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				t.section = vppSectionTbody
+				if t.hasThead {
+					t.validateHeaders(ctx)
+				}
+
+			case bytes.Equal(tn, tagTfoot):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				t.section = vppSectionTfoot
+
+			case bytes.Equal(tn, tagTr):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				if t.hasThead && t.section == vppSectionNone {
+					t.section = vppSectionTbody
+					t.validateHeaders(ctx)
+				}
+				if t.section == vppSectionThead || (t.section == vppSectionTbody && t.headerValidated && !t.skipTable) {
+					t.inRow = true
+					t.skipRow = false
+					t.rowCellCount = 0
+					t.rowDate = time.Time{}
+					t.rowDateStr = ""
+					t.rowOnPeakStr = ""
+					t.rowOffPeakStr = ""
+				}
+
+			case bytes.Equal(tn, tagTh) || bytes.Equal(tn, tagTd):
+				if !t.inRow {
+					continue
+				}
+				t.flushCell(ctx, targetStart, targetEnd)
+				if t.skipTable {
+					continue
+				}
+				colIdx := t.rowCellCount
+				t.rowCellCount++
+				t.inCell = true
+				t.cellColspan = 1
+				t.cellBuf = t.cellBuf[:0]
+				if t.section == vppSectionThead {
+					t.captureCell = true
+					if hasAttr {
+						for {
+							key, val, more := z.TagAttr()
+							if bytes.EqualFold(key, attrColspan) {
+								if v, err := strconv.Atoi(strings.TrimSpace(string(val))); err == nil && v > 0 {
+									t.cellColspan = v
+								}
+							}
+							if !more {
+								break
+							}
+						}
+					}
+				} else if t.section == vppSectionTbody {
+					t.captureCell = !t.skipRow && (colIdx == 0 || colIdx == t.resOnPeakCol || colIdx == t.resOffPeakCol)
+				} else {
+					t.captureCell = false
+				}
+			}
+
+		case html.TextToken:
+			if len(stack) == 0 {
+				continue
+			}
+			t := &stack[len(stack)-1]
+			if t.inCell && t.captureCell && !t.skipTable {
+				t.cellBuf = append(t.cellBuf, z.Text()...)
+			}
+
+		case html.EndTagToken:
+			if len(stack) == 0 {
+				continue
+			}
+			tn, _ := z.TagName()
+			t := &stack[len(stack)-1]
+
+			if bytes.Equal(tn, tagTable) {
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			if t.skipTable {
+				continue
+			}
+
+			switch {
+			case bytes.Equal(tn, tagTh) || bytes.Equal(tn, tagTd):
+				t.flushCell(ctx, targetStart, targetEnd)
+			case bytes.Equal(tn, tagTr):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+			case bytes.Equal(tn, tagThead) || bytes.Equal(tn, tagTbody) || bytes.Equal(tn, tagTfoot):
+				t.flushRow(ctx, targetStart, targetEnd, &rates)
+				t.section = vppSectionNone
+			}
 		}
 	}
-	parseTable(doc)
-	return rates, nil
 }
 
 // monthOverlaps returns true if sampleMonth matches any month in the target range [targetStart, targetEnd].
@@ -166,246 +521,144 @@ func monthOverlaps(sampleMonth time.Month, targetStart, targetEnd time.Time) boo
 	return false
 }
 
-// parseSingleVPPTable parses a single <table> node from the VPP history HTML.
-// Each table on Eversource's VPP history page corresponds to a single calendar month
-// (e.g. June) containing multi-year rate history (2026, 2025, 2024, ...).
-func parseSingleVPPTable(ctx context.Context, tableNode *html.Node, targetStart, targetEnd time.Time) []vppDailyRate {
-	// Locate <thead> and <tbody> sections within the table.
-	var thead *html.Node
-	var tbody *html.Node
-	for c := tableNode.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode {
-			if c.Data == "thead" {
-				thead = c
-			} else if c.Data == "tbody" {
-				tbody = c
-			}
-		}
-	}
-	if thead == nil || tbody == nil {
-		return nil
-	}
-
-	// Extract header rows (tr elements in <thead>).
-	// Row 0 defines top-level categories (e.g. Date, Last Resort, Residential).
-	// Row 1 defines sub-categories (e.g. On-Peak, Off-Peak for each rate class).
-	var trs []*html.Node
-	for c := thead.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode && c.Data == "tr" {
-			trs = append(trs, c)
-		}
-	}
-	if len(trs) < 2 {
-		return nil
-	}
-
-	categoryRowCells := getHTMLCells(trs[0])
-	subCategoryRowCells := getHTMLCells(trs[1])
-
-	resOnPeakCol := -1
-	resOffPeakCol := -1
-	foundResidential := false
-
-	// Track the current column offset by accounting for cell colspans.
-	currCol := 0
-	for _, cell := range categoryRowCells {
-		text := strings.TrimSpace(getHTMLText(cell))
-		colspan := getHTMLColspan(cell)
-
-		// Look for the "Residential" header block.
-		if strings.EqualFold(text, "residential") {
-			foundResidential = true
-			// Scan the sub-category row within the column range covered by this cell.
-			for subCol := currCol; subCol < currCol+colspan && subCol < len(subCategoryRowCells); subCol++ {
-				subText := strings.TrimSpace(getHTMLText(subCategoryRowCells[subCol]))
-				if strings.EqualFold(subText, "on-peak") || strings.EqualFold(subText, "on peak") {
-					resOnPeakCol = subCol
-				} else if strings.EqualFold(subText, "off-peak") || strings.EqualFold(subText, "off peak") {
-					resOffPeakCol = subCol
-				}
-			}
-			break
-		}
-		currCol += colspan
-	}
-
-	if !foundResidential {
-		log.Ctx(ctx).WarnContext(ctx, "failed to find residential category header in eversource vpp table")
-		return nil
-	}
-
-	// Return early if the Residential On-Peak or Off-Peak column indices were not found.
-	if resOnPeakCol < 0 || resOffPeakCol < 0 {
-		log.Ctx(ctx).WarnContext(
-			ctx,
-			"failed to find on-peak or off-peak sub-header for residential in eversource vpp table",
-			slog.Int("onPeakCol", resOnPeakCol),
-			slog.Int("offPeakCol", resOffPeakCol),
-		)
-		return nil
-	}
-
-	var results []vppDailyRate
-	var sampleDate time.Time
-	var foundSampleDate bool
-
-	// Sample the first valid date row to determine the table's calendar month.
-	// Each table on Eversource's page represents a single month (e.g. June) spanning multiple years.
-	// If the table's month does not fall within [targetStart, targetEnd], we can skip the entire table.
-	for tr := tbody.FirstChild; tr != nil; tr = tr.NextSibling {
-		if tr.Type != html.ElementNode || tr.Data != "tr" {
-			continue
-		}
-		cells := getHTMLCells(tr)
-		if len(cells) > 0 {
-			dateStr := strings.TrimSpace(getHTMLText(cells[0]))
-			if d, err := time.ParseInLocation("01/02/2006", dateStr, etLocation); err == nil {
-				sampleDate = d
-				foundSampleDate = true
-				break
-			}
-		}
-	}
-
-	// Bail out early if the table's month does not overlap with targetStart..targetEnd.
-	if foundSampleDate && !monthOverlaps(sampleDate.Month(), targetStart, targetEnd) {
-		return nil
-	}
-
-	// Iterate through data rows in <tbody> to extract dates and prices.
-	for tr := tbody.FirstChild; tr != nil; tr = tr.NextSibling {
-		if tr.Type != html.ElementNode || tr.Data != "tr" {
-			continue
-		}
-		cells := getHTMLCells(tr)
-		if len(cells) == 0 {
-			continue
-		}
-
-		// Column 0 contains the effective date string (MM/DD/YYYY).
-		dateStr := strings.TrimSpace(getHTMLText(cells[0]))
-		date, err := time.ParseInLocation("01/02/2006", dateStr, etLocation)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to parse date from eversource vpp row", slog.String("dateStr", dateStr), slog.Any("error", err))
-			continue
-		}
-
-		// Filter out dates outside [targetStart, targetEnd].
-		if (!targetEnd.IsZero() && date.After(targetEnd)) || (!targetStart.IsZero() && date.Before(targetStart)) {
-			// we skip if date is outside the target range
-			// but we don't assume the table is sorted so we don't skip the rest of the table
-			continue
-		}
-
-		if len(cells) <= resOnPeakCol || len(cells) <= resOffPeakCol {
-			log.Ctx(ctx).WarnContext(
-				ctx,
-				"row matching target date has insufficient cells for residential on-peak/off-peak prices",
-				slog.String("dateStr", dateStr),
-				slog.Int("numCells", len(cells)),
-				slog.Int("onPeakCol", resOnPeakCol),
-				slog.Int("offPeakCol", resOffPeakCol),
-			)
-			continue
-		}
-
-		onPeakStr := strings.TrimSpace(getHTMLText(cells[resOnPeakCol]))
-		offPeakStr := strings.TrimSpace(getHTMLText(cells[resOffPeakCol]))
-
-		onPeakPrice, err1 := strconv.ParseFloat(onPeakStr, 64)
-		offPeakPrice, err2 := strconv.ParseFloat(offPeakStr, 64)
-		if err1 != nil || err2 != nil {
-			log.Ctx(ctx).WarnContext(
-				ctx,
-				"failed to parse prices from eversource vpp row",
-				slog.String("dateStr", dateStr),
-				slog.String("onPeakStr", onPeakStr),
-				slog.String("offPeakStr", offPeakStr),
-				slog.Any("errOnPeak", err1),
-				slog.Any("errOffPeak", err2),
-			)
-			continue
-		}
-
-		results = append(results, vppDailyRate{
-			date:         date,
-			onPeakPrice:  onPeakPrice,
-			offPeakPrice: offPeakPrice,
-		})
-	}
-
-	return results
-}
-
-// getHTMLCells returns all child <th> or <td> elements under a <tr> node.
-func getHTMLCells(trNode *html.Node) []*html.Node {
-	var cells []*html.Node
-	for c := trNode.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode && (c.Data == "th" || c.Data == "td") {
-			cells = append(cells, c)
-		}
-	}
-	return cells
-}
-
-// getHTMLText recursively extracts and concatenates all text content inside an HTML node.
-func getHTMLText(n *html.Node) string {
-	var sb strings.Builder
-	var f func(*html.Node)
-	f = func(node *html.Node) {
-		if node.Type == html.TextNode {
-			sb.WriteString(node.Data)
-		}
-		for c := node.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
-		}
-	}
-	f(n)
-	return sb.String()
-}
-
-// getHTMLColspan parses the "colspan" attribute of an HTML cell, defaulting to 1 if unspecified.
-func getHTMLColspan(n *html.Node) int {
-	for _, attr := range n.Attr {
-		if attr.Key == "colspan" {
-			v, err := strconv.Atoi(attr.Val)
-			if err == nil && v > 0 {
-				return v
-			}
-		}
-	}
-	return 1
-}
-
 func dailyRateToHourlyPrices(rate vppDailyRate) []types.Price {
-	prices := make([]types.Price, 24)
-	year, month, day := rate.date.Year(), rate.date.Month(), rate.date.Day()
-	weekday := rate.date.Weekday()
+	dateET := rate.date.In(etLocation)
+	dayStart := time.Date(dateET.Year(), dateET.Month(), dateET.Day(), 0, 0, 0, 0, etLocation)
+	dayEnd := dayStart.AddDate(0, 0, 1)
+	numHours := int(dayEnd.Sub(dayStart) / time.Hour)
+	prices := make([]types.Price, 0, numHours)
+
+	weekday := dayStart.Weekday()
 	isWeekday := weekday >= time.Monday && weekday <= time.Friday
 
-	for h := 0; h < 24; h++ {
-		tsStart := time.Date(year, month, day, h, 0, 0, 0, etLocation)
-		tsEnd := tsStart.Add(time.Hour)
+	for tsStart := dayStart; tsStart.Before(dayEnd); tsStart = tsStart.Add(time.Hour) {
+		tsStartET := tsStart.In(etLocation)
+		tsEnd := tsStartET.Add(time.Hour)
+		hour := tsStartET.Hour()
 
-		isOnPeak := isWeekday && h >= eversourceVPPOnPeakStartHour && h < eversourceVPPOnPeakEndHour
-		var priceVal float64
+		isOnPeak := isWeekday && hour >= eversourceVPPOnPeakStartHour && hour < eversourceVPPOnPeakEndHour
+		var priceDollarsPerKWH float64
 		var name string
 		if isOnPeak {
-			priceVal = rate.onPeakPrice
+			priceDollarsPerKWH = rate.onPeakPrice
 			name = "Eversource CT VPP On-Peak"
 		} else {
-			priceVal = rate.offPeakPrice
+			priceDollarsPerKWH = rate.offPeakPrice
 			name = "Eversource CT VPP Off-Peak"
 		}
 
-		prices[h] = types.Price{
-			TSStart:       tsStart,
+		prices = append(prices, types.Price{
+			TSStart:       tsStartET,
 			TSEnd:         tsEnd,
-			DollarsPerKWH: priceVal,
+			DollarsPerKWH: priceDollarsPerKWH,
 			PeriodName:    name,
-		}
+		})
 	}
 	return prices
+}
+
+func eversourceVPPHalfYearKey(t time.Time) int {
+	half := 0
+	if t.Month() >= time.July {
+		half = 1
+	}
+	return t.Year()*2 + half
+}
+
+func calendarDayDistance(a, b time.Time) int {
+	ua := time.Date(a.Year(), a.Month(), a.Day(), 0, 0, 0, 0, time.UTC)
+	ub := time.Date(b.Year(), b.Month(), b.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(ua.Sub(ub) / (24 * time.Hour))
+	if days < 0 {
+		return -days
+	}
+	return days
+}
+
+// fillEversourceVPPWeekendRates synthesizes missing Saturday and Sunday Off-Peak rates
+// in [targetStart, targetEnd] when vpphistory.aspx omits weekend rows. It copies offPeakPrice
+// from the nearest parsed weekday in the same semi-annual period (Jan-Jun or Jul-Dec),
+// falling back across half-year boundaries when needed, and preserves explicit weekend rows.
+func fillEversourceVPPWeekendRates(rates []vppDailyRate, targetStart, targetEnd time.Time) []vppDailyRate {
+	if len(rates) == 0 || targetStart.IsZero() || targetEnd.IsZero() {
+		return rates
+	}
+
+	startDay := truncateDay(targetStart.In(etLocation))
+	endDay := truncateDay(targetEnd.In(etLocation))
+	if startDay.After(endDay) {
+		return rates
+	}
+
+	existingDates := make(map[string]bool, len(rates))
+	var weekdayRates []vppDailyRate
+	for _, r := range rates {
+		day := truncateDay(r.date.In(etLocation))
+		existingDates[day.Format("2006-01-02")] = true
+		if wd := day.Weekday(); wd >= time.Monday && wd <= time.Friday {
+			weekdayRates = append(weekdayRates, vppDailyRate{
+				date:         day,
+				onPeakPrice:  r.onPeakPrice,
+				offPeakPrice: r.offPeakPrice,
+			})
+		}
+	}
+
+	if len(weekdayRates) == 0 {
+		return rates
+	}
+
+	slices.SortFunc(weekdayRates, func(a, b vppDailyRate) int {
+		return a.date.Compare(b.date)
+	})
+
+	out := make([]vppDailyRate, len(rates))
+	copy(out, rates)
+
+	for curr := startDay; !curr.After(endDay); curr = curr.AddDate(0, 0, 1) {
+		wd := curr.Weekday()
+		if wd != time.Saturday && wd != time.Sunday {
+			continue
+		}
+		if existingDates[curr.Format("2006-01-02")] {
+			continue
+		}
+
+		targetHalf := eversourceVPPHalfYearKey(curr)
+		var bestDonor vppDailyRate
+		foundSameHalf := false
+		bestDiff := 0
+
+		for _, w := range weekdayRates {
+			if eversourceVPPHalfYearKey(w.date) != targetHalf {
+				continue
+			}
+			diff := calendarDayDistance(curr, w.date)
+			if !foundSameHalf || diff < bestDiff {
+				foundSameHalf = true
+				bestDiff = diff
+				bestDonor = w
+			}
+		}
+
+		if !foundSameHalf {
+			for i, w := range weekdayRates {
+				diff := calendarDayDistance(curr, w.date)
+				if i == 0 || diff < bestDiff {
+					bestDiff = diff
+					bestDonor = w
+				}
+			}
+		}
+
+		out = append(out, vppDailyRate{
+			date:         curr,
+			onPeakPrice:  bestDonor.offPeakPrice,
+			offPeakPrice: bestDonor.offPeakPrice,
+		})
+	}
+
+	return out
 }
 
 func (c *baseEversourceVPP) fetchHistoryAndCache(ctx context.Context) error {
@@ -425,18 +678,20 @@ func (c *baseEversourceVPP) fetchHistoryAndCache(ctx context.Context) error {
 			return nil, fmt.Errorf("eversource vpp history returned status code %d", resp.StatusCode)
 		}
 
-		now := time.Now().In(etLocation)
-		targetStart := truncateDay(now.AddDate(0, 0, -30))
-		targetEnd := truncateDay(now.AddDate(0, 0, 2))
+		now := c.now().In(etLocation)
+		today := truncateDay(now)
+		targetStart := today.AddDate(0, 0, -30)
+		targetEnd := today.AddDate(0, 0, 2)
 
 		rates, err := parseVPPHistory(ctx, resp.Body, targetStart, targetEnd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse eversource vpp history: %w", err)
 		}
+		rates = fillEversourceVPPWeekendRates(rates, targetStart, targetEnd)
 
-		tomorrowDate := truncateDay(now).AddDate(0, 0, 1)
+		tomorrowDate := today.AddDate(0, 0, 1)
 		for _, r := range rates {
-			if truncateDay(r.date).Equal(tomorrowDate) {
+			if truncateDay(r.date.In(etLocation)).Equal(tomorrowDate) {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"eversource vpp history contains rates for tomorrow",
@@ -448,10 +703,11 @@ func (c *baseEversourceVPP) fetchHistoryAndCache(ctx context.Context) error {
 		}
 
 		c.mu.Lock()
+		c.lastHistoryFetch = now
 		toUpsert := make([]types.PriceState, 0, len(rates)*24)
 		for _, r := range rates {
 			hourly := dailyRateToHourlyPrices(r)
-			dateStr := r.date.Format("2006-01-02")
+			dateStr := truncateDay(r.date.In(etLocation)).Format("2006-01-02")
 			c.cachedPrices[dateStr] = hourly
 
 			for _, p := range hourly {
@@ -465,7 +721,7 @@ func (c *baseEversourceVPP) fetchHistoryAndCache(ctx context.Context) error {
 		c.mu.Unlock()
 
 		if c.db != nil && len(toUpsert) > 0 {
-			threeDaysAgo := truncateDay(now.AddDate(0, 0, -3))
+			threeDaysAgo := today.AddDate(0, 0, -3)
 
 			// Check if we already have data in the database from 3 days ago till now.
 			existingRecent, err := c.db.GetUtilityPrices(ctx, "eversource_ct_vpp", threeDaysAgo, now)
@@ -495,20 +751,31 @@ func (c *baseEversourceVPP) fetchHistoryAndCache(ctx context.Context) error {
 func (c *baseEversourceVPP) getPricesForRange(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	startET := start.In(etLocation)
 	endET := end.In(etLocation)
+	if !startET.Before(endET) {
+		return []types.Price{}, nil
+	}
+
 	firstDay := truncateDay(startET)
-	lastDay := truncateDay(endET)
+	lastDay := truncateDay(endET.Add(-time.Nanosecond))
+	now := c.now().In(etLocation)
+	today := truncateDay(now)
 
 	// Step 1: Check if all days in [firstDay, lastDay] are already in memory cache.
 	c.mu.Lock()
 	allInCache := true
-	var cachedPrices []types.Price
+	onlyFutureMissing := true
+	cachedPrices := []types.Price{}
 	currDay := firstDay
 	for !currDay.After(lastDay) {
 		dateStr := currDay.Format("2006-01-02")
 		prices, ok := c.cachedPrices[dateStr]
 		if !ok {
 			allInCache = false
-			break
+			if !currDay.After(today) {
+				onlyFutureMissing = false
+			}
+			currDay = currDay.AddDate(0, 0, 1)
+			continue
 		}
 		for _, p := range prices {
 			if !p.TSStart.Before(startET) && p.TSStart.Before(endET) {
@@ -517,9 +784,21 @@ func (c *baseEversourceVPP) getPricesForRange(ctx context.Context, start, end ti
 		}
 		currDay = currDay.AddDate(0, 0, 1)
 	}
+	lastHistoryFetch := c.lastHistoryFetch
 	c.mu.Unlock()
 
 	if allInCache {
+		return cachedPrices, nil
+	}
+
+	if onlyFutureMissing && !lastHistoryFetch.IsZero() && now.Sub(lastHistoryFetch) < eversourceVPPHistoryFetchCooldown {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"eversource vpp history not stale enough to fetch",
+			slog.Time("start", startET),
+			slog.Time("end", endET),
+			slog.Time("lastHistoryFetch", lastHistoryFetch),
+		)
 		return cachedPrices, nil
 	}
 
@@ -536,6 +815,9 @@ func (c *baseEversourceVPP) getPricesForRange(ctx context.Context, start, end ti
 				byDate[dateStr] = append(byDate[dateStr], p.Price)
 			}
 			for dStr, pList := range byDate {
+				slices.SortFunc(pList, func(a, b types.Price) int {
+					return a.TSStart.Compare(b.TSStart)
+				})
 				c.cachedPrices[dStr] = pList
 			}
 			c.mu.Unlock()
@@ -578,7 +860,7 @@ func (c *baseEversourceVPP) getPricesForRange(ctx context.Context, start, end ti
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var result []types.Price
+	result := []types.Price{}
 	currDay = firstDay
 	for !currDay.After(lastDay) {
 		dateStr := currDay.Format("2006-01-02")
@@ -601,7 +883,7 @@ func (c *baseEversourceVPP) getPricesForDate(ctx context.Context, date time.Time
 }
 
 func (c *baseEversourceVPP) GetCurrentPrice(ctx context.Context) (types.Price, error) {
-	now := time.Now().In(etLocation)
+	now := c.now().In(etLocation)
 	prices, err := c.getPricesForDate(ctx, now)
 	if err != nil {
 		return types.Price{}, err
@@ -615,7 +897,7 @@ func (c *baseEversourceVPP) GetCurrentPrice(ctx context.Context) (types.Price, e
 }
 
 func (c *baseEversourceVPP) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
-	now := time.Now().In(etLocation)
+	now := c.now().In(etLocation)
 	today := truncateDay(now)
 	tomorrowEnd := today.AddDate(0, 0, 2)
 

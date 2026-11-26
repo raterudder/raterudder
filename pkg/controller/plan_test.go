@@ -2312,6 +2312,251 @@ func TestStepPhysics(t *testing.T) {
 		assert.InDelta(t, 9.0, sunnyMetrics.gridChargeKWH, 1e-6, "Solar charges behind the meter while grid import uses full 9 kW cap")
 		assert.InDelta(t, 9.0, sunnyMetrics.gridImportKWH, 1e-6)
 	})
+
+	t.Run("LearnedBatteryModelAppliesDischargeOverheadAndAsymmetricEff", func(t *testing.T) {
+		bm := BatteryModel{
+			EffectiveCapacityKWH: 30.0,
+			DischargeEff:         0.85,
+			DischargeFixedKW:     0.15,
+			ChargeEff:            0.92,
+			Source:               "learned",
+		}
+		state := planState{
+			energyKWH:      18.0, // 60% SOC
+			soc:            60.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		settings := types.Settings{MinBatterySOC: 20.0}
+
+		// 1. Active BatteryModeLoad discharge subtracts load/DischargeEff + DischargeFixedKW*dHours.
+		loadInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.70, solarKWH: 0.0, minSOC: 20.0}
+		nextLoad, loadMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 1.70, loadMet.batSuppliedHomeKWH, 1e-6)
+		// Expected drain: 1.70 / 0.85 + 0.15 = 2.15 kWh -> 18.0 - 2.15 = 15.85 kWh
+		assert.InDelta(t, 15.85, nextLoad.energyKWH, 1e-6)
+		assert.Equal(t, bm, nextLoad.batteryModel, "batteryModel must propagate across simulation steps")
+
+		// 2. Solar-covered BatteryModeLoad (no active discharge) does NOT subtract DischargeFixedKW.
+		sunnyInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.0, solarKWH: 1.0, minSOC: 20.0}
+		nextSunny, sunnyMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, sunnyInt, settings, 0.90)
+		assert.Zero(t, sunnyMet.batSuppliedHomeKWH)
+		assert.InDelta(t, 18.0, nextSunny.energyKWH, 1e-6, "idle solar-covered load must not incur active-discharge fixed overhead")
+
+		// 3. Standby does NOT subtract DischargeFixedKW.
+		nextStandby, _ := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 18.0, nextStandby.energyKWH, 1e-6, "standby must not incur active-discharge fixed overhead")
+
+		// 4. BatteryModeExport with both load and grid export subtracts DischargeFixedKW once (not twice).
+		exportState := state
+		exportState.maxGridExportKW = 2.0
+		nextExp, expMet := stepPhysics(exportState, actionCandidate{
+			batteryMode: types.BatteryModeExport,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.InDelta(t, 1.70, expMet.batSuppliedHomeKWH, 1e-6)
+		assert.InDelta(t, 2.0, expMet.batExportKWH, 1e-6)
+		expectedExpDrain := (1.70+2.0)/0.85 + 0.15
+		assert.InDelta(t, 18.0-expectedExpDrain, nextExp.energyKWH, 1e-6)
+
+		// 5. BatteryModeChargeAny uses ChargeEff (0.92), distinct from DischargeEff (0.85).
+		chgInt := planInterval{durationHours: 1.0, importRate: 0.10, loadKWH: 0.0, solarKWH: 0.0, minSOC: 20.0}
+		nextChg, chgMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, chgInt, settings, 0.90)
+		assert.InDelta(t, 10.0, chgMet.gridChargeKWH, 1e-6)
+		assert.InDelta(t, 18.0+10.0*0.92, nextChg.energyKWH, 1e-6)
+	})
+
+	t.Run("LearnedBatteryModelNearReserveAndSolarCharge", func(t *testing.T) {
+		bm := BatteryModel{
+			EffectiveCapacityKWH: 30.0,
+			DischargeEff:         0.85,
+			DischargeFixedKW:     0.15,
+			ChargeEff:            0.92,
+			Source:               "learned",
+		}
+		settings := types.Settings{MinBatterySOC: 20.0} // reserve = 6.0 kWh
+
+		// 1. Usable energy (0.10 kWh) <= fixedOverheadKWH (0.15 kWh): must deliver 0 and never drop below reserve.
+		nearReserve := planState{
+			energyKWH:      6.10,
+			soc:            6.10 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		loadInt := planInterval{durationHours: 1.0, importRate: 0.30, loadKWH: 1.0, solarKWH: 0.0, minSOC: 20.0}
+		nextNear, nearMet := stepPhysics(nearReserve, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, loadInt, settings, 0.90)
+		assert.Zero(t, nearMet.batSuppliedHomeKWH)
+		assert.InDelta(t, 1.0, nearMet.gridImportKWH, 1e-6)
+		assert.InDelta(t, 6.10, nextNear.energyKWH, 1e-6, "battery must not discharge or dip below reserve when usable <= fixedOverheadKWH")
+
+		// 2. Solar charging (solarToBatKWH) uses ChargeEff (0.92) rather than DischargeEff (0.85).
+		nearFull := planState{
+			energyKWH:      28.16, // 1.84 kWh room -> requires 1.84 / 0.92 = 2.0 kWh solar to reach 30.0 kWh
+			soc:            28.16 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		solarChgInt := planInterval{durationHours: 1.0, importRate: 0.20, exportRate: 0.10, loadKWH: 1.0, solarKWH: 5.0, minSOC: 20.0}
+		nextSolChg, solChgMet := stepPhysics(nearFull, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+		}, solarChgInt, settings, 0.90)
+		assert.InDelta(t, 30.0, nextSolChg.energyKWH, 1e-6)
+		// 5.0 solar - 1.0 home - 2.0 solarToBat = 2.0 solarExport
+		assert.InDelta(t, 2.0, solChgMet.solarExportKWH, 1e-6)
+
+		// 3. Direct solar export (BatteryModeLoad + SolarModeExport) respects fixedOverheadKWH in Kirchhoff split:
+		// usable = 1.0 kWh, usableForDelivery = 1.0 - 0.15 = 0.85 kWh -> maxBatDischarge = 0.85 * 0.85 = 0.7225 kWh.
+		// With 1.0 kWh load and 1.0 kWh solar, solar must cover the remaining 0.2775 kWh of home load and export 0.7225 kWh.
+		tightState := planState{
+			energyKWH:      7.0, // 1.0 kWh above 6.0 kWh reserve
+			soc:            7.0 / 30.0 * 100.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			batteryModel:   bm,
+		}
+		directExpInt := planInterval{durationHours: 1.0, importRate: 0.30, exportRate: 0.25, loadKWH: 1.0, solarKWH: 1.0, minSOC: 20.0}
+		nextDirect, directMet := stepPhysics(tightState, actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeExport,
+		}, directExpInt, settings, 0.90)
+		assert.InDelta(t, 0.7225, directMet.batSuppliedHomeKWH, 1e-6)
+		assert.InDelta(t, 0.7225, directMet.solarExportKWH, 1e-6)
+		assert.Zero(t, directMet.gridImportKWH)
+		assert.InDelta(t, 6.0, nextDirect.energyKWH, 1e-6, "battery drains right to 6.0 kWh reserve including 0.15 kWh overhead")
+	})
+
+	t.Run("LearnedHeaterModelAppliesMorningBurstAndActiveHeating", func(t *testing.T) {
+		hm := BatteryHeaterModel{
+			Detected:     true,
+			TriggerTempC: 5.0,
+			PeakPowerKW:  0.80,
+			FlaggedHours: 10,
+		}
+		t0 := time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC)
+		state := planState{
+			time:           t0,
+			energyKWH:      18.0, // 60% SOC on 30 kWh
+			soc:            60.0,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			heaterModel:    hm,
+			planStartTime:  t0,
+		}
+		settings := types.Settings{MinBatterySOC: 20.0}
+
+		// 1. Cold morning (06:00, 1°C < 5°C) standby drains 0.80 * 0.50h = 0.40 kWh from battery SOC.
+		coldInt := planInterval{
+			startTime:     t0,
+			endTime:       t0.Add(30 * time.Minute),
+			durationHours: 0.50,
+			importRate:    0.20,
+			loadKWH:       0.5,
+			minSOC:        20.0,
+			tempC:         1.0,
+			hasTemp:       true,
+		}
+		nextStby, _ := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 17.60, nextStby.energyKWH, 1e-6, "cold morning standby must deduct 0.40 kWh warmup burst")
+		assert.InDelta(t, 0.50, nextStby.heaterState.MorningBurstUsedHours, 1e-6)
+
+		// 2. Subsequent cold morning step (06:30) has exhausted the 0.50h burst -> 0 heater drain.
+		coldInt2 := coldInt
+		coldInt2.startTime = t0.Add(30 * time.Minute)
+		coldInt2.endTime = t0.Add(60 * time.Minute)
+		nextStby2, _ := stepPhysics(nextStby, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt2, settings, 0.90)
+		assert.InDelta(t, 17.60, nextStby2.energyKWH, 1e-6, "exhausted morning burst must not double-fire")
+
+		// 3. Charging during cold morning burst diverts heaterEnergyKWH (0.40 kWh) before storing at chargeEff,
+		// and keeps heaterFromGridKWH separate from gridChargeKWH (no bogus battery wear on blanket power).
+		chgInt := coldInt
+		chgInt.loadKWH = 0.0
+		nextChg, chgMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   100.0,
+		}, chgInt, settings, 0.90)
+		oneWayEff := math.Sqrt(0.90)
+		// Max grid pull in 0.5h at 10 kW is 5.0 kWh: 0.40 kWh powers blanket, 4.60 kWh charges battery cells.
+		assert.InDelta(t, 4.60, chgMet.gridChargeKWH, 1e-6, "gridChargeKWH must exclude resistive blanket power")
+		assert.InDelta(t, 5.0, chgMet.gridImportKWH, 1e-6, "gridImportKWH includes both battery charge and blanket power")
+		assert.InDelta(t, 18.0+4.60*oneWayEff, nextChg.energyKWH, 1e-6)
+
+		// 4. Grid-connected battery sitting AT reserve (20% = 6.0 kWh) must NOT drain below reserve
+		// to power the heater — remainder routes to gridImportKWH (preventing false reserve deficits).
+		atReserve := state
+		atReserve.energyKWH = 6.0
+		atReserve.soc = 20.0
+		nextResStby, resStbyMet := stepPhysics(atReserve, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 6.0, nextResStby.energyKWH, 1e-6, "grid-connected heater must not drain battery below reserve")
+		assert.InDelta(t, 0.5+0.40, resStbyMet.gridImportKWH, 1e-6, "heater power at reserve pulls from AC grid")
+
+		// 5. Off-grid (ActionReasonGridUnavailable) drains battery SOC even at reserve.
+		nextOffGrid, offGridMet := stepPhysics(atReserve, actionCandidate{
+			batteryMode: types.BatteryModeStandby,
+			solarMode:   types.SolarModeAny,
+			reason:      types.ActionReasonGridUnavailable,
+		}, coldInt, settings, 0.90)
+		assert.InDelta(t, 5.60, nextOffGrid.energyKWH, 1e-6, "off-grid heater must draw from battery")
+		assert.InDelta(t, 0.5, offGridMet.gridImportKWH, 1e-6)
+
+		// 6. ChargeAny already at targetSOC (roomInBatKWH == 0) must report gridChargeKWH == 0
+		// while still routing blanket energy to gridImportKWH.
+		nextAtTarget, atTargetMet := stepPhysics(state, actionCandidate{
+			batteryMode: types.BatteryModeChargeAny,
+			solarMode:   types.SolarModeAny,
+			targetSOC:   60.0,
+		}, chgInt, settings, 0.90)
+		assert.Zero(t, atTargetMet.gridChargeKWH, "ChargeAny at targetSOC must not report bogus gridChargeKWH for heater")
+		assert.InDelta(t, 0.40, atTargetMet.gridImportKWH, 1e-6)
+		assert.InDelta(t, 18.0, nextAtTarget.energyKWH, 1e-6)
+
+		// 7. VPP event lowering overrideReserveSOC below minSOC (10% = 3.0 kWh < 20% = 6.0 kWh):
+		// heater uses the lower effectiveLoadReserveKWH floor instead of stranding energy and double-importing.
+		vppState := state
+		vppState.energyKWH = 3.40 // 0.40 kWh above 10% VPP floor, below 20% normal reserve
+		vppState.soc = 3.40 / 30.0 * 100.0
+		nextVPP, vppMet := stepPhysics(vppState, actionCandidate{
+			batteryMode:        types.BatteryModeExport,
+			solarMode:          types.SolarModeAny,
+			overrideReserveSOC: 10.0,
+		}, chgInt, settings, 0.90)
+		assert.InDelta(t, 3.0, nextVPP.energyKWH, 1e-6, "VPP overrideReserveSOC allows battery to cover heater down to 10% floor")
+		assert.InDelta(t, 0.0, vppMet.gridImportKWH, 1e-9, "must not double-import heater energy when battery covers it down to VPP floor")
+	})
 }
 
 // TestCalculateTerminalValuation tests ending battery valuation (replacement cost vs banked credit).
@@ -2356,6 +2601,29 @@ func TestCalculateTerminalValuation(t *testing.T) {
 
 		valuation := calculateTerminalValuation(finalState, postHorizon, settings, nil, capacityKWH, roundTripEff)
 		assert.True(t, valuation < 0, "ending above reserve must produce a negative cost (credit)")
+	})
+
+	t.Run("UsesLearnedBatteryModelEfficienciesToPreserveAntiHoarding", func(t *testing.T) {
+		t.Parallel()
+		// With learned DischargeEff = 0.82 (< sqrt(0.90)*0.95 = 0.901), terminal Tier 1 credit
+		// must use 0.82 * 0.95 * R (strictly less than in-horizon discharge saving 0.82 * R),
+		// preserving the 5% anti-hoarding invariant.
+		bm := BatteryModel{
+			EffectiveCapacityKWH: capacityKWH,
+			DischargeEff:         0.82,
+			ChargeEff:            0.91,
+			Source:               "learned",
+		}
+		targetEnergy := capacityKWH * 0.20
+		finalState := planState{
+			energyKWH:    targetEnergy + 1.0, // 1.0 kWh DC banked above reserve
+			soc:          (targetEnergy + 1.0) / capacityKWH * 100.0,
+			batteryModel: bm,
+		}
+		val := calculateTerminalValuation(finalState, postHorizon, settings, nil, capacityKWH, roundTripEff)
+		expectedCredit := 1.0 * postHorizon.knownPostHorizonRate * 0.82 * terminalTier1DiscountFactor
+		assert.InDelta(t, -expectedCredit, val, 1e-6)
+		assert.Less(t, -val, 1.0*postHorizon.knownPostHorizonRate*0.82, "terminal credit must stay strictly below in-horizon discharge saving")
 	})
 
 	t.Run("TerminalValuation_StrictConcavityAndPenalty", func(t *testing.T) {
@@ -6350,6 +6618,168 @@ func TestPlanScenarios(t *testing.T) {
 				assert.LessOrEqual(t, pp.GridExportKWH/pp.DurationHours, 11.0+1e-6, "Planned grid export rate must not exceed MaxGridExportKW")
 			}
 		}
+	})
+
+	t.Run("LearnedBatteryOverheadIncreasesPrePeakChargeTarget", func(t *testing.T) {
+		// 30 kWh site at 11:00 (last off-peak hour at $0.10 before an 8-hour 12:00-20:00 peak at $0.45)
+		// with 54% SOC and 35% reserve (~5.7 kWh nominal above reserve) and 0.65 kWh/hr home load (5.2 kWh peak load).
+		// Under static baseline (sqrt(0.90)=0.949, 0W overhead), 5.2 / 0.949 = 5.48 kWh < 5.7 kWh -> no grid charge needed.
+		// Under learned Franklin-style overhead (DischargeEff=0.86, DischargeFixedKW=0.15 kW),
+		// 5.2 / 0.86 + 8*0.15 = 7.25 kWh > 5.7 kWh -> planner must grid-charge before peak!
+		loc := time.UTC
+		now := time.Date(2026, 11, 23, 11, 0, 0, 0, loc)
+		priceAt := func(ts time.Time) types.Price {
+			rate := 0.10
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				rate = 0.45
+			}
+			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
+		}
+		currP := priceAt(now)
+		var futP []types.Price
+		for i := 1; i <= 24; i++ {
+			futP = append(futP, priceAt(now.Add(time.Duration(i)*time.Hour)))
+		}
+
+		// Build 20 days of identical 0.65 kWh/hr home load history, comparing:
+		// (A) no SOC telemetry (baseline battery model) vs
+		// (B) clean discharge/charge SOC telemetry reflecting DischargeEff=0.86, FixedKW=0.15, ChargeEff=0.90.
+		var baseHist, learnedHist []types.EnergyStats
+		for d := 20; d >= 1; d-- {
+			day := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			disLoad := 0.65
+			// Vary discharge load on non-peak hours (20:00-23:00) so OLS separates slope & intercept
+			// while keeping 12:00-19:00 home load identical at 0.65 kWh/hr across both histories.
+			altLoad := 0.5 + 0.5*float64(d%6)
+			soc := 90.0
+			for h := 0; h < 24; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				home := disLoad
+				if h >= 20 {
+					home = altLoad
+				}
+				baseHist = append(baseHist, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     home,
+				})
+				if h >= 12 && h < 16 {
+					deltaKWH := home/0.86 + 0.15
+					endSOC := soc - (deltaKWH/30.0)*100.0
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart:    ts,
+						HomeKWH:        home,
+						BatteryUsedKWH: home,
+						MinBatterySOC:  endSOC,
+						MaxBatterySOC:  soc,
+					})
+					soc = endSOC
+				} else if h >= 20 {
+					deltaKWH := home/0.86 + 0.15
+					endSOC := soc - (deltaKWH/30.0)*100.0
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart:    ts,
+						HomeKWH:        home,
+						BatteryUsedKWH: home,
+						MinBatterySOC:  endSOC,
+						MaxBatterySOC:  soc,
+					})
+					soc = endSOC
+				} else {
+					learnedHist = append(learnedHist, types.EnergyStats{
+						TSHourStart: ts,
+						HomeKWH:     home,
+					})
+				}
+			}
+		}
+
+		st := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 30.0,
+			BatterySOC:         54.0,
+			MaxBatteryChargeKW: 10.0,
+			HomeKW:             0.65,
+		}
+		cfg := types.Settings{
+			MinBatterySOC:       35.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+
+		decBase, planBase, err := c.Plan(ctx, st, currP, futP, baseHist, nil, cfg, nil)
+		require.NoError(t, err)
+		decLearned, planLearned, err := c.Plan(ctx, st, currP, futP, learnedHist, nil, cfg, nil)
+		require.NoError(t, err)
+
+		assert.Zero(t, decBase.SimulationParams.BatteryDischargeEfficiency, "baseline model omits learned efficiency params")
+		assert.Greater(t, decLearned.SimulationParams.BatteryDischargeEfficiency, 0.80)
+		assert.Less(t, decLearned.SimulationParams.BatteryDischargeEfficiency, 0.92)
+		assert.Greater(t, decLearned.SimulationParams.BatteryDischargeFixedKW, 0.08)
+
+		require.NotEmpty(t, planBase.Periods)
+		require.NotEmpty(t, planLearned.Periods)
+		assert.Equal(t, types.BatteryModeChargeAny, decLearned.Action.BatteryMode,
+			"learned discharge overhead must trigger pre-peak grid charging at 11:00")
+		assert.Greater(t, planLearned.Periods[0].EndSOC, planBase.Periods[0].EndSOC,
+			"learned discharge overhead must produce a higher pre-peak SOC than static baseline")
+	})
+
+	t.Run("LearnedHeaterModelPopulatesParamsAndAccountsForColdMorning", func(t *testing.T) {
+		loc := time.UTC
+		now := time.Date(2026, 11, 20, 6, 0, 0, 0, loc)
+		priceAt := func(ts time.Time) types.Price {
+			rate := 0.20
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				rate = 0.45
+			}
+			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
+		}
+		currP := priceAt(now)
+		var futP []types.Price
+		for i := 1; i <= 24; i++ {
+			futP = append(futP, priceAt(now.Add(time.Duration(i)*time.Hour)))
+		}
+
+		// 10 days of cold history with 5 flagged morning heating hours (~0.80 kW extra drain on 30 kWh).
+		var hist []types.EnergyStats
+		var weather []types.Weather
+		for d := 10; d >= 1; d-- {
+			day := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			weather = append(weather, makeWeatherDay(day, 1.0))
+			for h := 0; h < 24; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				es := types.EnergyStats{TSHourStart: ts, HomeKWH: 0.70}
+				if d <= 5 && h == 7 {
+					es.HadBatteryHeating = true
+					es.MinBatterySOC = 57.3
+					es.MaxBatterySOC = 60.0
+				}
+				hist = append(hist, es)
+			}
+		}
+		weather = append(weather, makeWeatherDay(now.Truncate(24*time.Hour), 0.0), makeWeatherDay(now.Truncate(24*time.Hour).AddDate(0, 0, 1), 0.0))
+
+		st := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 30.0,
+			BatterySOC:         60.0,
+			MaxBatteryChargeKW: 10.0,
+			HomeKW:             0.70,
+			BatteryHeating:     true,
+		}
+		cfg := types.Settings{
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+
+		dec, plan, err := c.Plan(ctx, st, currP, futP, hist, weather, cfg, nil)
+		require.NoError(t, err)
+		assert.Greater(t, dec.SimulationParams.BatteryHeaterPowerKW, 0.5)
+		assert.InDelta(t, 2.0, dec.SimulationParams.BatteryHeaterTriggerTempC, 0.5)
+		require.NotEmpty(t, plan.Periods)
 	})
 }
 

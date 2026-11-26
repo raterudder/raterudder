@@ -2583,6 +2583,95 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 				"Option G must suppress past cold-snap diffs when the upcoming 24h forecast window has warmed back to mild")
 		}
 	})
+
+	t.Run("ConservativeStrategySkipsPositiveOptionGShift", func(t *testing.T) {
+		now := time.Date(2026, 11, 20, 7, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		// 24 baseline days with natural 1.0..1.8 kWh/hr variation (so 2.1 kWh stays within IQR),
+		// followed by 4 consecutive elevated days at 2.1 kWh/hr that trigger a positive Option G shift.
+		for d := 28; d >= 1; d-- {
+			dt := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			loadKWH := 1.0 + 0.2*float64(d%5)
+			if d <= 4 {
+				loadKWH = 2.1
+			}
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     loadKWH,
+				})
+			}
+		}
+
+		defaultModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{
+			HomeLoadPredictionStrategy: "default",
+		})
+		conservativeModel, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{
+			HomeLoadPredictionStrategy: "conservative",
+		})
+		if assert.Len(t, defaultModel, 24) && assert.Len(t, conservativeModel, 24) {
+			// Default (P55) receives the positive Option G shift on top of ~1.8 kWh -> > 2.2 kWh.
+			assert.Greater(t, defaultModel[12].AvgHomeLoadKWH, 2.2,
+				"default strategy must still apply positive Option G shift")
+			// Conservative (P70) must NOT stack positive Option G shift on top of P70 (stays <= 2.1 kWh).
+			assert.LessOrEqual(t, conservativeModel[12].AvgHomeLoadKWH, 2.15,
+				"conservative strategy must skip positive Option G shift to avoid double-buffering P70")
+		}
+	})
+
+	t.Run("ColdTargetExpandsSelectedDatesWithoutHeatingFlag", func(t *testing.T) {
+		// Non-electric-heating home (overnight 00:00-08:59 stays flat at 0.8 kWh so
+		// heatingWindowDetected is false) with natural daytime variance (1.0..2.2 kWh)
+		// that had 2 earlier other-weekday cold days (16-17 days ago, outside the 7-day
+		// recent window) at 5°C with 2.8 kWh daytime load, while recent days and prior
+		// same-weekday days were mild (18°C).
+		now := time.Date(2026, 11, 20, 7, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		var weather []types.Weather
+		coldDays := map[int]bool{16: true, 17: true}
+		for d := 28; d >= 1; d-- {
+			dt := now.Truncate(24*time.Hour).AddDate(0, 0, -d)
+			tempC := 18.0
+			dayLoad := 1.0 + 0.4*float64(d%4)
+			if coldDays[d] {
+				tempC = 5.0
+				dayLoad = 2.8
+			}
+			var wf []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				load := 0.8
+				if h >= 10 && h <= 20 {
+					load = dayLoad
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+				wf = append(wf, types.HourlyWeather{
+					TSHourStart:  dt.Add(time.Duration(h) * time.Hour),
+					TemperatureC: tempC,
+				})
+			}
+			weather = append(weather, types.Weather{TSDayStart: dt, ForecastHours: wf})
+		}
+
+		// Today is cold (5°C <= 10°C): selectedDatesMap must pull in the earlier 5°C other-weekday days.
+		today := now.Truncate(24 * time.Hour)
+		var todayWF []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todayWF = append(todayWF, types.HourlyWeather{
+				TSHourStart:  today.Add(time.Duration(h) * time.Hour),
+				TemperatureC: 5.0,
+			})
+		}
+		weather = append(weather, types.Weather{TSDayStart: today, ForecastHours: todayWF})
+
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, types.Settings{})
+		if assert.Len(t, model, 24) {
+			assert.Greater(t, model[14].AvgHomeLoadKWH, 2.5,
+				"cold target day (<= 10°C) must expand selectedDatesMap to include temperature-matched other-weekday days even without heatingHours")
+		}
+	})
 }
 
 func TestTempSimilarityDiffC(t *testing.T) {

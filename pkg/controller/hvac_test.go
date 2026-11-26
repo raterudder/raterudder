@@ -154,6 +154,37 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 		assert.False(t, hvac.heatingHours[10], "UTC hour 10 must not be misindexed when loc=America/New_York")
 		assert.False(t, hvac.heatingHours[11], "UTC hour 11 must not be misindexed when loc=America/New_York")
 	})
+
+	t.Run("DaytimeEVSpikesDoNotTriggerStandaloneHeating", func(t *testing.T) {
+		// Gas+EV home with intermittent 8.5 kW EV sessions on alternating cold days during both
+		// morning (08:00-09:00) and afternoon (15:00-16:00). Standalone cold heating must be
+		// restricted to hr <= 9 AND require active P30 >= 1.5 kWh so intermittent EV spikes
+		// cannot falsely set hasElectricHeating or heatingHours.
+		startDate := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		weatherByHour := make(map[time.Time]float64)
+		evDays := map[int]bool{7: true, 9: true, 11: true, 13: true, 15: true}
+		for d := 0; d < 16; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			tempC := 16.0 - float64(d)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				weatherByHour[ts.UTC()] = tempC
+				load := 0.8 + 0.025*max(0.0, 10.0-tempC)
+				if evDays[d] && (h == 8 || h == 9 || h == 15 || h == 16) {
+					load = 8.5
+				}
+				history = append(history, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+			}
+		}
+
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil)
+		assert.False(t, hvac.hasElectricHeating, "intermittent daytime EV spikes on cold days must not trigger heating")
+		assert.False(t, hvac.heatingHours[8])
+		assert.False(t, hvac.heatingHours[9])
+		assert.False(t, hvac.heatingHours[15])
+		assert.False(t, hvac.heatingHours[16])
+	})
 }
 
 func TestComputeExtremeWeatherExtraKWH(t *testing.T) {

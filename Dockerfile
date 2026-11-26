@@ -10,9 +10,11 @@ RUN npm run build
 # Build the backend
 FROM golang:1.27-alpine AS go-builder
 WORKDIR /app
-COPY . .
 COPY go.mod go.sum ./
 RUN go mod download
+COPY cmd ./cmd
+COPY pkg ./pkg
+COPY web/embed.go ./web/embed.go
 # Copy frontend build to the expected location for embedding
 COPY --from=vite-builder /app/web/dist ./web/dist
 # Build static binary
