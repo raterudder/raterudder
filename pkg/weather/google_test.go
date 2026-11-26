@@ -180,7 +180,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			HTTPClient:   ts.Client(),
 		}
@@ -202,7 +202,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			HTTPClient:   ts.Client(),
 		}
@@ -228,7 +228,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			HTTPClient:   ts.Client(),
 		}
@@ -267,7 +267,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			TimezoneURL:  tzURL,
 			HTTPClient:   ts.Client(),
@@ -309,7 +309,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			TimezoneURL:  tzURL,
 			HTTPClient:   ts.Client(),
@@ -326,7 +326,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 				assert.Equal(t, "90210", r.URL.Query().Get("address.postalCode"))
 				assert.Equal(t, "US", r.URL.Query().Get("address.regionCode"))
 				assert.Equal(t, "results.location,results.postalAddress", r.URL.Query().Get("fields"))
-				assert.Equal(t, "dummy_key", r.URL.Query().Get("key"))
+				assert.Equal(t, "FAKE_GMAPS_KEY", r.URL.Query().Get("key"))
 
 				resp := googleGeocodingResponse{
 					Results: []googleGeocodingResult{
@@ -347,7 +347,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 			if r.URL.Path == "/timezone" {
 				// Assert query params
 				assert.Equal(t, "34.073600,-118.400400", r.URL.Query().Get("location"))
-				assert.Equal(t, "dummy_key", r.URL.Query().Get("key"))
+				assert.Equal(t, "FAKE_GMAPS_KEY", r.URL.Query().Get("key"))
 				assert.NotEmpty(t, r.URL.Query().Get("timestamp"))
 
 				resp := googleTimezoneResponse{
@@ -366,7 +366,7 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		w := &GoogleGeocodingWrapper{
-			APIKey:       "dummy_key",
+			APIKey:       "FAKE_GMAPS_KEY",
 			GeocodingURL: geoURL,
 			TimezoneURL:  tzURL,
 			HTTPClient:   ts.Client(),
