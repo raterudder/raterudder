@@ -534,6 +534,9 @@ func (b *Tesla) cacheRedeemedRefresh(prevRefreshToken string, creds *types.Tesla
 	b.credMu.Lock()
 	b.token = creds.AccessToken
 	b.credMu.Unlock()
+	if prevRefreshToken == "" || (b.cachedRefreshToken != "" && prevRefreshToken != b.cachedRefreshToken) {
+		b.redeemedRefreshTokens = nil
+	}
 	b.cachedRefreshToken = creds.RefreshToken
 	b.cachedExpiry = creds.Expiry
 	b.cachedRegion = creds.Region
@@ -629,6 +632,9 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			b.credMu.Lock()
 			b.token = creds.Tesla.AccessToken
 			b.credMu.Unlock()
+			if creds.Tesla.RefreshToken == "" || creds.Tesla.RefreshToken != b.cachedRefreshToken {
+				b.redeemedRefreshTokens = nil
+			}
 			b.cachedRefreshToken = creds.Tesla.RefreshToken
 			b.cachedExpiry = creds.Tesla.Expiry
 			b.cachedRegion = creds.Tesla.Region

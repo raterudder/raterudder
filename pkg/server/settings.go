@@ -176,7 +176,61 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 	return sv, creds, nil
 }
 
-func (s *Server) canOverwriteProviderCredentials(
+func equalProviderCredentials(essName string, a, b types.Credentials) bool {
+	switch essName {
+	case "tesla":
+		if (a.Tesla == nil) != (b.Tesla == nil) {
+			return false
+		}
+		if a.Tesla == nil {
+			return true
+		}
+		return a.Tesla.AuthCode == b.Tesla.AuthCode &&
+			a.Tesla.Region == b.Tesla.Region &&
+			a.Tesla.AccessToken == b.Tesla.AccessToken &&
+			a.Tesla.RefreshToken == b.Tesla.RefreshToken &&
+			a.Tesla.Expiry.Equal(b.Tesla.Expiry) &&
+			a.Tesla.EnergySiteID == b.Tesla.EnergySiteID &&
+			a.Tesla.SerialNumber == b.Tesla.SerialNumber
+	case "franklin":
+		if (a.Franklin == nil) != (b.Franklin == nil) {
+			return false
+		}
+		if a.Franklin == nil {
+			return true
+		}
+		return *a.Franklin == *b.Franklin
+	case "enphase":
+		if (a.Enphase == nil) != (b.Enphase == nil) {
+			return false
+		}
+		if a.Enphase == nil {
+			return true
+		}
+		return *a.Enphase == *b.Enphase
+	case "mock":
+		if (a.Mock == nil) != (b.Mock == nil) {
+			return false
+		}
+		if a.Mock == nil {
+			return true
+		}
+		return *a.Mock == *b.Mock
+	default:
+		return reflect.DeepEqual(a, b)
+	}
+}
+
+func (s *Server) decryptCredentialsQuiet(ctx context.Context, siteID string, encrypted []byte) (types.Credentials, error) {
+	if len(s.encryptionKey) != 32 {
+		return types.Credentials{}, errors.New("encryption key not configured")
+	}
+	quietCtx := log.With(ctx, slog.New(slog.DiscardHandler))
+	creds, _, err := s.decryptCredentials(quietCtx, siteID, encrypted)
+	return creds, err
+}
+
+func (s *Server) areProviderCredentialsSuperseded(
 	ctx context.Context,
 	siteID string,
 	targetESS string,
@@ -185,30 +239,23 @@ func (s *Server) canOverwriteProviderCredentials(
 	origCreds types.Credentials,
 	newCreds types.Credentials,
 ) bool {
-	if len(currentEncrypted) == 0 || bytes.Equal(origEncrypted, currentEncrypted) {
+	if bytes.Equal(origEncrypted, currentEncrypted) || (len(origEncrypted) == 0 && len(currentEncrypted) == 0) {
+		return false
+	}
+	if len(origEncrypted) > 0 && len(currentEncrypted) == 0 {
 		return true
 	}
-	curCreds, _, err := s.decryptCredentials(ctx, siteID, currentEncrypted)
+	curCreds, err := s.decryptCredentialsQuiet(ctx, siteID, currentEncrypted)
 	if err != nil {
+		return false
+	}
+	if !equalProviderCredentials(targetESS, origCreds, curCreds) {
 		return true
 	}
-	switch targetESS {
-	case "tesla":
-		if curCreds.Tesla != nil && newCreds.Tesla != nil && curCreds.Tesla.Expiry.After(newCreds.Tesla.Expiry) {
-			return false
-		}
-	case "franklin":
-		if curCreds.Franklin != nil && origCreds.Franklin != nil &&
-			(curCreds.Franklin.Username != origCreds.Franklin.Username || curCreds.Franklin.Password != origCreds.Franklin.Password) {
-			return false
-		}
-	case "enphase":
-		if curCreds.Enphase != nil && origCreds.Enphase != nil &&
-			(curCreds.Enphase.Username != origCreds.Enphase.Username || curCreds.Enphase.Password != origCreds.Enphase.Password) {
-			return false
-		}
+	if targetESS == "tesla" && newCreds.Tesla != nil && curCreds.Tesla != nil && curCreds.Tesla.Expiry.After(newCreds.Tesla.Expiry) {
+		return true
 	}
-	return true
+	return false
 }
 
 func (s *Server) mergeProviderCredsOntoEncrypted(
@@ -284,11 +331,23 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				)
 				return current, curVersion, false, nil
 			}
+			if s.areProviderCredentialsSuperseded(ctx, siteID, targetESS, origEncrypted, current.EncryptedCredentials, creds, newCreds) {
+				log.Ctx(ctx).InfoContext(ctx, "aborting ess auth write-back because credentials changed concurrently",
+					slog.String("ess", targetESS),
+				)
+				return current, curVersion, false, nil
+			}
 			next := current
 			next.ESSAuthStatus.ConsecutiveFailures = nextESSFailureCount(current.ESSAuthStatus.ConsecutiveFailures, err)
 			next.ESSAuthStatus.LastAttempt = now
-			if len(enc) > 0 && s.canOverwriteProviderCredentials(ctx, siteID, targetESS, origEncrypted, current.EncryptedCredentials, creds, newCreds) {
-				next.EncryptedCredentials = enc
+			if len(enc) > 0 {
+				if bytes.Equal(origEncrypted, current.EncryptedCredentials) {
+					next.EncryptedCredentials = enc
+				} else if mergedEnc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, creds, newCreds, targetESS); encErr != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt merged credentials", slog.Any("error", encErr))
+				} else {
+					next.EncryptedCredentials = mergedEnc
+				}
 			}
 			ver := curVersion
 			if ver == 0 {
@@ -335,6 +394,32 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				)
 				return current, curVersion, false, nil
 			}
+			skipCredWrite := false
+			if !bytes.Equal(origEncrypted, current.EncryptedCredentials) {
+				if len(origEncrypted) > 0 && len(current.EncryptedCredentials) == 0 {
+					log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
+						slog.String("ess", targetESS),
+					)
+					return current, curVersion, false, nil
+				}
+				if curCreds, decErr := s.decryptCredentialsQuiet(ctx, siteID, current.EncryptedCredentials); decErr == nil {
+					if !equalProviderCredentials(targetESS, creds, curCreds) {
+						if updated && equalProviderCredentials(targetESS, newCreds, curCreds) {
+							skipCredWrite = true
+						} else {
+							log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
+								slog.String("ess", targetESS),
+							)
+							return current, curVersion, false, nil
+						}
+					} else if targetESS == "tesla" && newCreds.Tesla != nil && curCreds.Tesla != nil && curCreds.Tesla.Expiry.After(newCreds.Tesla.Expiry) {
+						log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
+							slog.String("ess", targetESS),
+						)
+						return current, curVersion, false, nil
+					}
+				}
+			}
 			next := current
 			changed := false
 			if next.ESSAuthStatus.ConsecutiveFailures > 0 {
@@ -342,9 +427,16 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				next.ESSAuthStatus.LastAttempt = now
 				changed = true
 			}
-			if len(enc) > 0 && s.canOverwriteProviderCredentials(ctx, siteID, targetESS, origEncrypted, current.EncryptedCredentials, creds, newCreds) {
-				next.EncryptedCredentials = enc
-				changed = true
+			if len(enc) > 0 && !skipCredWrite {
+				if bytes.Equal(origEncrypted, current.EncryptedCredentials) {
+					next.EncryptedCredentials = enc
+					changed = true
+				} else if mergedEnc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, creds, newCreds, targetESS); encErr != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt merged credentials", slog.Any("error", encErr))
+				} else {
+					next.EncryptedCredentials = mergedEnc
+					changed = true
+				}
 			}
 			if !changed {
 				return current, curVersion, false, nil
@@ -878,32 +970,11 @@ func mergeAdminSettingsUpdate(
 	defaultComEdGroup int,
 	defaultTOUGroup int,
 ) types.Settings {
-	merged := current
+	merged := edited
 
-	merged.DryRun = edited.DryRun
-	merged.Pause = edited.Pause
-	merged.Release = edited.Release
-	merged.UtilityProvider = edited.UtilityProvider
-	merged.UtilityRate = edited.UtilityRate
-	merged.UtilityRateOptions = edited.UtilityRateOptions
-	merged.UtilityFeesPeriods = edited.UtilityFeesPeriods
-	merged.ESS = edited.ESS
-	merged.MinArbitrageDifferenceDollarsPerKWH = edited.MinArbitrageDifferenceDollarsPerKWH
-	merged.MinBatteryExportDifferenceDollarsPerKWH = edited.MinBatteryExportDifferenceDollarsPerKWH
-	merged.SolarNetMeteringCreditsValue = edited.SolarNetMeteringCreditsValue
-	merged.MinBatterySOC = edited.MinBatterySOC
-	merged.MinBatterySOCPeriods = edited.MinBatterySOCPeriods
-	merged.EVChargingStandby = edited.EVChargingStandby
-	merged.CustomGridSettings = edited.CustomGridSettings
 	if current.CustomGridSettings && current.ESS == edited.ESS {
 		merged.CustomGridSettings = true
 	}
-	merged.GridChargeBatteries = edited.GridChargeBatteries
-	merged.GridExportSolar = edited.GridExportSolar
-	merged.GridExportBatteries = edited.GridExportBatteries
-	merged.ManageTOUSchedules = edited.ManageTOUSchedules
-	merged.CountryCode = edited.CountryCode
-	merged.PostalCode = edited.PostalCode
 
 	if edited.PostalCode == "" || edited.CountryCode == "" {
 		merged.Location = nil
@@ -915,11 +986,10 @@ func mergeAdminSettingsUpdate(
 		merged.Location = edited.Location
 	}
 
-	merged.SolarTrendRatioMax = edited.SolarTrendRatioMax
-	merged.SolarBellCurveMultiplier = edited.SolarBellCurveMultiplier
-	merged.HomeLoadPredictionStrategy = edited.HomeLoadPredictionStrategy
-	merged.OptimizationProfile = edited.OptimizationProfile
 	merged.Notifications = current.Notifications
+	merged.EncryptedCredentials = current.EncryptedCredentials
+	merged.ESSAuthStatus = current.ESSAuthStatus
+	merged.UpdateGroup = current.UpdateGroup
 
 	if credsChanged {
 		merged.EncryptedCredentials = encryptedCreds

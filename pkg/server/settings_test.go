@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -4575,6 +4576,669 @@ func TestHandleUpdateSettings(t *testing.T) {
 				assert.NotContains(t, line, `"level":"ERROR"`)
 			}
 		}
+	})
+
+	t.Run("getESSSystem Aborts Write-Back When Same-Provider Credentials Change Concurrently", func(t *testing.T) {
+		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+		t.Run("Franklin ErrAccountLocked with updated=false aborts when admin saves new credentials or unlocks token", func(t *testing.T) {
+			mockS := &mockStorage{}
+			mockBgFranklin := &mockESS{MockName: "franklin"}
+			mockAdminFranklin := &mockESS{MockName: "franklin"}
+			essMap := ess.NewMap()
+			essMap.SetSystem("site-franklin-supersede", mockBgFranklin)
+
+			srv := &Server{
+				storage:       mockS,
+				ess:           essMap,
+				encryptionKey: "test-secret-key-1234567890123456",
+				nowFunc:       func() time.Time { return fixedNow },
+			}
+
+			encOrig, err := srv.encryptCredentials(context.Background(), "site-franklin-supersede", types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:  "owner@example.com",
+					Password:  "mock-same-pw",
+					Token:     "mock-expired-franklin-token",
+					GatewayID: "GW-1",
+				},
+			})
+			require.NoError(t, err)
+
+			store := attachAtomicSettingsStore(mockS, "site-franklin-supersede", types.Settings{
+				ESS:                      "franklin",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+				CustomGridSettings:       true,
+				EncryptedCredentials:     encOrig,
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 1,
+					LastAttempt:         fixedNow.Add(-5 * time.Minute),
+				},
+			}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+
+			svBg, credsBg, err := srv.getSettingsWithMigration(context.Background(), "site-franklin-supersede")
+			require.NoError(t, err)
+
+			authStarted := make(chan struct{})
+			adminSaved := make(chan struct{})
+			lockedErr := fmt.Errorf("account locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
+			mockBgFranklin.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockBgFranklin.On("Authenticate", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				close(authStarted)
+				<-adminSaved
+			}).Return(types.Credentials{}, false, lockedErr).Once()
+
+			// Admin unlocks account using the SAME username & password, producing a fresh Token
+			mockAdminFranklin.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockAdminFranklin.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+				Franklin: &types.FranklinCredentials{
+					Username:  "owner@example.com",
+					Password:  "mock-same-pw",
+					Token:     "mock-unlocked-franklin-token",
+					GatewayID: "GW-1",
+				},
+			}, true, nil).Once()
+
+			var wg sync.WaitGroup
+			var bgErr error
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _, bgErr = srv.getESSSystem(context.Background(), "site-franklin-supersede", svBg, credsBg)
+			}()
+
+			<-authStarted
+			essMap.SetSystem("site-franklin-supersede", mockAdminFranklin)
+			adminBody, err := json.Marshal(struct {
+				types.Settings
+				Credentials *types.Credentials `json:"credentials"`
+			}{
+				Settings: types.Settings{
+					ESS:                      "franklin",
+					MinBatterySOC:            20,
+					SolarTrendRatioMax:       3,
+					SolarBellCurveMultiplier: 1,
+					CustomGridSettings:       true,
+				},
+				Credentials: &types.Credentials{
+					Franklin: &types.FranklinCredentials{
+						Username: "owner@example.com",
+						Password: "mock-same-pw",
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			adminReq := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(adminBody)), "admin@example.com", true)
+			adminReq = adminReq.WithContext(context.WithValue(adminReq.Context(), siteIDContextKey, "site-franklin-supersede"))
+			adminW := httptest.NewRecorder()
+			srv.handleUpdateSettings(adminW, adminReq)
+			require.Equal(t, http.StatusOK, adminW.Result().StatusCode, adminW.Body.String())
+			close(adminSaved)
+
+			wg.Wait()
+			require.ErrorIs(t, bgErr, ess.ErrAccountLocked)
+
+			finalSettings, _, _, _ := store.snapshot()
+			assert.Equal(t, 0, finalSettings.ESSAuthStatus.ConsecutiveFailures, "stale ErrAccountLocked must not jump ConsecutiveFailures to 40 on unlocked credentials")
+			decFinal, _, err := srv.decryptCredentials(context.Background(), "site-franklin-supersede", finalSettings.EncryptedCredentials)
+			require.NoError(t, err)
+			require.NotNil(t, decFinal.Franklin)
+			assert.Equal(t, "mock-unlocked-franklin-token", decFinal.Franklin.Token)
+		})
+
+		t.Run("Enphase OTP re-auth with empty Password aborts stale ErrUnauthorized failure and updated=true failure", func(t *testing.T) {
+			for _, updatedBeforeErr := range []bool{false, true} {
+				name := "updated_false"
+				if updatedBeforeErr {
+					name = "updated_true"
+				}
+				t.Run(name, func(t *testing.T) {
+					siteID := "site-enphase-otp-" + name
+					mockS := &mockStorage{}
+					mockBgEnphase := &mockESS{MockName: "enphase"}
+					mockStageEnphase := &mockESS{MockName: "enphase"}
+					essMap := ess.NewMap()
+					essMap.SetSystem(siteID, mockBgEnphase)
+
+					srv := &Server{
+						storage:       mockS,
+						ess:           essMap,
+						encryptionKey: "test-secret-key-1234567890123456",
+						nowFunc:       func() time.Time { return fixedNow },
+					}
+
+					// OTP account has empty Password before and after re-authentication
+					origCreds := types.Credentials{
+						Enphase: &types.EnphaseCredentials{
+							Username:     "owner@example.com",
+							Password:     "",
+							SessionID:    "mock-expired-otp-sess",
+							ManagerToken: "mock-expired-otp-mgr",
+							SystemID:     555,
+							UserID:       42,
+						},
+					}
+					encOrig, err := srv.encryptCredentials(context.Background(), siteID, origCreds)
+					require.NoError(t, err)
+
+					store := attachAtomicSettingsStore(mockS, siteID, types.Settings{
+						ESS:                  "enphase",
+						MinBatterySOC:        20,
+						EncryptedCredentials: encOrig,
+						ESSAuthStatus: types.ESSAuthStatus{
+							ConsecutiveFailures: 1,
+							LastAttempt:         fixedNow.Add(-5 * time.Minute),
+						},
+					}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+
+					svBg, credsBg, err := srv.getSettingsWithMigration(context.Background(), siteID)
+					require.NoError(t, err)
+
+					authStarted := make(chan struct{})
+					otpSaved := make(chan struct{})
+					bgReturnedCreds := types.Credentials{}
+					if updatedBeforeErr {
+						bgReturnedCreds = types.Credentials{
+							Enphase: &types.EnphaseCredentials{
+								Username:     "owner@example.com",
+								Password:     "",
+								SessionID:    "mock-stale-rotated-sess",
+								ManagerToken: "mock-stale-rotated-mgr",
+								SystemID:     555,
+								UserID:       42,
+							},
+						}
+					}
+					mockBgEnphase.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+					mockBgEnphase.On("Authenticate", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+						close(authStarted)
+						<-otpSaved
+					}).Return(bgReturnedCreds, updatedBeforeErr, fmt.Errorf("session expired: %w", ess.ErrUnauthorized)).Once()
+
+					mockStageEnphase.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+					mockStageEnphase.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+						Enphase: &types.EnphaseCredentials{
+							Username:     "owner@example.com",
+							Password:     "",
+							SessionID:    "mock-fresh-otp-sess",
+							ManagerToken: "mock-fresh-otp-mgr",
+							SystemID:     555,
+							UserID:       42,
+						},
+					}, true, nil).Once()
+
+					var wg sync.WaitGroup
+					var bgErr error
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						_, _, bgErr = srv.getESSSystem(context.Background(), siteID, svBg, credsBg)
+					}()
+
+					<-authStarted
+					essMap.SetSystem(siteID, mockStageEnphase)
+					stageBody, err := json.Marshal(map[string]any{
+						"ess": "enphase",
+						"credentials": map[string]any{
+							"enphase": map[string]any{
+								"username": "owner@example.com",
+								"code":     "123456",
+							},
+						},
+					})
+					require.NoError(t, err)
+
+					stageReq := withUser(httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(stageBody)), "admin@example.com", true)
+					stageReq = stageReq.WithContext(context.WithValue(stageReq.Context(), siteIDContextKey, siteID))
+					stageW := httptest.NewRecorder()
+					srv.handleESSStage(stageW, stageReq)
+					require.Equal(t, http.StatusOK, stageW.Result().StatusCode, stageW.Body.String())
+					close(otpSaved)
+
+					wg.Wait()
+					require.ErrorIs(t, bgErr, ess.ErrUnauthorized)
+
+					finalSettings, _, _, _ := store.snapshot()
+					assert.Equal(t, 0, finalSettings.ESSAuthStatus.ConsecutiveFailures, "stale Enphase failure must not jump ConsecutiveFailures to 40 after OTP re-auth")
+					decFinal, _, err := srv.decryptCredentials(context.Background(), siteID, finalSettings.EncryptedCredentials)
+					require.NoError(t, err)
+					require.NotNil(t, decFinal.Enphase)
+					assert.Empty(t, decFinal.Enphase.Password)
+					assert.Equal(t, "mock-fresh-otp-sess", decFinal.Enphase.SessionID)
+					assert.Equal(t, "mock-fresh-otp-mgr", decFinal.Enphase.ManagerToken)
+				})
+			}
+		})
+
+		t.Run("Tesla aborts stale failure and stale rotation when RefreshToken or EnergySiteID/Region changes without later Expiry", func(t *testing.T) {
+			runCase := func(t *testing.T, name string, bgSucceeds, bgUpdated bool, adminTesla types.TeslaCredentials) {
+				t.Helper()
+				siteID := "site-tesla-supersede-" + name
+				mockS := &mockStorage{}
+				mockBgTesla := &mockESS{MockName: "tesla"}
+				essMap := ess.NewMap()
+				essMap.SetSystem(siteID, mockBgTesla)
+
+				srv := &Server{
+					storage:       mockS,
+					ess:           essMap,
+					encryptionKey: "test-secret-key-1234567890123456",
+					nowFunc:       func() time.Time { return fixedNow },
+				}
+
+				origCreds := types.Credentials{
+					Tesla: &types.TeslaCredentials{
+						Region:       "NA",
+						AccessToken:  "mock-orig-access",
+						RefreshToken: "mock-orig-refresh",
+						Expiry:       fixedNow.Add(-time.Minute),
+						EnergySiteID: 1234,
+					},
+				}
+				encOrig, err := srv.encryptCredentials(context.Background(), siteID, origCreds)
+				require.NoError(t, err)
+
+				store := attachAtomicSettingsStore(mockS, siteID, types.Settings{
+					ESS:                  "tesla",
+					EncryptedCredentials: encOrig,
+					ESSAuthStatus: types.ESSAuthStatus{
+						ConsecutiveFailures: 1,
+						LastAttempt:         fixedNow.Add(-5 * time.Minute),
+					},
+				}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+
+				svBg, credsBg, err := srv.getSettingsWithMigration(context.Background(), siteID)
+				require.NoError(t, err)
+
+				authStarted := make(chan struct{})
+				adminUpdated := make(chan struct{})
+				bgNewCreds := types.Credentials{}
+				if bgUpdated {
+					bgNewCreds = types.Credentials{
+						Tesla: &types.TeslaCredentials{
+							Region:       "NA",
+							AccessToken:  "mock-bg-rotated-access",
+							RefreshToken: "mock-bg-rotated-refresh",
+							Expiry:       fixedNow.Add(8 * time.Hour),
+							EnergySiteID: 1234,
+						},
+					}
+				}
+				var bgRetErr error
+				if !bgSucceeds {
+					bgRetErr = fmt.Errorf("unauthorized: %w", ess.ErrUnauthorized)
+				}
+
+				mockBgTesla.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+				mockBgTesla.On("Authenticate", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+					close(authStarted)
+					<-adminUpdated
+				}).Return(bgNewCreds, bgUpdated, bgRetErr).Once()
+
+				var wg sync.WaitGroup
+				var bgErr error
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, _, bgErr = srv.getESSSystem(context.Background(), siteID, svBg, credsBg)
+				}()
+
+				<-authStarted
+				encAdmin, err := srv.encryptCredentials(context.Background(), siteID, types.Credentials{
+					Tesla: &adminTesla,
+				})
+				require.NoError(t, err)
+				_, _, _, err = store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
+					cur.EncryptedCredentials = encAdmin
+					cur.ESSAuthStatus.ConsecutiveFailures = 0
+					cur.ESSAuthStatus.LastAttempt = fixedNow
+					return cur, ver, true, nil
+				})
+				require.NoError(t, err)
+				close(adminUpdated)
+
+				wg.Wait()
+				if bgSucceeds {
+					require.NoError(t, bgErr)
+				} else {
+					require.ErrorIs(t, bgErr, ess.ErrUnauthorized)
+				}
+
+				finalSettings, _, _, _ := store.snapshot()
+				assert.Equal(t, 0, finalSettings.ESSAuthStatus.ConsecutiveFailures)
+				decFinal, _, err := srv.decryptCredentials(context.Background(), siteID, finalSettings.EncryptedCredentials)
+				require.NoError(t, err)
+				require.NotNil(t, decFinal.Tesla)
+				assert.Equal(t, adminTesla.RefreshToken, decFinal.Tesla.RefreshToken)
+				assert.Equal(t, adminTesla.AccessToken, decFinal.Tesla.AccessToken)
+				assert.Equal(t, adminTesla.Region, decFinal.Tesla.Region)
+				assert.Equal(t, adminTesla.EnergySiteID, decFinal.Tesla.EnergySiteID)
+				assert.True(t, adminTesla.Expiry.Equal(decFinal.Tesla.Expiry))
+			}
+
+			t.Run("error_updated_true_new_refresh_token_earlier_expiry", func(t *testing.T) {
+				runCase(t, "error_updated_true_new_refresh_token_earlier_expiry", false, true, types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "mock-admin-access",
+					RefreshToken: "mock-admin-refresh-reauth",
+					// Minted 50ms BEFORE the background refresh expiry!
+					Expiry:       fixedNow.Add(8*time.Hour - 50*time.Millisecond),
+					EnergySiteID: 1234,
+				})
+			})
+
+			t.Run("error_updated_false_changed_site_and_region", func(t *testing.T) {
+				runCase(t, "error_updated_false_changed_site_and_region", false, false, types.TeslaCredentials{
+					Region:       "EU",
+					AccessToken:  "mock-orig-access",
+					RefreshToken: "mock-orig-refresh",
+					Expiry:       fixedNow.Add(-time.Minute),
+					EnergySiteID: 9999,
+				})
+			})
+
+			t.Run("success_updated_true_new_refresh_token_earlier_expiry", func(t *testing.T) {
+				runCase(t, "success_updated_true_new_refresh_token_earlier_expiry", true, true, types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "mock-admin-access-ok",
+					RefreshToken: "mock-admin-refresh-ok",
+					Expiry:       fixedNow.Add(8*time.Hour - 50*time.Millisecond),
+					EnergySiteID: 1234,
+				})
+			})
+		})
+	})
+
+	t.Run("getESSSystem Rotating Active Credentials Preserves Concurrent Stage Credentials For Another Provider", func(t *testing.T) {
+		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+		for _, bgErrCase := range []bool{false, true} {
+			name := "bg_success"
+			if bgErrCase {
+				name = "bg_error_after_rotation"
+			}
+			t.Run(name, func(t *testing.T) {
+				siteID := "site-stage-merge-" + name
+				mockS := &mockStorage{}
+				mockTesla := &mockESS{MockName: "tesla"}
+				mockEnphase := &mockESS{MockName: "enphase"}
+				essMap := ess.NewMap()
+				essMap.SetSystem(siteID, mockTesla)
+
+				srv := &Server{
+					storage:       mockS,
+					ess:           essMap,
+					encryptionKey: "test-secret-key-1234567890123456",
+					nowFunc:       func() time.Time { return fixedNow },
+				}
+
+				encOrig, err := srv.encryptCredentials(context.Background(), siteID, types.Credentials{
+					Tesla: &types.TeslaCredentials{
+						Region:       "NA",
+						AccessToken:  "mock-old-tesla-access",
+						RefreshToken: "mock-old-tesla-refresh",
+						Expiry:       fixedNow.Add(-time.Minute),
+						EnergySiteID: 1234,
+					},
+				})
+				require.NoError(t, err)
+
+				store := attachAtomicSettingsStore(mockS, siteID, types.Settings{
+					ESS:                  "tesla",
+					MinBatterySOC:        20,
+					EncryptedCredentials: encOrig,
+				}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+
+				svBg, credsBg, err := srv.getSettingsWithMigration(context.Background(), siteID)
+				require.NoError(t, err)
+
+				authStarted := make(chan struct{})
+				stageDone := make(chan struct{})
+				var authRetErr error
+				if bgErrCase {
+					authRetErr = fmt.Errorf("upstream 502 after token refresh")
+				}
+
+				mockTesla.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+				mockTesla.On("Authenticate", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+					close(authStarted)
+					<-stageDone
+				}).Return(types.Credentials{
+					Tesla: &types.TeslaCredentials{
+						Region:       "NA",
+						AccessToken:  "mock-rotated-tesla-access",
+						RefreshToken: "mock-rotated-tesla-refresh",
+						Expiry:       fixedNow.Add(8 * time.Hour),
+						EnergySiteID: 1234,
+					},
+				}, true, authRetErr).Once()
+
+				mockEnphase.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+				mockEnphase.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+					Enphase: &types.EnphaseCredentials{
+						Username:     "owner@example.com",
+						SessionID:    "mock-staged-enphase-sess",
+						ManagerToken: "mock-staged-enphase-mgr",
+						SystemID:     888,
+					},
+				}, true, nil).Once()
+
+				var wg sync.WaitGroup
+				var bgErr error
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, _, bgErr = srv.getESSSystem(context.Background(), siteID, svBg, credsBg)
+				}()
+
+				<-authStarted
+				// Concurrently run handleESSStage for Enphase while active ESS remains "tesla"
+				essMap.SetSystem(siteID, mockEnphase)
+				stageBody, err := json.Marshal(map[string]any{
+					"ess": "enphase",
+					"credentials": map[string]any{
+						"enphase": map[string]any{
+							"username": "owner@example.com",
+							"code":     "654321",
+						},
+					},
+				})
+				require.NoError(t, err)
+				stageReq := withUser(httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(stageBody)), "admin@example.com", true)
+				stageReq = stageReq.WithContext(context.WithValue(stageReq.Context(), siteIDContextKey, siteID))
+				stageW := httptest.NewRecorder()
+				srv.handleESSStage(stageW, stageReq)
+				require.Equal(t, http.StatusOK, stageW.Result().StatusCode, stageW.Body.String())
+				close(stageDone)
+
+				wg.Wait()
+				if bgErrCase {
+					require.ErrorContains(t, bgErr, "upstream 502")
+				} else {
+					require.NoError(t, bgErr)
+				}
+
+				finalSettings, _, _, _ := store.snapshot()
+				assert.Equal(t, "tesla", finalSettings.ESS)
+				decFinal, _, err := srv.decryptCredentials(context.Background(), siteID, finalSettings.EncryptedCredentials)
+				require.NoError(t, err)
+				require.NotNil(t, decFinal.Tesla, "rotated active Tesla credentials must be saved")
+				assert.Equal(t, "mock-rotated-tesla-access", decFinal.Tesla.AccessToken)
+				assert.Equal(t, "mock-rotated-tesla-refresh", decFinal.Tesla.RefreshToken)
+				require.NotNil(t, decFinal.Enphase, "concurrently staged Enphase credentials must not be wiped out")
+				assert.Equal(t, "mock-staged-enphase-sess", decFinal.Enphase.SessionID)
+				assert.Equal(t, "mock-staged-enphase-mgr", decFinal.Enphase.ManagerToken)
+			})
+		}
+	})
+}
+
+func populateSettingsReflectValue(v reflect.Value, seed int, boolVal bool) {
+	if !v.CanSet() {
+		return
+	}
+	if v.Type() == reflect.TypeFor[time.Time]() {
+		v.Set(reflect.ValueOf(time.Date(2026, time.Month((seed%12)+1), (seed%27)+1, 12, 0, 0, 0, time.UTC)))
+		return
+	}
+	switch v.Kind() {
+	case reflect.Bool:
+		v.SetBool(boolVal)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(int64(seed))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(uint64(seed))
+	case reflect.Float32, reflect.Float64:
+		v.SetFloat(float64(seed) + 0.25)
+	case reflect.String:
+		v.SetString(fmt.Sprintf("mock-val-%d", seed))
+	case reflect.Pointer:
+		elem := reflect.New(v.Type().Elem())
+		populateSettingsReflectValue(elem.Elem(), seed+1, boolVal)
+		v.Set(elem)
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			v.SetBytes(fmt.Appendf(nil, "mock-bytes-%d", seed))
+			return
+		}
+		sl := reflect.MakeSlice(v.Type(), 1, 1)
+		populateSettingsReflectValue(sl.Index(0), seed+1, boolVal)
+		v.Set(sl)
+	case reflect.Map:
+		m := reflect.MakeMap(v.Type())
+		k := reflect.New(v.Type().Key()).Elem()
+		populateSettingsReflectValue(k, seed+1, boolVal)
+		val := reflect.New(v.Type().Elem()).Elem()
+		populateSettingsReflectValue(val, seed+2, boolVal)
+		m.SetMapIndex(k, val)
+		v.Set(m)
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				populateSettingsReflectValue(v.Field(i), seed*10+i+1, boolVal)
+			}
+		}
+	default:
+		panic(fmt.Sprintf("unsupported reflect kind %v for %v", v.Kind(), v.Type()))
+	}
+}
+
+func TestMergeAdminSettingsUpdate(t *testing.T) {
+	t.Run("Copies every user-editable field from edited and restores server-managed fields from current", func(t *testing.T) {
+		for _, editedBool := range []bool{true, false} {
+			var current, edited types.Settings
+			populateSettingsReflectValue(reflect.ValueOf(&current).Elem(), 11, !editedBool)
+			populateSettingsReflectValue(reflect.ValueOf(&edited).Elem(), 37, editedBool)
+
+			// Verify reflection helper populated every exported field on both structs
+			rt := reflect.TypeFor[types.Settings]()
+			for i := range rt.NumField() {
+				f := rt.Field(i)
+				if !f.IsExported() || f.Type.Kind() == reflect.Bool {
+					continue
+				}
+				require.False(t, reflect.ValueOf(current).Field(i).IsZero(), "current.%s should be non-zero", f.Name)
+				require.False(t, reflect.ValueOf(edited).Field(i).IsZero(), "edited.%s should be non-zero", f.Name)
+			}
+
+			// Set preconditions for unchanged-location, same-ESS CustomGridSettings preservation, and valid TOU UpdateGroup
+			current.ESS = "tesla"
+			edited.ESS = "tesla"
+			current.CustomGridSettings = true
+			edited.CustomGridSettings = false
+			current.UtilityProvider = "pg_e"
+			edited.UtilityProvider = "ameren"
+			current.UpdateGroup = 7
+			edited.UpdateGroup = 99
+			current.CountryCode = "US"
+			edited.CountryCode = "US"
+			current.PostalCode = "60601"
+			edited.PostalCode = "60601"
+
+			merged := mergeAdminSettingsUpdate(
+				current,
+				edited,
+				false,
+				false,
+				nil,
+				time.Time{},
+				time.Time{},
+				14,
+				5,
+			)
+
+			rvCur := reflect.ValueOf(current)
+			rvEd := reflect.ValueOf(edited)
+			rvMerged := reflect.ValueOf(merged)
+
+			for i := range rt.NumField() {
+				f := rt.Field(i)
+				if !f.IsExported() {
+					continue
+				}
+				curVal := rvCur.Field(i).Interface()
+				edVal := rvEd.Field(i).Interface()
+				mergedVal := rvMerged.Field(i).Interface()
+
+				switch f.Name {
+				case "Notifications", "UpdateGroup", "EncryptedCredentials", "ESSAuthStatus", "Location", "CustomGridSettings":
+					assert.NotEqual(t, curVal, edVal, "precondition: %s must differ between current and edited", f.Name)
+					assert.Equal(t, curVal, mergedVal, "server-managed field %s must be restored from current", f.Name)
+				case "ESS", "CountryCode", "PostalCode":
+					assert.Equal(t, edVal, mergedVal, "field %s must match edited", f.Name)
+				default:
+					assert.NotEqual(t, curVal, edVal, "precondition: %s must differ between current and edited", f.Name)
+					assert.Equal(t, edVal, mergedVal, "user-editable field %s must come from edited", f.Name)
+				}
+			}
+		}
+	})
+
+	t.Run("Applies new location, credential updates, ESS switch CustomGridSettings, and ComEd UpdateGroup", func(t *testing.T) {
+		var current, edited types.Settings
+		populateSettingsReflectValue(reflect.ValueOf(&current).Elem(), 15, true)
+		populateSettingsReflectValue(reflect.ValueOf(&edited).Elem(), 41, false)
+
+		current.ESS = "tesla"
+		edited.ESS = "franklin"
+		current.CustomGridSettings = true
+		edited.CustomGridSettings = false
+		edited.UtilityProvider = "comed"
+		edited.UtilityRate = "comed_besh"
+		current.UpdateGroup = 4
+
+		authCheck := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		authDone := authCheck.Add(2 * time.Second)
+		newEnc := []byte("mock-new-encrypted-creds")
+
+		merged := mergeAdminSettingsUpdate(
+			current,
+			edited,
+			true,
+			true,
+			newEnc,
+			authCheck,
+			authDone,
+			15,
+			6,
+		)
+
+		assert.Equal(t, "franklin", merged.ESS)
+		assert.False(t, merged.CustomGridSettings, "switching ESS provider should allow CustomGridSettings=false from edited")
+		assert.Equal(t, edited.CountryCode, merged.CountryCode)
+		assert.Equal(t, edited.PostalCode, merged.PostalCode)
+		assert.Equal(t, edited.Location, merged.Location, "fetchedNewLocation=true must use edited.Location")
+		assert.Equal(t, newEnc, merged.EncryptedCredentials)
+		assert.Equal(t, 0, merged.ESSAuthStatus.ConsecutiveFailures)
+		assert.Equal(t, 0, merged.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, 0, merged.ESSAuthStatus.ConsecutiveUserFailures)
+		assert.Equal(t, authDone, merged.ESSAuthStatus.LastAttempt)
+		assert.Equal(t, authDone, merged.ESSAuthStatus.LastUserAttempt)
+		assert.Equal(t, 15, merged.UpdateGroup, "ComEd hourly rate must reassign TOU group into 13..16")
+		assert.Equal(t, current.Notifications, merged.Notifications, "Notifications must always come from current")
 	})
 }
 

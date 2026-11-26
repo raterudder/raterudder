@@ -540,6 +540,91 @@ func TestTesla(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 80.0, status.BatterySOC)
 		})
+
+		t.Run("Switching to an unrelated refresh token clears redeemedRefreshTokens lineage", func(t *testing.T) {
+			var refreshCalls atomic.Int32
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
+					require.NoError(t, r.ParseForm())
+					rt := r.FormValue("refresh_token")
+					refreshCalls.Add(1)
+					switch rt {
+					case "mock-lineage1-r1":
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"access_token":  "mock-lineage1-a2",
+							"refresh_token": "mock-lineage1-r2",
+							"expires_in":    28800,
+						})
+					default:
+						w.WriteHeader(http.StatusUnauthorized)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"error": "The refresh_token is invalid",
+						})
+					}
+				case "/api/1/energy_sites/1234/site_info":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"backup_reserve_percent": 20.0},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{"percentage_charged": 70.0},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "lineage-reset-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+			fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+			sys.(*Tesla).nowFunc = func() time.Time { return fixedNow }
+
+			// 1. Redeem mock-lineage1-r1 -> mock-lineage1-r2
+			rotated1, changed1, err := sys.Authenticate(ctx, types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "mock-lineage1-a1",
+					RefreshToken: "mock-lineage1-r1",
+					Expiry:       fixedNow.Add(-time.Minute),
+					EnergySiteID: 1234,
+				},
+			})
+			require.NoError(t, err)
+			assert.True(t, changed1)
+			assert.Equal(t, "mock-lineage1-r2", rotated1.Tesla.RefreshToken)
+			assert.Equal(t, int32(1), refreshCalls.Load())
+
+			// 2. Load a valid, non-expired token from an unrelated lineage (via the else branch)
+			otherValid, changedOther, err := sys.Authenticate(ctx, types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "mock-other-access",
+					RefreshToken: "mock-other-refresh",
+					Expiry:       fixedNow.Add(4 * time.Hour),
+					EnergySiteID: 1234,
+				},
+			})
+			require.NoError(t, err)
+			assert.False(t, changedOther)
+			assert.Equal(t, "mock-other-refresh", otherValid.Tesla.RefreshToken)
+
+			// 3. A stale caller presenting mock-lineage1-r1 must NOT silently map across lineages to mock-other-refresh
+			staleOut, staleChanged, err := sys.Authenticate(ctx, types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					Region:       "NA",
+					AccessToken:  "mock-lineage1-a1",
+					RefreshToken: "mock-lineage1-r1",
+					Expiry:       fixedNow.Add(2 * time.Hour),
+					EnergySiteID: 1234,
+				},
+			})
+			require.NoError(t, err)
+			assert.False(t, staleChanged, "stale token from prior lineage must not be mapped to unrelated cached refresh token")
+			assert.Equal(t, "mock-lineage1-r1", staleOut.Tesla.RefreshToken)
+		})
 	})
 
 	t.Run("GetStatus Basic", func(t *testing.T) {

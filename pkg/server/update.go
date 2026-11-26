@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -1453,6 +1454,7 @@ func (s *Server) setESSModes(
 	}
 
 	targetESS := settings.ESS
+	origEncrypted := settings.EncryptedCredentials
 	changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
@@ -1460,6 +1462,22 @@ func (s *Server) setESSModes(
 			_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
 				if current.ESS != targetESS {
 					return current, curVersion, false, nil
+				}
+				if !bytes.Equal(origEncrypted, current.EncryptedCredentials) && len(origEncrypted) > 0 {
+					if len(current.EncryptedCredentials) == 0 {
+						log.Ctx(ctx).InfoContext(ctx, "aborting ess set-modes auth write-back because credentials changed concurrently",
+							slog.String("ess", targetESS),
+						)
+						return current, curVersion, false, nil
+					}
+					origCreds, origErr := s.decryptCredentialsQuiet(ctx, siteID, origEncrypted)
+					curCreds, curErr := s.decryptCredentialsQuiet(ctx, siteID, current.EncryptedCredentials)
+					if origErr == nil && curErr == nil && !equalProviderCredentials(targetESS, origCreds, curCreds) {
+						log.Ctx(ctx).InfoContext(ctx, "aborting ess set-modes auth write-back because credentials changed concurrently",
+							slog.String("ess", targetESS),
+						)
+						return current, curVersion, false, nil
+					}
 				}
 				next := current
 				next.ESSAuthStatus.ConsecutiveSetFailures = nextESSFailureCount(current.ESSAuthStatus.ConsecutiveSetFailures, err)

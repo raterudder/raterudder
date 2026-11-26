@@ -4577,6 +4577,81 @@ func TestSetESSModes(t *testing.T) {
 		assert.Equal(t, "franklin", afterSwitch.ESS)
 		assert.Equal(t, 0, afterSwitch.ESSAuthStatus.ConsecutiveSetFailures)
 	})
+
+	t.Run("Aborts ConsecutiveSetFailures write-back when same-provider credentials changed concurrently", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{MockName: "tesla"}
+		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+			nowFunc:       func() time.Time { return fixedNow },
+		}
+
+		encOrig, err := srv.encryptCredentials(context.Background(), "site-modes-cred-supersede", types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "mock-old-access",
+				RefreshToken: "mock-old-refresh",
+				Expiry:       fixedNow.Add(time.Hour),
+				EnergySiteID: 1234,
+			},
+		})
+		require.NoError(t, err)
+
+		encAdminNew, err := srv.encryptCredentials(context.Background(), "site-modes-cred-supersede", types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "mock-fresh-admin-access",
+				RefreshToken: "mock-fresh-admin-refresh",
+				Expiry:       fixedNow.Add(8 * time.Hour),
+				EnergySiteID: 1234,
+			},
+		})
+		require.NoError(t, err)
+
+		store := attachAtomicSettingsStore(mockS, "site-modes-cred-supersede", types.Settings{
+			ESS:                  "tesla",
+			EncryptedCredentials: encAdminNew,
+		}, types.CurrentSettingsVersion, fixedNow)
+
+		staleSnapshot := settingsWithVersion{
+			Settings: types.Settings{
+				ESS:                  "tesla",
+				EncryptedCredentials: encOrig,
+			},
+			version:   types.CurrentSettingsVersion,
+			updatedAt: fixedNow.Add(-5 * time.Minute),
+		}
+
+		var logBuf bytes.Buffer
+		errCtx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		// 1. Admin saved fresh credentials for same ESS ("tesla") while SetModes failed with old credentials -> aborts write-back
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-cred-supersede", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Empty(t, logBuf.String())
+
+		afterSupersede, _, _, _ := store.snapshot()
+		assert.Equal(t, 0, afterSupersede.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, encAdminNew, afterSupersede.EncryptedCredentials)
+
+		// 2. EncryptedCredentials cleared concurrently -> also aborts write-back
+		_, _, _, err = store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
+			cur.EncryptedCredentials = nil
+			return cur, ver, true, nil
+		})
+		require.NoError(t, err)
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-cred-supersede", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Empty(t, logBuf.String())
+
+		afterClear, _, _, _ := store.snapshot()
+		assert.Equal(t, 0, afterClear.ESSAuthStatus.ConsecutiveSetFailures)
+	})
 }
 
 func TestGetCronGroups(t *testing.T) {
