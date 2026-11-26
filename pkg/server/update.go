@@ -22,6 +22,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"golang.org/x/sync/errgroup"
@@ -1884,7 +1885,7 @@ func (s *Server) syncHistorySummaryRange(
 			slog.Time("start", minEnergyTime),
 			slog.Time("end", maxEnergyTime),
 		)
-		actions, actErr := s.storage.GetActionHistory(ctx, siteID, minEnergyTime, maxEnergyTime)
+		actions, actErr := s.storage.GetActionHistory(storage.WithoutActionPlans(ctx), siteID, minEnergyTime, maxEnergyTime)
 		if actErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to get action history for history summary", slog.String("siteID", siteID), slog.Any("error", actErr))
 		} else if len(actions) > 0 {

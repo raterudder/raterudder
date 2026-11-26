@@ -107,6 +107,43 @@ type ReplaceUserAppOptions struct {
 	ExpectedPendingCodeHash *string
 }
 
+type actionPlanWindowKey struct{}
+
+// ActionPlanWindow configures selective decoding and expansion of 24-hour Action.Plan
+// schedules during GetActionHistory queries.
+//   - Actions with Timestamp in [ExpandStart, ExpandEnd) have Plan.Periods expanded.
+//   - When IncludeLatestPlan is true and the latest Action with a Plan falls outside
+//     [ExpandStart, ExpandEnd), its compact ShortPeriods are retained so the caller
+//     can expand it if needed.
+//   - All other Actions skip decoding Plan period slices while retaining operational
+//     metadata, alarms, battery capacity, and fallback ReserveSOC.
+type ActionPlanWindow struct {
+	ExpandStart       time.Time
+	ExpandEnd         time.Time
+	IncludeLatestPlan bool
+}
+
+// WithActionPlanWindow returns a derived context instructing GetActionHistory to
+// selectively decode and expand Action.Plan schedules according to window.
+func WithActionPlanWindow(ctx context.Context, window ActionPlanWindow) context.Context {
+	return context.WithValue(ctx, actionPlanWindowKey{}, window)
+}
+
+// WithoutActionPlans returns a derived context instructing GetActionHistory to skip
+// decoding and expanding all Action.Plan schedules.
+func WithoutActionPlans(ctx context.Context) context.Context {
+	return WithActionPlanWindow(ctx, ActionPlanWindow{})
+}
+
+// ActionPlanWindowFromContext extracts the ActionPlanWindow configured on ctx, if any.
+func ActionPlanWindowFromContext(ctx context.Context) (ActionPlanWindow, bool) {
+	if ctx == nil {
+		return ActionPlanWindow{}, false
+	}
+	w, ok := ctx.Value(actionPlanWindowKey{}).(ActionPlanWindow)
+	return w, ok
+}
+
 // databaseWrapper wraps the underlying Database implementation deferred until flags are configured.
 type databaseWrapper struct {
 	Database

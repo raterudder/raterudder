@@ -122,7 +122,7 @@ func main() {
 		end = now.Add(time.Hour)
 	}
 
-	actions, err := db.GetActionHistory(ctx, siteID, start, end)
+	actions, err := db.GetActionHistory(storage.WithoutActionPlans(ctx), siteID, start, end)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to get action history: %v\n", err)
 		os.Exit(1)

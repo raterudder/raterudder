@@ -629,6 +629,64 @@ func (a Action) CompactForStorage() Action {
 	return a
 }
 
+// LocationCache caches resolved *time.Location instances across a request so each
+// distinct timezone string is loaded at most once instead of once per record.
+type LocationCache map[string]*time.Location
+
+// Load resolves tz to a *time.Location, caching both valid locations and lookup misses.
+func (c *LocationCache) Load(tz string) *time.Location {
+	if tz == "" {
+		return nil
+	}
+	if c != nil && *c != nil {
+		if loc, exists := (*c)[tz]; exists {
+			return loc
+		}
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = nil
+	}
+	if c != nil {
+		if *c == nil {
+			*c = make(LocationCache, 2)
+		}
+		(*c)[tz] = loc
+	}
+	return loc
+}
+
+// HasPlan reports whether the Action carries a non-empty schedule in either expanded
+// Periods or compact ShortPeriods form.
+func (a Action) HasPlan() bool {
+	return a.Plan != nil && (len(a.Plan.Periods) > 0 || len(a.Plan.ShortPeriods) > 0)
+}
+
+// ExpandShortPeriods converts compact ShortPlanPeriod entries into full PlanPeriod entries in loc.
+func ExpandShortPeriods(shortPeriods []ShortPlanPeriod, loc *time.Location) []PlanPeriod {
+	if len(shortPeriods) == 0 {
+		return nil
+	}
+	periods := make([]PlanPeriod, len(shortPeriods))
+	for i, sp := range shortPeriods {
+		periods[i] = sp.toPlanPeriod(loc)
+	}
+	return periods
+}
+
+func resolveTZLocation(tz string, loadLoc func(string) *time.Location) *time.Location {
+	if tz == "" {
+		return nil
+	}
+	if loadLoc != nil {
+		return loadLoc(tz)
+	}
+	if l, err := time.LoadLocation(tz); err == nil {
+		return l
+	}
+	return nil
+}
+
 func inLoc(t time.Time, loc *time.Location) time.Time {
 	if t.IsZero() || loc == nil {
 		return t
@@ -636,14 +694,12 @@ func inLoc(t time.Time, loc *time.Location) time.Time {
 	return t.In(loc)
 }
 
-// ExpandFromStorage restores the Action's time.Location on all local timestamps
-// and expands Plan.ShortPeriods back into Plan.Periods in place.
-func (a *Action) ExpandFromStorage() {
+// RestoreLocations restores the Action's time.Location on all non-plan local timestamps
+// without expanding Plan.ShortPeriods, returning the resolved *time.Location.
+func (a *Action) RestoreLocations(loadLoc func(string) *time.Location) *time.Location {
 	var loc *time.Location
 	if a.Location != "" {
-		if l, err := time.LoadLocation(a.Location); err == nil {
-			loc = l
-		}
+		loc = resolveTZLocation(a.Location, loadLoc)
 		a.Location = ""
 	}
 	a.SystemTimestamp = inLoc(a.SystemTimestamp, loc)
@@ -671,11 +727,41 @@ func (a *Action) ExpandFromStorage() {
 		a.SystemStatus.VPPEvents[i].TSStart = inLoc(a.SystemStatus.VPPEvents[i].TSStart, loc)
 		a.SystemStatus.VPPEvents[i].TSEnd = inLoc(a.SystemStatus.VPPEvents[i].TSEnd, loc)
 	}
-	if a.Plan != nil && len(a.Plan.ShortPeriods) > 0 {
-		a.Plan.Periods = make([]PlanPeriod, len(a.Plan.ShortPeriods))
-		for i, sp := range a.Plan.ShortPeriods {
-			a.Plan.Periods[i] = sp.toPlanPeriod(loc)
-		}
-		a.Plan.ShortPeriods = nil
+	if loc != nil {
+		return loc
 	}
+	if !a.SystemTimestamp.IsZero() && a.SystemTimestamp.Location() != nil && a.SystemTimestamp.Location() != time.UTC {
+		return a.SystemTimestamp.Location()
+	}
+	if !a.SystemStatus.Timestamp.IsZero() && a.SystemStatus.Timestamp.Location() != nil && a.SystemStatus.Timestamp.Location() != time.UTC {
+		return a.SystemStatus.Timestamp.Location()
+	}
+	if a.SystemStatus.TimeLocation != "" {
+		return resolveTZLocation(a.SystemStatus.TimeLocation, loadLoc)
+	}
+	return nil
+}
+
+// ExpandPlan expands Plan.ShortPeriods into Plan.Periods using a copy-on-write Plan struct.
+func (a *Action) ExpandPlan(loc *time.Location) {
+	if a.Plan == nil || len(a.Plan.ShortPeriods) == 0 {
+		return
+	}
+	planCopy := *a.Plan
+	planCopy.Periods = ExpandShortPeriods(planCopy.ShortPeriods, loc)
+	planCopy.ShortPeriods = nil
+	a.Plan = &planCopy
+}
+
+// ExpandFromStorageWith restores the Action's time.Location on all local timestamps
+// using loadLoc and expands Plan.ShortPeriods back into Plan.Periods.
+func (a *Action) ExpandFromStorageWith(loadLoc func(string) *time.Location) {
+	loc := a.RestoreLocations(loadLoc)
+	a.ExpandPlan(loc)
+}
+
+// ExpandFromStorage restores the Action's time.Location on all local timestamps
+// and expands Plan.ShortPeriods back into Plan.Periods in place.
+func (a *Action) ExpandFromStorage() {
+	a.ExpandFromStorageWith(nil)
 }

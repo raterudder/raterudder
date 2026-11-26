@@ -23,6 +23,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/raterudder/raterudder/pkg/weather"
@@ -5500,9 +5501,12 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			},
 		}
 
+		var capturedActionCtx context.Context
 		mockS.On("GetEnergyHistory", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(dailyEnergy, nil).Once()
 		mockS.On("GetWeather", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return([]types.Weather{}, nil).Once()
-		mockS.On("GetActionHistory", mock.Anything, "site1", h8, h23.Add(time.Hour)).Return(actions, nil).Once()
+		mockS.On("GetActionHistory", mock.Anything, "site1", h8, h23.Add(time.Hour)).Run(func(args mock.Arguments) {
+			capturedActionCtx = args.Get(0).(context.Context)
+		}).Return(actions, nil).Once()
 
 		var capturedSummary types.HistorySummary
 		mockS.On("UpdateHistorySummary", mock.Anything, "site1", "2026-10", mock.Anything).Run(func(args mock.Arguments) {
@@ -5517,6 +5521,12 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 		_, err := srv.syncHistorySummaryRange(context.Background(), "site1", yesterday, now, false)
 		require.NoError(t, err)
 		mockS.AssertExpectations(t)
+
+		pw, hasPW := storage.ActionPlanWindowFromContext(capturedActionCtx)
+		if assert.True(t, hasPW, "syncHistorySummaryRange must pass WithoutActionPlans") {
+			assert.False(t, pw.ExpandStart.Before(pw.ExpandEnd))
+			assert.False(t, pw.IncludeLatestPlan)
+		}
 
 		if assert.Len(t, capturedSummary.Energy, 1) {
 			hourly := capturedSummary.Energy[0].Hourly

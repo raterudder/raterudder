@@ -22,6 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -702,7 +703,7 @@ func (s *Server) callMCPDailyHistory(ctx context.Context, siteID string, dateStr
 	})
 	g.Go(func() error {
 		var err error
-		actions, err = s.storage.GetActionHistory(gctx, siteID, dayStart, dayEnd)
+		actions, err = s.storage.GetActionHistory(storage.WithoutActionPlans(gctx), siteID, dayStart, dayEnd)
 		return err
 	})
 

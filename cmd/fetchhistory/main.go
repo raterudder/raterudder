@@ -97,7 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	actionHistory, err := db.GetActionHistory(ctx, sID, start, end)
+	actionHistory, err := db.GetActionHistory(storage.WithoutActionPlans(ctx), sID, start, end)
 	if err != nil {
 		fmt.Printf("Failed to get action history: %v\n", err)
 		os.Exit(1)

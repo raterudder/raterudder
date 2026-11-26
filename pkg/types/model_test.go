@@ -486,4 +486,106 @@ func TestActionStorageCompaction(t *testing.T) {
 		const maxRollupBytes = 720 * 1024 // 720 KB (< 75% of Firestore's 1 MiB limit)
 		assert.Less(t, len(data), maxRollupBytes, "12-hour SiteActionRollup JSON size (%d bytes) must stay under 720 KB (%d bytes)", len(data), maxRollupBytes)
 	})
+
+	t.Run("LocationCacheAndSelectivePlanExpansion", func(t *testing.T) {
+		t.Parallel()
+
+		var cache LocationCache
+		loc1 := cache.Load("America/Chicago")
+		require.NotNil(t, loc1)
+		loc2 := cache.Load("America/Chicago")
+		assert.Same(t, loc1, loc2)
+		assert.Nil(t, cache.Load(""))
+		assert.Nil(t, cache.Load("Invalid/Not_A_Timezone"))
+		assert.Nil(t, cache.Load("Invalid/Not_A_Timezone"))
+
+		baseAct := Action{
+			Timestamp:             nowUTC,
+			SystemTimestamp:       nowLocal,
+			BatteryMode:           BatteryModeLoad,
+			SolarMode:             SolarModeNoExport,
+			Reason:                ActionReasonGridUnavailable,
+			HitDeficitAt:          nowLocal.Add(2 * time.Hour),
+			HitCapacityAt:         nowLocal.Add(5 * time.Hour),
+			HitBufferedDeficitAt:  nowLocal.Add(3 * time.Hour),
+			HitThresholdDeficitAt: nowLocal.Add(4 * time.Hour),
+			CurrentPrice: &Price{
+				TSStart:       nowLocal,
+				TSEnd:         nowLocal.Add(time.Hour),
+				DollarsPerKWH: 0.12,
+			},
+			SystemStatus: SystemStatus{
+				Timestamp:          nowLocal,
+				TimeLocation:       loc.String(),
+				BatteryCapacityKWH: 13.6,
+				BatteryHeating:     true,
+				GridUnavailable:    true,
+				Alarms: []SystemAlarm{
+					{Code: "A1", Name: "Alarm", Timestamp: nowLocal},
+				},
+			},
+			Plan: &Plan{
+				TSCreated:    nowUTC,
+				HorizonHours: 24,
+				Periods: []PlanPeriod{
+					{
+						TSStart:       nowLocal,
+						TSEnd:         nowLocal.Add(20 * time.Minute),
+						DurationHours: (20 * time.Minute).Hours(),
+						ImportDollars: 0.12,
+						BatteryMode:   BatteryModeLoad,
+						SolarMode:     SolarModeNoExport,
+						ReserveSOC:    25.0,
+						LoadKWH:       1.0,
+					},
+				},
+			},
+		}
+
+		compacted := baseAct.CompactForStorage()
+		rawBytes, err := json.Marshal(compacted)
+		require.NoError(t, err)
+
+		loadCalls := 0
+		var reqCache LocationCache
+		countingLoader := func(tz string) *time.Location {
+			if reqCache == nil {
+				loadCalls++
+			} else if _, ok := reqCache[tz]; !ok {
+				loadCalls++
+			}
+			return reqCache.Load(tz)
+		}
+
+		records := make([]Action, 20)
+		var sharedReqLoc *time.Location
+		for i := range records {
+			require.NoError(t, json.Unmarshal(rawBytes, &records[i]))
+			resolved := records[i].RestoreLocations(countingLoader)
+			require.NotNil(t, resolved)
+			if i == 0 {
+				sharedReqLoc = resolved
+			}
+			assert.Same(t, sharedReqLoc, resolved)
+			assert.Empty(t, records[i].Location)
+			assert.Equal(t, "America/Chicago", records[i].SystemTimestamp.Location().String())
+			assert.Same(t, sharedReqLoc, records[i].SystemStatus.Alarms[0].Timestamp.Location())
+			assert.Nil(t, records[i].Plan.Periods, "RestoreLocations must not expand Plan.Periods")
+			assert.Len(t, records[i].Plan.ShortPeriods, 1)
+			assert.True(t, records[i].HasPlan())
+		}
+		assert.Equal(t, 1, loadCalls, "distinct timezone must be resolved only once across batch")
+
+		// ExpandPlan must copy-on-write without mutating a shared Plan pointer
+		sharedUnexpanded := records[0]
+		expandedCopy := sharedUnexpanded
+		expandedCopy.ExpandPlan(loc1)
+		assert.Nil(t, sharedUnexpanded.Plan.Periods, "shared Plan must remain unexpanded")
+		assert.Len(t, sharedUnexpanded.Plan.ShortPeriods, 1)
+		if assert.Len(t, expandedCopy.Plan.Periods, 1) {
+			assert.Nil(t, expandedCopy.Plan.ShortPeriods)
+			assert.Equal(t, 25.0, expandedCopy.Plan.Periods[0].ReserveSOC)
+			assert.Equal(t, "America/Chicago", expandedCopy.Plan.Periods[0].TSStart.Location().String())
+		}
+	})
 }

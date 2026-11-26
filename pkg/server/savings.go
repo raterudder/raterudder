@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -223,8 +224,9 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 	var totalSavings types.SavingsStats
 	totalSavings.Timestamp = start
 	totalSavings.EndTimestamp = end
+	periods := []savingsPeriod{{Start: start, End: end}}
 	for _, id := range siteIDs {
-		periodStats, _, err := s.getSiteSavings(ctx, id, start, end, nil)
+		periodStats, _, err := s.getSiteSavings(ctx, id, end, end, periods)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get site savings", slog.String("siteID", id), slog.Any("error", err))
 			writeJSONError(w, "failed to calculate savings", http.StatusInternalServerError)
@@ -424,15 +426,20 @@ func inferRoundTripEfficiency(energyStats []types.EnergyStats, capacityKWH, defa
 
 // actionReserveSOC extracts the active battery reserve SOC percentage from an Action when present.
 // It checks:
-//  1. Explicit Action.ReserveSOC (recorded on new actions)
-//  2. Plan.Periods[0].ReserveSOC (recorded on PlanMode actions)
+//  1. Explicit Action.ReserveSOC (recorded on new actions and selectively decoded actions)
+//  2. Plan.Periods[0].ReserveSOC or Plan.ShortPeriods[0].ReserveSOC (recorded on PlanMode actions)
 //  3. SystemStatus.BatterySOC when the controller is holding at ActionReasonBatteryAtReserve (legacy Decide actions)
 func actionReserveSOC(a types.Action) (float64, bool) {
 	if a.ReserveSOC > 0 && a.ReserveSOC <= 100 {
 		return a.ReserveSOC, true
 	}
-	if a.Plan != nil && len(a.Plan.Periods) > 0 && a.Plan.Periods[0].ReserveSOC > 0 && a.Plan.Periods[0].ReserveSOC <= 100 {
-		return a.Plan.Periods[0].ReserveSOC, true
+	if a.Plan != nil {
+		if len(a.Plan.Periods) > 0 && a.Plan.Periods[0].ReserveSOC > 0 && a.Plan.Periods[0].ReserveSOC <= 100 {
+			return a.Plan.Periods[0].ReserveSOC, true
+		}
+		if len(a.Plan.ShortPeriods) > 0 && a.Plan.ShortPeriods[0].ReserveSOC > 0 && a.Plan.ShortPeriods[0].ReserveSOC <= 100 {
+			return a.Plan.ShortPeriods[0].ReserveSOC, true
+		}
 	}
 	if a.Reason == types.ActionReasonBatteryAtReserve && a.BatteryMode != types.BatteryModeChargeAny && a.SystemStatus.BatterySOC > 0 && a.SystemStatus.BatterySOC <= 100 {
 		return math.Round(a.SystemStatus.BatterySOC), true
@@ -647,27 +654,64 @@ func (s *Server) getSiteSavingsWithSettings(
 	if maxEnd.After(actionQueryEnd) {
 		actionQueryEnd = maxEnd
 	}
-	actions, err := s.storage.GetActionHistory(ctx, siteID, lookbackStart, actionQueryEnd)
+	actionCtx := storage.WithActionPlanWindow(ctx, storage.ActionPlanWindow{
+		ExpandStart:       actionStart,
+		ExpandEnd:         actionEnd,
+		IncludeLatestPlan: true,
+	})
+	actions, err := s.storage.GetActionHistory(actionCtx, siteID, lookbackStart, actionQueryEnd)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get action history for new savings", slog.String("siteID", siteID), slog.Any("error", err))
-	} else {
-		sort.Slice(actions, func(i, j int) bool {
-			return actions[i].Timestamp.Before(actions[j].Timestamp)
-		})
+		return nil, nil, fmt.Errorf("failed to get action history: %w", err)
 	}
+	sort.Slice(actions, func(i, j int) bool {
+		return actions[i].Timestamp.Before(actions[j].Timestamp)
+	})
 
+	var locCache types.LocationCache
 	var filteredActions []types.Action
 	var latestActionWithPlan types.Action
+	var latestActionPlanLoc *time.Location
+	latestFilteredIdx := -1
+	latestUnexpandedIdx := -1
 	var capacityKWH float64
 	for i := range actions {
-		if !actions[i].Timestamp.Before(actionStart) && actions[i].Timestamp.Before(actionEnd) {
-			filteredActions = append(filteredActions, actions[i])
-		}
-		if actions[i].Plan != nil && len(actions[i].Plan.Periods) > 0 {
-			latestActionWithPlan = actions[i]
+		inWindow := !actions[i].Timestamp.Before(actionStart) && actions[i].Timestamp.Before(actionEnd)
+		hasPlan := actions[i].HasPlan()
+		if inWindow {
+			act := actions[i]
+			act.ExpandFromStorageWith(locCache.Load)
+			filteredActions = append(filteredActions, act)
+			if hasPlan {
+				latestFilteredIdx = len(filteredActions) - 1
+				latestUnexpandedIdx = -1
+			}
+		} else {
+			loc := actions[i].RestoreLocations(locCache.Load)
+			if hasPlan {
+				latestUnexpandedIdx = i
+				latestActionPlanLoc = loc
+				latestFilteredIdx = -1
+			}
 		}
 		if actions[i].SystemStatus.BatteryCapacityKWH > 0 {
 			capacityKWH = actions[i].SystemStatus.BatteryCapacityKWH
+		}
+	}
+	if latestFilteredIdx >= 0 {
+		latestActionWithPlan = filteredActions[latestFilteredIdx]
+	} else if latestUnexpandedIdx >= 0 {
+		latestActionWithPlan = actions[latestUnexpandedIdx]
+	}
+
+	if len(actions) == 0 {
+		latestAction, err := s.storage.GetLatestAction(ctx, siteID)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action for savings", slog.String("siteID", siteID), slog.Any("error", err))
+			return nil, nil, fmt.Errorf("failed to get latest action: %w", err)
+		}
+		if latestAction != nil && latestAction.SystemStatus.BatteryCapacityKWH > 0 {
+			capacityKWH = latestAction.SystemStatus.BatteryCapacityKWH
 		}
 	}
 
@@ -691,7 +735,7 @@ func (s *Server) getSiteSavingsWithSettings(
 	siteLoc := minStart.Location()
 	for _, day := range energyStatsDaily {
 		if day.TimeLocation != "" {
-			if l, err := time.LoadLocation(day.TimeLocation); err == nil {
+			if l := locCache.Load(day.TimeLocation); l != nil {
 				siteLoc = l
 				break
 			}
@@ -994,10 +1038,14 @@ func (s *Server) getSiteSavingsWithSettings(
 			if !hasNextDayIntervals && !dt.lastIntervalEnd.IsZero() && dt.lastIntervalEnd.Before(valPeriod.End) {
 				valPeriod.End = dt.lastIntervalEnd
 			}
+			if latestActionPlanLoc == nil {
+				latestActionPlanLoc = siteLoc
+			}
 			dt.nextDayValuationDollarsPerKWH = calculateNextDayValuationPrice(
 				valPeriod,
 				allIntervals,
-				latestActionWithPlan,
+				&latestActionWithPlan,
+				latestActionPlanLoc,
 				*dt,
 				prices,
 				oneWayEff,
@@ -1041,7 +1089,8 @@ type savingsSubInterval struct {
 func calculateNextDayValuationPrice(
 	p savingsPeriod,
 	allIntervals []savingsSubInterval,
-	latestActionWithPlan types.Action,
+	latestActionWithPlan *types.Action,
+	planLoc *time.Location,
 	dt dailySavingsTracker,
 	prices []types.Price,
 	oneWayEff float64,
@@ -1185,7 +1234,13 @@ func calculateNextDayValuationPrice(
 	}
 
 	// 2. Check latestActionWithPlan future periods (only when p.End is near/within the plan horizon)
-	if latestActionWithPlan.Plan != nil && len(latestActionWithPlan.Plan.Periods) > 0 {
+	if latestActionWithPlan != nil && latestActionWithPlan.Plan != nil && len(latestActionWithPlan.Plan.Periods) == 0 && len(latestActionWithPlan.Plan.ShortPeriods) > 0 {
+		firstStart := time.Unix(latestActionWithPlan.Plan.ShortPeriods[0].UnixStart, 0)
+		if nextDayEnd.After(firstStart) {
+			latestActionWithPlan.ExpandPlan(planLoc)
+		}
+	}
+	if latestActionWithPlan != nil && latestActionWithPlan.Plan != nil && len(latestActionWithPlan.Plan.Periods) > 0 {
 		planBuyAllSellAll := len(prices) > 0 && prices[len(prices)-1].BuyAllSellAll
 		evalPlanWindow := func(filter func(types.PlanPeriod) bool) (float64, bool) {
 			var planValIntervals []valuationInterval

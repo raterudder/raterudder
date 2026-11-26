@@ -285,9 +285,13 @@ func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.R
 	}
 
 	var allActions []types.Action
+	actionStart, actionEnd := start, end
+	if siteID == SiteIDAll {
+		actionStart, actionEnd = end, end
+	}
 
 	for _, id := range siteIDs {
-		sitePeriodStats, actions, err := s.getSiteSavings(ctx, id, start, end, periods)
+		sitePeriodStats, actions, err := s.getSiteSavings(ctx, id, actionStart, actionEnd, periods)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get savings for site", slog.String("siteID", id), slog.Any("error", err))
 			writeJSONError(w, fmt.Sprintf("failed to get savings for site %s", id), http.StatusInternalServerError)
