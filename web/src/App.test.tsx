@@ -78,6 +78,22 @@ describe('App routing and viewSite parameter preservation', () => {
 
         await waitFor(() => {
             expect(window.location.search).not.toContain('viewSite');
+            expect(api.fetchSettings).toHaveBeenCalledWith('site1');
+            expect(api.fetchActionsAndSavings).toHaveBeenLastCalledWith(
+                expect.any(Date),
+                expect.any(Date),
+                'site1',
+                expect.any(Object)
+            );
+        });
+        expect(screen.getByLabelText('Select Site')).toHaveTextContent('Site 1');
+
+        const forecastLink = screen.getAllByRole('link', { name: 'Forecast' })[0];
+        await user.click(forecastLink);
+
+        await waitFor(() => {
+            expect(window.location.pathname).toBe('/forecast');
+            expect(api.fetchModeling).toHaveBeenLastCalledWith('site1', expect.anything());
         });
     });
 

@@ -399,6 +399,9 @@ function AppContent() {
     }, [selectedSiteID, effectiveSites.length, sites]);
 
     const handleSiteChange = (id: string) => {
+        if (!id) {
+            return;
+        }
         if (id === effectiveSiteID && !viewSiteOverride) {
             return;
         }

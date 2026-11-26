@@ -27,7 +27,12 @@ const HeaderSiteSelect: React.FC<HeaderSiteSelectProps> = ({
                 ALL: 'Overview',
             }}
             onValueChange={(value) => {
-                onSelectSite(value as string);
+                // Base UI's SelectPositioner can emit null when a previously selected item
+                // (e.g. an admin ?viewSite= override) is removed from `sites` in the same render
+                // as the controlled `value` updates; ignore non-string/empty values so we don't clear siteID.
+                if (typeof value === 'string' && value) {
+                    onSelectSite(value);
+                }
             }}
         >
             <Select.Trigger className="site-selector-header" aria-label="Select Site">
