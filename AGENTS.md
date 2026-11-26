@@ -57,6 +57,12 @@
 ## Testing Guidelines
 
 ### Go Tests
+- **Offline Unit Tests with Race Detector**: Run fast offline unit tests across all packages (skipping controller history replays and live external API calls):
+  `go test -race -short -skip '^Test(Plan|Energy)History$' ./...`
+- **Controller Historical Replays**: Run recorded plan and energy model replay datasets separately without `-race`:
+  `go test ./pkg/controller -run '^Test(Plan|Energy)History$'`
+- **Live External API Tests (Opt-In)**: Live weather and utility provider subtests are skipped by default and under `-short`. Opt in explicitly when verifying upstream APIs:
+  `RATERUDDER_LIVE_API_TESTS=1 go test ./pkg/weather ./pkg/utility -run '^Test(OpenMeteoService|OctopusUtility|ComEd|Ameren)$/^Integration_Real'`
 - **Run Single Tests**: Run a single test at a time using regex:
   `go test ./pkg/server -run "^TestFunctionName$"`
   (Do not pass `-name`; `go test` uses `-run`).
@@ -97,7 +103,7 @@
     `gitleaks git --pre-commit --staged --config .gitleaks.toml --redact`
 
 ### Frontend Tests
-- **Vitest**: Run single test files with `npm test path/to/test.test.tsx`.
+- **Vitest**: Run single test files with `npm test path/to/test.test.tsx`, or run the full suite with capped workers matching CI (`npx vitest run --maxWorkers=2` or `npm test` in `web/`).
 - **Implicit Vitest Imports**: Always import Vitest functions explicitly:
   `import { describe, it, expect, beforeEach, vi } from 'vitest';`
 - **Mock Setup**: Update `web/src/test/apiMocks.ts` whenever shared settings or notification types are modified.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1041,6 +1042,9 @@ func TestOctopusUtility(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping live Octopus API integration test in short mode")
 		}
+		if os.Getenv("RATERUDDER_LIVE_API_TESTS") != "1" {
+			t.Skip("skipping live Octopus API integration test: set RATERUDDER_LIVE_API_TESTS=1 to run")
+		}
 		targetNow := time.Date(2026, time.April, 10, 12, 15, 0, 0, lonLocation)
 		dayStart := time.Date(2026, time.April, 10, 0, 0, 0, 0, lonLocation)
 		dayEnd := dayStart.AddDate(0, 0, 1)
@@ -1053,10 +1057,11 @@ func TestOctopusUtility(t *testing.T) {
 			nowFunc:         func() time.Time { return targetNow },
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		confirmed, err := base.GetConfirmedPrices(ctx, "london", dayStart, dayEnd)
+		confirmed, err := retryLiveAPIIntegration(t, "octopus", func() ([]types.Price, error) {
+			reqCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return base.GetConfirmedPrices(reqCtx, "london", dayStart, dayEnd)
+		})
 		require.NoError(t, err)
 		if assert.Len(t, confirmed, 48) {
 			assert.Equal(t, dayStart, confirmed[0].TSStart)
@@ -1081,7 +1086,7 @@ func TestOctopusUtility(t *testing.T) {
 		// Verify end-to-end SiteFees layering with Intelligent Octopus Go + Agile Outgoing against the real API data
 		m := NewMap(nil)
 		m.baseOctopus = base
-		siteUtil, err := m.Site(ctx, "site-live-uk", types.Settings{
+		siteUtil, err := m.Site(context.Background(), "site-live-uk", types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_intelligent_go",
 			UtilityRateOptions: types.UtilityRateOptions{
@@ -1091,7 +1096,11 @@ func TestOctopusUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		curr, err := siteUtil.GetCurrentPrice(ctx)
+		curr, err := retryLiveAPIIntegration(t, "octopus", func() (types.Price, error) {
+			reqCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return siteUtil.GetCurrentPrice(reqCtx)
+		})
 		require.NoError(t, err)
 		// 12:15 London time is Intelligent Octopus Go Peak (£0.2802/kWh)
 		assert.InDelta(t, 0.2802, curr.DollarsPerKWH, 1e-4)

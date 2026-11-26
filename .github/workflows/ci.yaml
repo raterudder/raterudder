@@ -87,7 +87,10 @@ jobs:
       - name: Run Go Tests
         env:
           FIRESTORE_EMULATOR_HOST: "127.0.0.1:8087"
-        run: go test -v ./...
+        run: go test -race -short -skip '^Test(Plan|Energy)History$' ./...
+
+      - name: Run Controller History Replays
+        run: go test ./pkg/controller -run '^Test(Plan|Energy)History$'
 
   test-web:
     name: Run Web Tests
@@ -116,7 +119,7 @@ jobs:
         run: npm run type-check
 
       - name: Run Web Tests
-        run: npx vitest run
+        run: npx vitest run --maxWorkers=2
 
       - name: Build web bundle
         run: npm run build

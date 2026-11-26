@@ -3,8 +3,11 @@ package utility
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,50 @@ import (
 
 func init() {
 	log.SetDefaultLogLevel(slog.LevelError)
+}
+
+func isTransientLiveAPIErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "status 5") ||
+		strings.Contains(msg, "status: 429") ||
+		strings.Contains(msg, "status: 5")
+}
+
+func retryLiveAPIIntegration[T any](t *testing.T, provider string, fn func() (T, error)) (T, error) {
+	t.Helper()
+	const maxAttempts = 5
+	backoff := time.Second
+
+	var zero T
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		res, err := fn()
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !isTransientLiveAPIErr(err) {
+			return zero, err
+		}
+		t.Logf("%s integration attempt %d/%d failed with transient error: %v", provider, attempt+1, maxAttempts, err)
+		if attempt < maxAttempts-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	t.Skipf("%s API transiently unavailable after %d attempts: %v", provider, maxAttempts, lastErr)
+	return zero, lastErr
 }
 
 func TestListUtilities(t *testing.T) {
