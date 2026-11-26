@@ -179,14 +179,26 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Synthetic Tesla OAuth test tokens and site identifiers in pkg/ess/tesla_test.go"
+description = "Synthetic test secrets/keys prefixed with MOCK_, FAKE_, mock-, or fake- in unit tests"
+condition = "AND"
+paths = [
+  '''_test\.go$''',
+  '''\.test\.tsx?$''',
+  '''^web/src/test/''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^(?:MOCK_|FAKE_|mock-|fake-)[A-Za-z0-9_-]+$''',
+]
+
+[[allowlists]]
+description = "Synthetic Tesla site identifier in pkg/ess/tesla_test.go"
 condition = "AND"
 paths = [
   '''^pkg/ess/tesla_test\.go$''',
 ]
 regexTarget = "secret"
 regexes = [
-  '''^mock-token$''',
   '''^test-site$''',
 ]
 
@@ -201,4 +213,15 @@ regexTarget = "secret"
 regexes = [
   '''^America/Chicago$''',
   '''^solar1h(?:Improved|Unclipped)$''',
+]
+
+[[allowlists]]
+description = "Non-secret test env var flag in AGENTS.md"
+condition = "AND"
+paths = [
+  '''^AGENTS\.md$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^RATERUDDER_LIVE_API_TESTS(?:=1)?$''',
 ]

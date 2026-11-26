@@ -85,7 +85,8 @@
     `go test ./pkg/controller -run "^TestFixturePrivacy$"`
 
 ### Secret & Privacy Scans
-- **Install Pre-Commit Hook**: Configure Git to run the versioned pre-commit secret and PII check (`gitleaks git --pre-commit --staged --config .gitleaks.toml --redact`):
+- **Synthetic Test Credentials**: Prefix all fake API keys, tokens, and secrets in unit tests (`*_test.go`, `*.test.ts(x)`, `web/src/test/*`) with `MOCK_`, `FAKE_`, `mock-`, or `fake-` (e.g., `FAKE_GMAPS_API_KEY`, `mock-oauth-token`) so `.gitleaks.toml` allowlists them automatically without per-file exceptions.
+- **Install Pre-Commit Hook**: Configure Git to run the versioned pre-commit secret and PII check (`gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --log-level warn --verbose`):
   `./scripts/setup-hooks.sh`
 - **Local Gitleaks Scans**:
   - Scan full git commit history (matches CI `secret-scan` job):
