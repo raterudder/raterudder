@@ -31,6 +31,10 @@ const (
 	defaultSettingsSyncTimeout = 30 * time.Second
 )
 
+func isValidHomeLoadPredictionStrategy(strategy string) bool {
+	return strategy == "default" || strategy == "conservative"
+}
+
 func (s *Server) getSettingsSyncTimeout() time.Duration {
 	if s.settingsSyncTimeout > 0 {
 		return s.settingsSyncTimeout
@@ -299,6 +303,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// we need to make sure we are unsetting netMeteringCredits
 	if newSettings.UtilityRateOptions.NetMeteringScheme != "" {
 		newSettings.UtilityRateOptions.NetMeteringCredits = false
+	}
+
+	if newSettings.HomeLoadPredictionStrategy == "" {
+		newSettings.HomeLoadPredictionStrategy = "default"
+	}
+	if !isValidHomeLoadPredictionStrategy(newSettings.HomeLoadPredictionStrategy) {
+		writeJSONError(w, "invalid home load prediction strategy", http.StatusBadRequest)
+		return
 	}
 
 	if newSettings.MinArbitrageDifferenceDollarsPerKWH < 0 {

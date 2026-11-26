@@ -808,13 +808,34 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "minimum battery export difference cannot be negative")
 
-		// Valid 24-hour custom period (0 to 24)
+		// Invalid HomeLoadPredictionStrategy
+		sInvalidStrategy := base
+		sInvalidStrategy.HomeLoadPredictionStrategy = "arbitrary-bypass"
+		bInvalidStrategy, _ := json.Marshal(sInvalidStrategy)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bInvalidStrategy))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "invalid home load prediction strategy")
+
+		// Valid 24-hour custom period (0 to 24) and valid HomeLoadPredictionStrategy values
 		mockStorage := &mockStorage{}
 		mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(base, 1, time.Time{}, nil)
 		mockStorage.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(time.Time{}, nil)
 		srvValid := &Server{
 			storage: mockStorage,
 			release: "test",
+		}
+		for _, validStrategy := range []string{"", "default", "conservative"} {
+			sValidStrategy := base
+			sValidStrategy.HomeLoadPredictionStrategy = validStrategy
+			bValidStrategy, _ := json.Marshal(sValidStrategy)
+			req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bValidStrategy))
+			req = withUser(req, "admin@example.com", true)
+			w = httptest.NewRecorder()
+			srvValid.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		}
 		s24h := base
 		s24h.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{

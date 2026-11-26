@@ -183,6 +183,37 @@ describe('Forecast Page', () => {
         expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
     });
 
+    it('passes undefined strategy override while settings is null so initial load uses stored strategy', async () => {
+        (fetchModeling as any).mockResolvedValue({
+            plan: makeTestPlan(),
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        const { rerender } = render(
+            <Router>
+                <Forecast siteID="site-1" settings={null} />
+            </Router>
+        );
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(1);
+            expect(fetchModeling).toHaveBeenLastCalledWith('site-1', undefined);
+        });
+
+        rerender(
+            <Router>
+                <Forecast siteID="site-1" settings={{ homeLoadPredictionStrategy: 'conservative' } as any} />
+            </Router>
+        );
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(2);
+            expect(fetchModeling).toHaveBeenLastCalledWith('site-1', 'conservative');
+        });
+    });
+
     it('opens help dialog when help button on a forecast chart is clicked', async () => {
         (fetchModeling as any).mockResolvedValue({
             plan: makeTestPlan(),

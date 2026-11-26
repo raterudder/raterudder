@@ -11,14 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func TestHandleForecast(t *testing.T) {
@@ -179,6 +182,7 @@ func TestHandleForecast(t *testing.T) {
 
 		resp := w.Result()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
 
 		var data ForecastRes
 		err := json.NewDecoder(resp.Body).Decode(&data)
@@ -1398,6 +1402,7 @@ func TestHandleForecast(t *testing.T) {
 
 		resp := w.Result()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
 
 		var data ForecastRes
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&data))
@@ -1821,5 +1826,256 @@ func TestHandleForecast(t *testing.T) {
 		assert.NotEmpty(t, res.EnergyHistory)
 		assert.NotEmpty(t, res.PriceHistory)
 		assert.Empty(t, errBuf.String(), "GetStatus unauthorized fallback must emit zero ERROR logs")
+	})
+
+	t.Run("Rejects Invalid OverrideHomeLoadPredictionStrategy With 400", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage:    mockS,
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast?overrideHomeLoadPredictionStrategy=arbitrary-bypass", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
+		assert.Contains(t, errResp.Error, "invalid home load prediction strategy")
+		mockS.AssertNotCalled(t, "GetSettings", mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "GetLatestAction", mock.Anything, mock.Anything)
+	})
+
+	t.Run("Isolates Strategy Override From Persisted Settings And Enforces Multi-Site Admin Boundary", func(t *testing.T) {
+		oidcSrv, priv := setupOIDCTest(t)
+		defer oidcSrv.Close()
+		provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+		require.NoError(t, err)
+
+		adminToken := generateTestToken(t, oidcSrv.URL, priv, "admin@example.com", "admin1")
+		memberToken := generateTestToken(t, oidcSrv.URL, priv, "user@example.com", "user1")
+
+		storedSettings := types.Settings{
+			MinBatterySOC:              5.0,
+			SolarTrendRatioMax:         3.0,
+			SolarBellCurveMultiplier:   1.0,
+			UtilityProvider:            "test",
+			ESS:                        "mock",
+			HomeLoadPredictionStrategy: "default",
+		}
+
+		cachedPlan := &types.Plan{
+			TSCreated:          now.Add(-10 * time.Minute),
+			HorizonHours:       1,
+			TotalProjectedCost: 99.99,
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1,
+					BatteryMode:   types.BatteryModeStandby,
+					StartSOC:      50,
+					EndSOC:        50,
+				},
+			},
+		}
+		recentAction := &types.Action{
+			Timestamp:    now.Add(-10 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)},
+			Plan:         cachedPlan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-10 * time.Minute),
+			},
+		}
+
+		history := []types.EnergyStats{}
+		baseTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -10)
+		for day := 0; day < 10; day++ {
+			for hour := 0; hour < 24; hour++ {
+				ts := baseTime.AddDate(0, 0, day).Add(time.Duration(hour) * time.Hour)
+				load := 1.0
+				if hour == 12 {
+					load = float64(day + 1)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+		dailyHistory := []types.DailyEnergyStats{
+			{
+				TSDayStart: baseTime,
+				Hourly:     history,
+			},
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
+			Email: "admin@example.com",
+		}, nil)
+		mockS.On("GetUser", mock.Anything, "google:user1").Return(types.User{
+			ID:    "google:user1",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site1"}},
+		}, nil)
+		mockS.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID: "site1",
+			Permissions: []types.SitePermissions{
+				{UserID: "google:user1"},
+			},
+		}, nil)
+		getSettingsCall := mockS.On("GetSettings", mock.Anything, "site1").Return(storedSettings, types.CurrentSettingsVersion, now.Add(-time.Hour), nil)
+		var setSettingsCalls int
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			setSettingsCalls++
+			storedSettings = s
+			return true
+		}), types.CurrentSettingsVersion, mock.Anything).Return(now, nil)
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return(recentAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return(dailyHistory, nil)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		var essAppliedStrategy string
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			essAppliedStrategy = s.HomeLoadPredictionStrategy
+			return true
+		})).Return(nil)
+		// Simulate credential rotation inside getESSSystem so SetSettings is invoked during handleForecast
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "mock-rotated", Location: "UTC"},
+		}, true, nil)
+		mockP := ess.NewMap()
+		mockP.SetSystem("site1", mockES)
+
+		var utilAppliedStrategy string
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			utilAppliedStrategy = s.HomeLoadPredictionStrategy
+			return true
+		})).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.10,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(defaultFuturePrices, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site1", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: false,
+			adminEmails: []string{
+				"admin@example.com",
+			},
+			oidcAudiences: map[string]string{
+				"google": "test-audience",
+			},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+			encryptionKey:        "12345678901234567890123456789012",
+			sessionEncryptionKey: "12345678901234567890123456789012",
+			generalRateLimit:     rate.Inf,
+			generalBurst:         30,
+			sensitiveRateLimit:   rate.Inf,
+			sensitiveBurst:       5,
+			nowFunc:              func() time.Time { return now },
+		}
+		handler := srv.setupHandler()
+
+		// 1. Read-only multi-site admin is rejected on POST /api/settings (403 Forbidden)
+		updateBody, err := json.Marshal(storedSettings)
+		require.NoError(t, err)
+		postSettingsReq := httptest.NewRequest(http.MethodPost, "/api/settings?siteID=site1", bytes.NewReader(updateBody))
+		postSettingsReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		postSettingsW := httptest.NewRecorder()
+		handler.ServeHTTP(postSettingsW, postSettingsReq)
+		assert.Equal(t, http.StatusForbidden, postSettingsW.Code)
+		assert.Equal(t, 0, setSettingsCalls)
+
+		// 2. Read-only multi-site admin can override strategy on GET /api/forecast without persisting the override
+		adminOverrideReq := httptest.NewRequest(http.MethodGet, "/api/forecast?siteID=site1&overrideHomeLoadPredictionStrategy=conservative", nil)
+		adminOverrideReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		adminOverrideW := httptest.NewRecorder()
+		handler.ServeHTTP(adminOverrideW, adminOverrideReq)
+
+		require.Equal(t, http.StatusOK, adminOverrideW.Code)
+		assert.Equal(t, "no-store", adminOverrideW.Header().Get("Cache-Control"))
+		var adminForecast ForecastRes
+		require.NoError(t, json.NewDecoder(adminOverrideW.Body).Decode(&adminForecast))
+		require.NotNil(t, adminForecast.Plan)
+		assert.NotEqual(t, 99.99, adminForecast.Plan.TotalProjectedCost)
+		var foundHour12 bool
+		for _, p := range adminForecast.Plan.Periods {
+			if p.TSStart.Hour() == 12 {
+				foundHour12 = true
+				assert.Greater(t, p.LoadKWH, 4.5*p.DurationHours, "plan should use overridden conservative strategy")
+			}
+		}
+		assert.True(t, foundHour12)
+		assert.Equal(t, 1, setSettingsCalls, "credential rotation in getESSSystem should persist settings")
+		assert.Equal(t, "default", storedSettings.HomeLoadPredictionStrategy, "SetSettings must preserve stored strategy")
+		assert.Equal(t, "default", essAppliedStrategy, "ESS ApplySettings must receive stored strategy")
+		assert.Equal(t, "default", utilAppliedStrategy, "Utility ApplySettings must receive stored strategy")
+
+		// Confirm GET /api/settings still reports homeLoadPredictionStrategy == "default"
+		getSettingsCall.Return(storedSettings, types.CurrentSettingsVersion, now, nil)
+		getSettingsReq := httptest.NewRequest(http.MethodGet, "/api/settings?siteID=site1", nil)
+		getSettingsReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: memberToken})
+		getSettingsW := httptest.NewRecorder()
+		handler.ServeHTTP(getSettingsW, getSettingsReq)
+		require.Equal(t, http.StatusOK, getSettingsW.Code)
+		var settingsResp SettingsRes
+		require.NoError(t, json.NewDecoder(getSettingsW.Body).Decode(&settingsResp))
+		assert.Equal(t, "default", settingsResp.HomeLoadPredictionStrategy)
+
+		// 3. Non-admin member sending unknown override receives 400 Bad Request
+		invalidOverrideReq := httptest.NewRequest(http.MethodGet, "/api/forecast?siteID=site1&overrideHomeLoadPredictionStrategy=arbitrary-bypass", nil)
+		invalidOverrideReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: memberToken})
+		invalidOverrideW := httptest.NewRecorder()
+		handler.ServeHTTP(invalidOverrideW, invalidOverrideReq)
+		assert.Equal(t, http.StatusBadRequest, invalidOverrideW.Code)
+
+		// 4. Non-admin member sending mismatched valid override receives 403 Forbidden
+		mismatchOverrideReq := httptest.NewRequest(http.MethodGet, "/api/forecast?siteID=site1&overrideHomeLoadPredictionStrategy=conservative", nil)
+		mismatchOverrideReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: memberToken})
+		mismatchOverrideW := httptest.NewRecorder()
+		handler.ServeHTTP(mismatchOverrideW, mismatchOverrideReq)
+		assert.Equal(t, http.StatusForbidden, mismatchOverrideW.Code)
+
+		// 5. Non-admin member sending matching override (including when stored strategy is legacy empty "") uses fast path (200 OK)
+		legacyEmptySettings := storedSettings
+		legacyEmptySettings.HomeLoadPredictionStrategy = ""
+		getSettingsCall.Return(legacyEmptySettings, types.CurrentSettingsVersion, now, nil)
+		matchingOverrideReq := httptest.NewRequest(http.MethodGet, "/api/forecast?siteID=site1&overrideHomeLoadPredictionStrategy=default", nil)
+		matchingOverrideReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: memberToken})
+		matchingOverrideW := httptest.NewRecorder()
+		handler.ServeHTTP(matchingOverrideW, matchingOverrideReq)
+		require.Equal(t, http.StatusOK, matchingOverrideW.Code)
+		assert.Equal(t, "private, max-age=300", matchingOverrideW.Header().Get("Cache-Control"))
+		var memberForecast ForecastRes
+		require.NoError(t, json.NewDecoder(matchingOverrideW.Body).Decode(&memberForecast))
+		require.NotNil(t, memberForecast.Plan)
+		assert.Equal(t, 99.99, memberForecast.Plan.TotalProjectedCost, "matching override should use fresh cached plan")
+		assert.Equal(t, 1, setSettingsCalls, "no additional SetSettings calls should occur")
 	})
 }

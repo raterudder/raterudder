@@ -546,7 +546,9 @@ export const STALE_DASHBOARD_TIMEOUT_MS = STALE_FORECAST_TIMEOUT_MS;
 
 const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
-    const loadStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
+    const loadStrategy = settings
+        ? (settings.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default')
+        : undefined;
     const [loading, setLoading] = useState(true);
     const [regenerating, setRegenerating] = useState(false);
     const [nowMs, setNowMs] = useState(() => Date.now());

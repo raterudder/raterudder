@@ -145,6 +145,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	overrideStrategy := r.URL.Query().Get("overrideHomeLoadPredictionStrategy")
+	if overrideStrategy != "" && !isValidHomeLoadPredictionStrategy(overrideStrategy) {
+		writeJSONError(w, "invalid home load prediction strategy", http.StatusBadRequest)
+		return
+	}
 
 	// 1. Get Settings
 	settings, creds, err := s.getSettingsWithMigration(ctx, siteID)
@@ -155,13 +160,13 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	configuredStrategy := settings.HomeLoadPredictionStrategy
-	if configuredStrategy == "" {
+	if configuredStrategy != "conservative" {
 		configuredStrategy = "default"
 	}
-	overrideStrategy := r.URL.Query().Get("overrideHomeLoadPredictionStrategy")
 	isStrategyOverridden := overrideStrategy != "" && overrideStrategy != configuredStrategy
-	if overrideStrategy != "" {
-		settings.HomeLoadPredictionStrategy = overrideStrategy
+	if isStrategyOverridden && !s.isMultiSiteAdmin(s.getUser(r)) && !s.bypassAuth {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	if settings.ESS == "" {
@@ -410,8 +415,12 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	planStatus := status
 	planStatus.Timestamp = now
+	planSettings := settings.Settings
+	if overrideStrategy != "" {
+		planSettings.HomeLoadPredictionStrategy = overrideStrategy
+	}
 	planDecision, freshPlan, planErr := s.controller.Plan(
-		ctx, planStatus, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
+		ctx, planStatus, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, planSettings, latestAction,
 	)
 	if planErr != nil {
 		if regeneratePlan {
@@ -440,7 +449,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		FuturePrices:  reconstructFuturePrices(&freshPlan, currentPrice),
 		Updated:       now,
 	}
-	if regeneratePlan {
+	if regeneratePlan || isStrategyOverridden {
 		w.Header().Set("Cache-Control", "no-store")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=300")
