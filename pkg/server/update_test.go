@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1401,7 +1404,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -1491,7 +1494,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -1548,7 +1551,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES := &mockESS{MockName: "tesla"}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, fmt.Errorf("%w, try again in 30m0s", errESSRateLimited)).Once()
 
@@ -1591,6 +1594,493 @@ func TestHandleUpdate(t *testing.T) {
 		assert.Empty(t, errBuf.String(), "performSiteUpdate must emit zero ERROR logs when setESSModes returns errESSRateLimited")
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
+	})
+
+	t.Run("PerformSiteUpdate Reserves 30s Control Budget After Slow Authenticate", func(t *testing.T) {
+		t.Run("Tight Remaining Budget Caps Parallel Optional Syncs And Completes SetESSModes", func(t *testing.T) {
+			now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+			yesterday := truncateDay(now).AddDate(0, 0, -1)
+
+			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, "site-budget-tight").Return((*types.Action)(nil), nil).Once()
+			mockS.On("GetHistorySummaries", mock.Anything, "site-budget-tight", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{Energy: []types.DailyEnergyStats{{TSDayStart: yesterday}}},
+			}, nil).Once()
+			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-budget-tight").Return(time.Time{}, 0, nil).Once()
+			mockS.On("UpsertEnergyHistories", mock.Anything, "site-budget-tight", mock.Anything, types.CurrentEnergyStatsVersion).Return(nil).Once()
+			mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-budget-tight").Return(time.Time{}, 0, nil).Once()
+			mockS.On("GetLatestWeatherTime", mock.Anything, "site-budget-tight").Return(time.Time{}, time.Time{}, 0, nil).Once()
+			mockS.On("GetEnergyHistory", mock.Anything, "site-budget-tight", truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+			mockS.On("GetWeather", mock.Anything, "site-budget-tight", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+			mockS.On("GetPriceHistory", mock.Anything, "site-budget-tight", mock.Anything, mock.Anything).Return([]types.Price{
+				{DollarsPerKWH: 0.15, TSStart: now.Add(-time.Hour), TSEnd: now},
+			}, nil).Maybe()
+			mockS.On("InsertAction", mock.Anything, "site-budget-tight", mock.MatchedBy(func(a types.Action) bool {
+				return !a.Failed
+			})).Return(nil).Once()
+
+			var activeSyncs atomic.Int32
+			var maxConcurrentSyncs atomic.Int32
+			recordSyncConcurrency := func(callCtx context.Context) {
+				cur := activeSyncs.Add(1)
+				for {
+					prev := maxConcurrentSyncs.Load()
+					if cur <= prev || maxConcurrentSyncs.CompareAndSwap(prev, cur) {
+						break
+					}
+				}
+				defer activeSyncs.Add(-1)
+				<-callCtx.Done()
+			}
+
+			var setModesRemaining time.Duration
+			mockES := &mockESS{MockName: "tesla"}
+			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				// Simulate Authenticate consuming ~59.5s of a 90s siteCtx by sleeping until ~450ms above the 30s reserve.
+				callCtx := args.Get(0).(context.Context)
+				if dl, ok := callCtx.Deadline(); ok {
+					waitDur := time.Until(dl.Add(-30*time.Second - 450*time.Millisecond))
+					if waitDur > 0 {
+						time.Sleep(waitDur)
+					}
+				}
+			}).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+				{TSDayStart: truncateDay(now).AddDate(0, 0, -14)},
+			}, nil).Once()
+			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				recordSyncConcurrency(args.Get(0).(context.Context))
+			}).Return([]types.DailyEnergyStats{}, context.DeadlineExceeded).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+				BatterySOC:            75,
+				BatteryCapacityKWH:    13.5,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+				Timestamp:             now,
+			}, nil).Once()
+			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				callCtx := args.Get(0).(context.Context)
+				if dl, ok := callCtx.Deadline(); ok {
+					setModesRemaining = time.Until(dl)
+				}
+			}).Return(true, nil).Once()
+
+			mockP := ess.NewMap()
+			mockP.SetSystem("site-budget-tight", mockES)
+
+			var futurePrices []types.Price
+			for h := 1; h <= 24; h++ {
+				futurePrices = append(futurePrices, types.Price{
+					DollarsPerKWH: 0.05,
+					TSStart:       now.Add(time.Duration(h) * time.Hour),
+					TSEnd:         now.Add(time.Duration(h+1) * time.Hour),
+				})
+			}
+			mockU := &mockUtility{}
+			mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				recordSyncConcurrency(args.Get(0).(context.Context))
+			}).Return([]types.Price{}, context.DeadlineExceeded).Once()
+			mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.25, TSStart: now, TSEnd: now.Add(time.Hour)}, nil).Once()
+			mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil).Once()
+			mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+			mockUMap := utility.NewMap(mockS)
+			mockUMap.SetProvider("site-budget-tight", mockU)
+
+			mockW := &mockWeather{}
+			mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				recordSyncConcurrency(args.Get(0).(context.Context))
+			}).Return([]types.Weather{}, context.DeadlineExceeded).Once()
+
+			srv := &Server{
+				utilities:  mockUMap,
+				ess:        mockP,
+				storage:    mockS,
+				weather:    mockW,
+				controller: controller.NewController(),
+				nowFunc:    func() time.Time { return now },
+			}
+
+			var warnBuf bytes.Buffer
+			warnLogger := slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			baseCtx := log.With(context.Background(), warnLogger)
+			// Simulate siteCtx with ~30.6s remaining so Authenticate leaves ~450ms for syncCtx and 30s for control.
+			siteCtx, cancel := context.WithTimeout(baseCtx, 30*time.Second+600*time.Millisecond)
+			defer cancel()
+
+			action, status, err := srv.performSiteUpdate(siteCtx, "site-budget-tight", settingsWithVersion{
+				Settings: types.Settings{
+					ESS:             "tesla",
+					MinBatterySOC:   10.0,
+					UtilityProvider: "test",
+					Location:        &types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: "UTC"},
+				},
+				version: types.CurrentSettingsVersion,
+			}, types.Credentials{}, false)
+			require.NoError(t, err)
+			assert.Empty(t, status)
+			if assert.NotNil(t, action) {
+				assert.False(t, action.Failed, "setESSModes must succeed without context deadline exceeded")
+			}
+			assert.Greater(t, setModesRemaining, 28*time.Second, "at least ~30s control budget must remain for setESSModes")
+			assert.Equal(t, int32(3), maxConcurrentSyncs.Load(), "energy, price, and weather optional syncs must execute in parallel")
+
+			logLines := strings.Split(strings.TrimSpace(warnBuf.String()), "\n")
+			if assert.Len(t, logLines, 3, "parallel optional sync timeouts must emit 3 WARNs and 0 ERROR logs") {
+				for _, line := range logLines {
+					assert.Contains(t, line, `"level":"WARN"`)
+					assert.NotContains(t, line, `"level":"ERROR"`)
+				}
+			}
+			assert.Contains(t, warnBuf.String(), "failed to sync energy history")
+			assert.Contains(t, warnBuf.String(), "failed to update price history")
+			assert.Contains(t, warnBuf.String(), "failed to update weather history")
+			mockS.AssertExpectations(t)
+			mockES.AssertExpectations(t)
+			mockU.AssertExpectations(t)
+			mockW.AssertExpectations(t)
+		})
+
+		t.Run("Insufficient Remaining Budget Skips Optional Syncs And Completes SetESSModes", func(t *testing.T) {
+			now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+			yesterday := truncateDay(now).AddDate(0, 0, -1)
+
+			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, "site-budget-skip").Return((*types.Action)(nil), nil).Once()
+			mockS.On("GetHistorySummaries", mock.Anything, "site-budget-skip", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{Energy: []types.DailyEnergyStats{{TSDayStart: yesterday}}},
+			}, nil).Once()
+			mockS.On("GetEnergyHistory", mock.Anything, "site-budget-skip", truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+			mockS.On("GetWeather", mock.Anything, "site-budget-skip", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+			mockS.On("GetPriceHistory", mock.Anything, "site-budget-skip", mock.Anything, mock.Anything).Return([]types.Price{
+				{DollarsPerKWH: 0.15, TSStart: now.Add(-time.Hour), TSEnd: now},
+			}, nil).Maybe()
+			mockS.On("InsertAction", mock.Anything, "site-budget-skip", mock.MatchedBy(func(a types.Action) bool {
+				return !a.Failed
+			})).Return(nil).Once()
+
+			mockES := &mockESS{MockName: "tesla"}
+			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+				BatterySOC:            80,
+				BatteryCapacityKWH:    13.5,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+				Timestamp:             now,
+			}, nil).Once()
+			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Once()
+
+			mockP := ess.NewMap()
+			mockP.SetSystem("site-budget-skip", mockES)
+
+			var futurePrices []types.Price
+			for h := 1; h <= 24; h++ {
+				futurePrices = append(futurePrices, types.Price{
+					DollarsPerKWH: 0.05,
+					TSStart:       now.Add(time.Duration(h) * time.Hour),
+					TSEnd:         now.Add(time.Duration(h+1) * time.Hour),
+				})
+			}
+			mockU := &mockUtility{}
+			mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.25, TSStart: now, TSEnd: now.Add(time.Hour)}, nil).Once()
+			mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil).Once()
+			mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+			mockUMap := utility.NewMap(mockS)
+			mockUMap.SetProvider("site-budget-skip", mockU)
+			mockW := &mockWeather{}
+
+			srv := &Server{
+				utilities:  mockUMap,
+				ess:        mockP,
+				storage:    mockS,
+				weather:    mockW,
+				controller: controller.NewController(),
+				nowFunc:    func() time.Time { return now },
+			}
+
+			var warnBuf bytes.Buffer
+			baseCtx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			// Simulate 65s of the 90s siteCtx already consumed by Authenticate retries -> 25s remaining (< 30s reserve).
+			siteCtx, cancel := context.WithTimeout(baseCtx, 25*time.Second)
+			defer cancel()
+
+			action, _, err := srv.performSiteUpdate(siteCtx, "site-budget-skip", settingsWithVersion{
+				Settings: types.Settings{
+					ESS:             "tesla",
+					MinBatterySOC:   10.0,
+					UtilityProvider: "test",
+					Location:        &types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: "UTC"},
+				},
+				version: types.CurrentSettingsVersion,
+			}, types.Credentials{}, false)
+			require.NoError(t, err)
+			if assert.NotNil(t, action) {
+				assert.False(t, action.Failed)
+			}
+
+			mockES.AssertNotCalled(t, "GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything)
+			mockU.AssertNotCalled(t, "GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything)
+			mockW.AssertNotCalled(t, "Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+			logLines := strings.Split(strings.TrimSpace(warnBuf.String()), "\n")
+			if assert.Len(t, logLines, 1, "must emit 1 WARN and 0 ERROR logs when skipping optional syncs") {
+				assert.Contains(t, logLines[0], `"level":"WARN"`)
+				assert.Contains(t, logLines[0], "skipping optional history syncs")
+			}
+			mockS.AssertExpectations(t)
+			mockES.AssertExpectations(t)
+		})
+	})
+
+	t.Run("PerformSiteUpdate Upstream 502 503 And Decode Failures Emit Warn And Zero Error Logs", func(t *testing.T) {
+		now := time.Now().UTC().Truncate(time.Hour)
+		yesterday := truncateDay(now).AddDate(0, 0, -1)
+
+		var franklinHistStatus int
+		var franklinHistBody string
+		var enphaseHistStatus int
+		var enphaseHistBody string
+		var weatherStatus int
+		var weatherBody string
+
+		origTransport := http.DefaultTransport
+		t.Cleanup(func() {
+			http.DefaultTransport = origTransport
+		})
+
+		franklinHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/getDeviceInfoV2":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"zoneInfo":        "UTC",
+						"totalCap":        15.0,
+						"peHwVersionList": []int{20},
+					},
+				})
+			case "/hes-gateway/terminal/getDeviceCompositeInfo":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":     70.0,
+							"mode":    20.0,
+							"t_amb":   25.0,
+							"time":    now.Format("2006-01-02 15:04:05"),
+							"version": 1,
+						},
+					},
+				})
+			case "/hes-gateway/terminal/tou/getGatewayTouListV2":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"currendId": 20.0,
+						"list":      []map[string]any{{"id": 20.0, "workMode": 2, "soc": 20.0, "editSocFlag": true}},
+					},
+				})
+			case "/hes-gateway/terminal/tou/getPowerControlSetting":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 1},
+				})
+			case "/hes-gateway/common/getPowerCapConfigList":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 1, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000},
+					},
+				})
+			case "/api-energy/power/getFhpPowerByDay":
+				w.WriteHeader(franklinHistStatus)
+				w.Write([]byte(franklinHistBody))
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		})
+
+		enphaseHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/123/data.json":
+				json.NewEncoder(w).Encode(map[string]any{
+					"app":   map[string]any{"timezone": "UTC", "user_id": 555},
+					"state": map[string]any{"site_id": 123, "battery_config": map[string]any{"usage": "self-consumption", "battery_backup_percentage": 20}},
+				})
+			case "/pv/systems/123/today":
+				w.Write([]byte(`{"start_date":"2026-07-20","battery_details":{"aggregate_soc":70},"stats":[]}`))
+			case "/pv/settings/123/battery_status.json":
+				w.Write([]byte(`{"max_capacity":10,"available_power":7.68}`))
+			case "/app-api/123/grid_control_check.json":
+				w.Write([]byte(`{"gridOutageCheck":false}`))
+			case "/app-api/123/get_pel_details":
+				w.Write([]byte(`{"pel_type":"Not Configured","export_limit":null}`))
+			case "/pv/systems/123/daily_energy":
+				w.WriteHeader(enphaseHistStatus)
+				w.Write([]byte(enphaseHistBody))
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		})
+
+		weatherTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(weatherStatus)
+			w.Write([]byte(weatherBody))
+		}))
+		defer weatherTS.Close()
+
+		http.DefaultTransport = syncTestRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.Host {
+			case "energy.franklinwh.com":
+				rec := httptest.NewRecorder()
+				franklinHandler.ServeHTTP(rec, r)
+				return rec.Result(), nil
+			case "enlighten.enphaseenergy.com":
+				rec := httptest.NewRecorder()
+				enphaseHandler.ServeHTTP(rec, r)
+				return rec.Result(), nil
+			default:
+				return origTransport.RoundTrip(r)
+			}
+		})
+
+		forecastURL, err := url.Parse(weatherTS.URL)
+		require.NoError(t, err)
+		weatherSvc := &weather.OpenMeteo{
+			ForecastURL: forecastURL,
+			HTTPClient:  weatherTS.Client(),
+		}
+
+		runSingleSyncFailureCheck := func(essName string, creds types.Credentials, failWeather bool, expectedWarnSubstring string) {
+			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, "site-log-check").Return((*types.Action)(nil), nil).Once()
+			mockS.On("GetHistorySummaries", mock.Anything, "site-log-check", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{Energy: []types.DailyEnergyStats{{TSDayStart: yesterday}}},
+			}, nil).Once()
+			if failWeather {
+				// Skip energy sync by returning current hour
+				mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-log-check").Return(now, types.CurrentEnergyStatsVersion, nil).Once()
+				mockS.On("GetLatestWeatherTime", mock.Anything, "site-log-check").Return(time.Time{}, time.Time{}, 0, nil).Once()
+			} else {
+				mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-log-check").Return(yesterday, types.CurrentEnergyStatsVersion, nil).Once()
+			}
+			mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-log-check").Return(now.Add(12*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+			mockS.On("GetEnergyHistory", mock.Anything, "site-log-check", truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+			mockS.On("GetWeather", mock.Anything, "site-log-check", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+			mockS.On("GetPriceHistory", mock.Anything, "site-log-check", mock.Anything, mock.Anything).Return([]types.Price{
+				{DollarsPerKWH: 0.15, TSStart: now.Add(-time.Hour), TSEnd: now},
+			}, nil).Maybe()
+			mockS.On("InsertAction", mock.Anything, "site-log-check", mock.Anything).Return(nil).Maybe()
+
+			var futurePrices []types.Price
+			for h := 1; h <= 24; h++ {
+				futurePrices = append(futurePrices, types.Price{
+					DollarsPerKWH: 0.15,
+					TSStart:       now.Add(time.Duration(h) * time.Hour),
+					TSEnd:         now.Add(time.Duration(h+1) * time.Hour),
+				})
+			}
+			mockU := &mockUtility{}
+			mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+			mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now, TSEnd: now.Add(time.Hour)}, nil).Once()
+			mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil).Once()
+			mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+			mockUMap := utility.NewMap(mockS)
+			mockUMap.SetProvider("site-log-check", mockU)
+
+			srv := &Server{
+				utilities:         mockUMap,
+				ess:               ess.NewMap(),
+				storage:           mockS,
+				weather:           weatherSvc,
+				controller:        controller.NewController(),
+				nowFunc:           func() time.Time { return now },
+				weatherRetryDelay: time.Millisecond,
+			}
+
+			var logBuf bytes.Buffer
+			ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+			settings := types.Settings{
+				ESS:             essName,
+				Pause:           true,
+				DryRun:          true,
+				MinBatterySOC:   20.0,
+				UtilityProvider: "test",
+			}
+			if failWeather {
+				settings.Location = &types.SiteLocation{Latitude: 34.07, Longitude: -118.40, CountryCode: "US", TimeZone: "UTC"}
+			}
+
+			_, _, runErr := srv.performSiteUpdate(ctx, "site-log-check", settingsWithVersion{
+				Settings: settings,
+				version:  types.CurrentSettingsVersion,
+			}, creds, false)
+			require.NoError(t, runErr)
+
+			lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+			if assert.NotEmpty(t, lines, "expected WARN logs and 0 ERROR logs") {
+				for _, line := range lines {
+					assert.Contains(t, line, `"level":"WARN"`)
+					assert.NotContains(t, line, `"level":"ERROR"`)
+				}
+				assert.Contains(t, logBuf.String(), expectedWarnSubstring)
+			}
+		}
+
+		franklinCreds := types.Credentials{
+			Franklin: &types.FranklinCredentials{
+				Username:    "u@example.com",
+				MD5Password: "md5",
+				GatewayID:   "gw-1",
+				Token:       "valid-tok",
+			},
+		}
+		enphaseCreds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "u@example.com",
+				SessionID:    "sess-1",
+				ManagerToken: "mgr-1",
+				SystemID:     123,
+				UserID:       555,
+			},
+		}
+
+		// Franklin.GetEnergyHistory: 502, 503, JSON decode failure
+		franklinHistStatus, franklinHistBody = http.StatusBadGateway, "<html>502</html>"
+		runSingleSyncFailureCheck("franklin", franklinCreds, false, "failed to sync energy history")
+		franklinHistStatus, franklinHistBody = http.StatusServiceUnavailable, "503 unavailable"
+		runSingleSyncFailureCheck("franklin", franklinCreds, false, "failed to sync energy history")
+		franklinHistStatus, franklinHistBody = http.StatusOK, `{"code":200,"success":true,"result":{bad`
+		runSingleSyncFailureCheck("franklin", franklinCreds, false, "failed to sync energy history")
+
+		// Enphase.GetEnergyHistory: 502, 503, JSON decode failure
+		enphaseHistStatus, enphaseHistBody = http.StatusBadGateway, "<html>502</html>"
+		runSingleSyncFailureCheck("enphase", enphaseCreds, false, "failed to sync energy history")
+		enphaseHistStatus, enphaseHistBody = http.StatusServiceUnavailable, "503 unavailable"
+		runSingleSyncFailureCheck("enphase", enphaseCreds, false, "failed to sync energy history")
+		enphaseHistStatus, enphaseHistBody = http.StatusOK, `{bad-json`
+		runSingleSyncFailureCheck("enphase", enphaseCreds, false, "failed to sync energy history")
+
+		// OpenMeteo.Forecast: 502, 503, JSON decode failure
+		weatherStatus, weatherBody = http.StatusBadGateway, "<html>502</html>"
+		runSingleSyncFailureCheck("franklin", franklinCreds, true, "failed to update weather history")
+		weatherStatus, weatherBody = http.StatusServiceUnavailable, `{"error":true,"reason":"overloaded"}`
+		runSingleSyncFailureCheck("franklin", franklinCreds, true, "failed to update weather history")
+		weatherStatus, weatherBody = http.StatusOK, `{"hourly":{bad`
+		runSingleSyncFailureCheck("franklin", franklinCreds, true, "failed to update weather history")
 	})
 }
 
@@ -2313,7 +2803,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -2693,13 +3183,13 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 
 		mockES := &mockESS{}
-		// Expect call for ~5 days
-		var startTime time.Time
-		var endTime time.Time
+		// Expect 3 chronological 5-day windows across the 14-day backfill
+		var windowStarts []time.Time
+		var windowEnds []time.Time
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			startTime = args.Get(1).(time.Time)
-			endTime = args.Get(2).(time.Time)
-		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
+			windowStarts = append(windowStarts, args.Get(1).(time.Time))
+			windowEnds = append(windowEnds, args.Get(2).(time.Time))
+		}).Return([]types.DailyEnergyStats{{}}, nil).Times(3)
 
 		srv := &Server{
 			storage: mockS,
@@ -2714,8 +3204,15 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		now := time.Now()
 		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
 		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
-		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now.Truncate(time.Hour), endTime, time.Second)
+		if assert.Len(t, windowStarts, 3) && assert.Len(t, windowEnds, 3) {
+			assert.True(t, expectedStart.Equal(windowStarts[0]), "Expected first window start %v, got %v", expectedStart, windowStarts[0])
+			assert.True(t, expectedStart.AddDate(0, 0, 5).Add(-time.Hour).Equal(windowEnds[0]))
+			assert.True(t, expectedStart.AddDate(0, 0, 5).Equal(windowStarts[1]))
+			assert.True(t, expectedStart.AddDate(0, 0, 10).Add(-time.Hour).Equal(windowEnds[1]))
+			assert.True(t, expectedStart.AddDate(0, 0, 10).Equal(windowStarts[2]))
+			assert.WithinDuration(t, now.Truncate(time.Hour), windowEnds[2], time.Second)
+		}
+		mockS.AssertNumberOfCalls(t, "UpsertEnergyHistories", 3)
 	})
 
 	t.Run("Incremental Update - Recent History", func(t *testing.T) {
@@ -2790,12 +3287,12 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 
 		mockES := &mockESS{}
-		var startTime time.Time
-		var endTime time.Time
+		var windowStarts []time.Time
+		var windowEnds []time.Time
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			startTime = args.Get(1).(time.Time)
-			endTime = args.Get(2).(time.Time)
-		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
+			windowStarts = append(windowStarts, args.Get(1).(time.Time))
+			windowEnds = append(windowEnds, args.Get(2).(time.Time))
+		}).Return([]types.DailyEnergyStats{{}}, nil).Times(3)
 
 		srv := &Server{
 			storage: mockS,
@@ -2810,8 +3307,15 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		now := time.Now()
 		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
 		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
-		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now.Truncate(time.Hour), endTime, time.Second)
+		if assert.Len(t, windowStarts, 3) && assert.Len(t, windowEnds, 3) {
+			assert.True(t, expectedStart.Equal(windowStarts[0]), "Expected first window start %v, got %v", expectedStart, windowStarts[0])
+			assert.True(t, expectedStart.AddDate(0, 0, 5).Add(-time.Hour).Equal(windowEnds[0]))
+			assert.True(t, expectedStart.AddDate(0, 0, 5).Equal(windowStarts[1]))
+			assert.True(t, expectedStart.AddDate(0, 0, 10).Add(-time.Hour).Equal(windowEnds[1]))
+			assert.True(t, expectedStart.AddDate(0, 0, 10).Equal(windowStarts[2]))
+			assert.WithinDuration(t, now.Truncate(time.Hour), windowEnds[2], time.Second)
+		}
+		mockS.AssertNumberOfCalls(t, "UpsertEnergyHistories", 3)
 	})
 
 	t.Run("Future Time - No Update", func(t *testing.T) {
@@ -2899,6 +3403,133 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 		mockS.AssertCalled(t, "GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything)
 	})
+
+	t.Run("Windowed Backfill Retains Partial Progress And Resumes From Latest Stored Hour", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 10, 30, 0, 0, time.UTC)
+
+		storedByDay := make(map[string]types.DailyEnergyStats)
+		latestStoredTime := func() (time.Time, int) {
+			if len(storedByDay) == 0 {
+				return time.Time{}, 0
+			}
+			var latestDay time.Time
+			var latest types.DailyEnergyStats
+			for _, d := range storedByDay {
+				if latestDay.IsZero() || d.TSDayStart.After(latestDay) {
+					latestDay = d.TSDayStart
+					latest = d
+				}
+			}
+			if len(latest.Hourly) > 0 {
+				maxH := latest.Hourly[0].TSHourStart
+				for _, h := range latest.Hourly[1:] {
+					if h.TSHourStart.After(maxH) {
+						maxH = h.TSHourStart
+					}
+				}
+				return maxH, types.CurrentEnergyStatsVersion
+			}
+			return latest.TSDayStart, types.CurrentEnergyStatsVersion
+		}
+
+		buildDailyRange := func(start, end time.Time) []types.DailyEnergyStats {
+			var out []types.DailyEnergyStats
+			startDay := truncateDay(start)
+			endDay := truncateDay(end)
+			for d := startDay; !d.After(endDay); d = d.AddDate(0, 0, 1) {
+				lastH := 23
+				if d.Equal(endDay) {
+					lastH = end.Hour()
+				}
+				var hourly []types.EnergyStats
+				for h := 0; h <= lastH; h++ {
+					hourly = append(hourly, types.EnergyStats{
+						TSHourStart: d.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    1.0,
+					})
+				}
+				out = append(out, types.DailyEnergyStats{
+					TSDayStart:   d,
+					TimeLocation: "UTC",
+					Hourly:       hourly,
+				})
+			}
+			return out
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-resume").Return(time.Time{}, 0, nil).Once()
+		mockS.On("UpsertEnergyHistories", mock.Anything, "site-resume", mock.Anything, types.CurrentEnergyStatsVersion).Run(func(args mock.Arguments) {
+			batch := args.Get(2).([]types.DailyEnergyStats)
+			for _, d := range batch {
+				storedByDay[d.TSDayStart.Format("2006-01-02")] = d
+			}
+		}).Return(nil)
+
+		// Cycle 1: Window 1 succeeds and saves 5 days (2026-07-06..2026-07-10); Window 2 times out; Window 3 does not run.
+		win1Start := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+		win1End := time.Date(2026, 7, 10, 23, 0, 0, 0, time.UTC)
+		mockES1 := &mockESS{}
+		var cycle1Windows [][2]time.Time
+		mockES1.On("GetEnergyHistory", mock.Anything, win1Start, win1End).Run(func(args mock.Arguments) {
+			cycle1Windows = append(cycle1Windows, [2]time.Time{args.Get(1).(time.Time), args.Get(2).(time.Time)})
+		}).Return(buildDailyRange(win1Start, win1End), nil).Once()
+		mockES1.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			cycle1Windows = append(cycle1Windows, [2]time.Time{args.Get(1).(time.Time), args.Get(2).(time.Time)})
+		}).Return([]types.DailyEnergyStats{}, context.DeadlineExceeded).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return now },
+		}
+
+		err := srv.updateEnergyHistory(context.Background(), "site-resume", mockES1)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Len(t, cycle1Windows, 2)
+		assert.Len(t, storedByDay, 5, "first completed 5-day window must be retained in storage")
+		cursorAfterCycle1, verAfterCycle1 := latestStoredTime()
+		assert.Equal(t, time.Date(2026, 7, 10, 23, 0, 0, 0, time.UTC), cursorAfterCycle1)
+		assert.Equal(t, types.CurrentEnergyStatsVersion, verAfterCycle1)
+
+		// Cycle 2: Resumes from cursorAfterCycle1 (2026-07-10 23:00) and completes remaining windows through 2026-07-20 10:00.
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-resume").Return(cursorAfterCycle1, verAfterCycle1, nil).Once()
+		c2w1Start := time.Date(2026, 7, 10, 23, 0, 0, 0, time.UTC)
+		c2w1End := time.Date(2026, 7, 14, 23, 0, 0, 0, time.UTC)
+		c2w2Start := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+		c2w2End := time.Date(2026, 7, 19, 23, 0, 0, 0, time.UTC)
+		c2w3Start := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+		c2w3End := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+		mockES2 := &mockESS{}
+		var cycle2Windows [][2]time.Time
+		mockES2.On("GetEnergyHistory", mock.Anything, c2w1Start, c2w1End).Run(func(args mock.Arguments) {
+			cycle2Windows = append(cycle2Windows, [2]time.Time{args.Get(1).(time.Time), args.Get(2).(time.Time)})
+		}).Return(buildDailyRange(c2w1Start, c2w1End), nil).Once()
+		mockES2.On("GetEnergyHistory", mock.Anything, c2w2Start, c2w2End).Run(func(args mock.Arguments) {
+			cycle2Windows = append(cycle2Windows, [2]time.Time{args.Get(1).(time.Time), args.Get(2).(time.Time)})
+		}).Return(buildDailyRange(c2w2Start, c2w2End), nil).Once()
+		mockES2.On("GetEnergyHistory", mock.Anything, c2w3Start, c2w3End).Run(func(args mock.Arguments) {
+			cycle2Windows = append(cycle2Windows, [2]time.Time{args.Get(1).(time.Time), args.Get(2).(time.Time)})
+		}).Return(buildDailyRange(c2w3Start, c2w3End), nil).Once()
+
+		err = srv.updateEnergyHistory(context.Background(), "site-resume", mockES2)
+		require.NoError(t, err)
+		if assert.Len(t, cycle2Windows, 3) {
+			assert.Equal(t, time.Date(2026, 7, 10, 23, 0, 0, 0, time.UTC), cycle2Windows[0][0])
+			assert.Equal(t, time.Date(2026, 7, 14, 23, 0, 0, 0, time.UTC), cycle2Windows[0][1])
+			assert.Equal(t, time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC), cycle2Windows[1][0])
+			assert.Equal(t, time.Date(2026, 7, 19, 23, 0, 0, 0, time.UTC), cycle2Windows[1][1])
+			assert.Equal(t, time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC), cycle2Windows[2][0])
+			assert.Equal(t, time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC), cycle2Windows[2][1])
+		}
+		assert.Len(t, storedByDay, 15, "all 15 calendar days (2026-07-06..2026-07-20) must be stored across the two cycles")
+	})
+}
+
+type syncTestRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f syncTestRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestUpdateWeatherHistory(t *testing.T) {
@@ -3250,6 +3881,102 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Forecast Transient Error Succeeds On Single Retry", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+
+		now := time.Date(2026, 6, 5, 10, 0, 0, 0, loc)
+		todayMidnight := time.Date(2026, 6, 5, 0, 0, 0, 0, loc)
+		startDay := todayMidnight.AddDate(0, 0, -14)
+		endDay := todayMidnight.AddDate(0, 0, 2)
+
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockW.On("Forecast", mock.Anything, sl, startDay, endDay).Return([]types.Weather{}, fmt.Errorf("weather api returned status 502")).Once()
+		mockW.On("Forecast", mock.Anything, sl, startDay, endDay).Return([]types.Weather{
+			{TSDayStart: todayMidnight},
+		}, nil).Once()
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.MatchedBy(func(w []types.Weather) bool {
+			return len(w) == 1 && w[0].TSDayStart.Equal(todayMidnight)
+		}), types.CurrentWeatherVersion).Return(nil).Once()
+
+		srv := &Server{
+			storage:           mockS,
+			weather:           mockW,
+			nowFunc:           func() time.Time { return now },
+			weatherRetryDelay: time.Millisecond,
+		}
+
+		var warnBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		err := srv.updateWeatherHistory(ctx, "test-site", sl)
+		require.NoError(t, err)
+
+		lines := strings.Split(strings.TrimSpace(warnBuf.String()), "\n")
+		if assert.Len(t, lines, 1) {
+			assert.Contains(t, lines[0], `"level":"WARN"`)
+			assert.Contains(t, lines[0], "weather forecast failed, retrying")
+		}
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Forecast Fails Twice Returns Error After Single Retry", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+
+		now := time.Date(2026, 6, 5, 10, 0, 0, 0, loc)
+		todayMidnight := time.Date(2026, 6, 5, 0, 0, 0, 0, loc)
+		startDay := todayMidnight.AddDate(0, 0, -14)
+		endDay := todayMidnight.AddDate(0, 0, 2)
+
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockW.On("Forecast", mock.Anything, sl, startDay, endDay).Return([]types.Weather{}, fmt.Errorf("weather api returned status 503")).Times(2)
+
+		srv := &Server{
+			storage:           mockS,
+			weather:           mockW,
+			nowFunc:           func() time.Time { return now },
+			weatherRetryDelay: time.Millisecond,
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
+		require.ErrorContains(t, err, "weather api returned status 503")
+		mockS.AssertNotCalled(t, "UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Forecast Retry Aborts Promptly When Context Canceled During Cooldown", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+
+		now := time.Date(2026, 6, 5, 10, 0, 0, 0, loc)
+		todayMidnight := time.Date(2026, 6, 5, 0, 0, 0, 0, loc)
+		startDay := todayMidnight.AddDate(0, 0, -14)
+		endDay := todayMidnight.AddDate(0, 0, 2)
+
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, time.Time{}, 0, nil).Once()
+		mockW.On("Forecast", mock.Anything, sl, startDay, endDay).Return([]types.Weather{}, fmt.Errorf("weather api returned status 502")).Once()
+
+		srv := &Server{
+			storage:           mockS,
+			weather:           mockW,
+			nowFunc:           func() time.Time { return now },
+			weatherRetryDelay: 5 * time.Second,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		err := srv.updateWeatherHistory(ctx, "test-site", sl)
+		elapsed := time.Since(start)
+
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Less(t, elapsed, 500*time.Millisecond)
 		mockW.AssertExpectations(t)
 	})
 }

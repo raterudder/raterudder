@@ -106,10 +106,12 @@ type Server struct {
 	sensitiveBurst     int
 	nowFunc            func() time.Time
 
-	vapidKey        *ecdsa.PrivateKey
-	vapidPublicKey  string
-	vapidSubject    string
-	gridOutageDelay time.Duration
+	vapidKey            *ecdsa.PrivateKey
+	vapidPublicKey      string
+	vapidSubject        string
+	gridOutageDelay     time.Duration
+	settingsSyncTimeout time.Duration
+	weatherRetryDelay   time.Duration
 
 	featsMu           sync.RWMutex
 	featsFetchMu      sync.Mutex

@@ -24,9 +24,17 @@ import (
 var errESSRateLimited = errors.New("ESS rate limited")
 
 const (
-	maxInteractiveESSBackoff = 15 * time.Minute
-	essFailurePauseThreshold = 40
+	maxInteractiveESSBackoff   = 15 * time.Minute
+	essFailurePauseThreshold   = 40
+	defaultSettingsSyncTimeout = 30 * time.Second
 )
+
+func (s *Server) getSettingsSyncTimeout() time.Duration {
+	if s.settingsSyncTimeout > 0 {
+		return s.settingsSyncTimeout
+	}
+	return defaultSettingsSyncTimeout
+}
 
 func getInteractiveESSBackoff(failures int) time.Duration {
 	if failures <= 1 {
@@ -383,10 +391,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			updatedWeather = true
 			wg.Go(func() {
 				log.Ctx(ctx).InfoContext(ctx, "fetching initial weather for new location")
-				ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 				defer done()
 				if err := s.updateWeatherHistory(ctx, siteID, loc); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to sync weather history after settings update", slog.Any("error", err))
+					log.Ctx(ctx).WarnContext(ctx, "failed to sync weather history after settings update", slog.Any("error", err))
 				}
 			})
 		} else {
@@ -547,10 +555,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				updatedEnergy = true
 				wg.Go(func() {
 					log.Ctx(ctx).InfoContext(ctx, "backfilling energy history for new credentials")
-					ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+					ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 					defer done()
 					if err := s.updateEnergyHistory(ctx, siteID, essSystem); err != nil {
-						log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history after settings update", slog.Any("error", err))
+						log.Ctx(ctx).WarnContext(ctx, "failed to sync energy history after settings update", slog.Any("error", err))
 					}
 				})
 			}
@@ -583,10 +591,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				slog.String("utilityProvider", newSettings.UtilityProvider),
 				slog.String("utilityRate", newSettings.UtilityRate),
 			)
-			ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			ctx, done := context.WithTimeout(context.WithoutCancel(ctx), s.getSettingsSyncTimeout())
 			defer done()
 			if err := s.updatePriceHistory(ctx, siteID, u, true); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
+				log.Ctx(ctx).WarnContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
 			}
 		})
 	}
