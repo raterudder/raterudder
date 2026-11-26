@@ -963,6 +963,58 @@ func TestExpandBlockAction(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("FusedExpandAndStepInto_ReusesScratchAndMatchesExpandBlockPlan", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		rates := []float64{0.06, 0.05, 0.06, 0.14, 0.14, 0.14, 0.35, 0.40, 0.35}
+		solars := []float64{0.0, 0.0, 0.0, 1.5, 1.8, 1.2, 0.2, 0.0, 0.0}
+		timeline := make([]planInterval, len(rates))
+		for i := range rates {
+			ti := now.Add(time.Duration(i*20) * time.Minute)
+			timeline[i] = planInterval{
+				startTime:         ti,
+				endTime:           ti.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        rates[i],
+				exportRate:        rates[i] - 0.02,
+				batteryExportRate: rates[i] - 0.02,
+				solarKWH:          solars[i],
+				loadKWH:           0.4,
+				minSOC:            20.0,
+			}
+		}
+		blocks := buildTimelineBlocks(ctx, timeline, nil, settings, types.SystemStatus{}, nil)
+		require.GreaterOrEqual(t, len(blocks), 3)
+
+		choices := make([]blockActionChoice, len(blocks))
+		choices[0] = blockActionChoice{actionType: blockActionCharge, targetSOC: 85.0}
+		for b := 1; b < len(blocks)-1; b++ {
+			choices[b] = blockActionChoice{actionType: blockActionStandby, targetSOC: 60.0}
+		}
+		choices[len(blocks)-1] = blockActionChoice{actionType: blockActionExport, targetSOC: 25.0, useSolarExportPrefix: true}
+
+		initSt := planState{soc: 35.0, energyKWH: 13.5 * 0.35, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		effRT := resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, types.SystemStatus{})
+
+		wantActs := expandBlockPlan(choices, blocks, initSt, timeline, nil, settings, types.SystemStatus{}, nil, effRT, nil)
+		_, _, wantStates, wantMetrics := scoreCandidateTrajectory(wantActs, timeline, initSt, nil, postHorizonValuation{}, settings, effRT)
+
+		scratch := newPlanSearchScratch(len(timeline), len(blocks))
+		firstActsPtr := &scratch.trialActions[:1][0]
+		firstStatesPtr := &scratch.trialStates[:1][0]
+		firstMetricsPtr := &scratch.trialMetrics[:1][0]
+
+		gotActs, gotStates, gotMetrics := expandAndStepBlockPlanInto(scratch, choices, blocks, initSt, timeline, nil, settings, types.SystemStatus{}, nil, effRT, nil)
+		assert.Equal(t, wantActs, gotActs)
+		assert.Equal(t, wantStates, gotStates)
+		assert.Equal(t, wantMetrics, gotMetrics)
+		if assert.NotEmpty(t, gotActs) && assert.NotEmpty(t, gotStates) && assert.NotEmpty(t, gotMetrics) {
+			assert.Same(t, firstActsPtr, &gotActs[0], "expandAndStepBlockPlanInto must reuse scratch.trialActions backing array")
+			assert.Same(t, firstStatesPtr, &gotStates[0], "expandAndStepBlockPlanInto must reuse scratch.trialStates backing array")
+			assert.Same(t, firstMetricsPtr, &gotMetrics[0], "expandAndStepBlockPlanInto must reuse scratch.trialMetrics backing array")
+		}
+	})
 }
 
 func TestIsBlockActionAllowed(t *testing.T) {
@@ -2155,6 +2207,38 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		assert.True(t, valid, "Grid outage actions (ActionReasonGridUnavailable) must be exempt from reserve deficit rejection: "+reason)
 		assert.Empty(t, reason)
 	})
+
+	t.Run("ValidateTrajectoryStates_MatchesWrapperAndRejectsLengthMismatch", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.40, exportRate: 0.35, batteryExportRate: 0.35, loadKWH: 1.0, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.25, exportRate: 0.20, batteryExportRate: 0.20, loadKWH: 0.2, minSOC: 20.0},
+		}
+		state := planState{soc: 80.0, energyKWH: 13.5 * 0.80, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+
+		dominatedActs := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby},
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+		}
+		_, _, domStates, domMetrics := scoreCandidateTrajectory(dominatedActs, timeline, state, nil, postHorizonValuation{}, settings, 0.90)
+		gotValid, gotReason := validateTrajectoryStates(dominatedActs, domStates, domMetrics, timeline, settings, wear, state, 0)
+		wantValid, wantReason := validateCandidateTrajectory(dominatedActs, timeline, settings, wear, 0.90, state, 0)
+		assert.Equal(t, wantValid, gotValid)
+		assert.Equal(t, wantReason, gotReason)
+
+		validActs := []actionCandidate{
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeLoad},
+		}
+		_, _, okStates, okMetrics := scoreCandidateTrajectory(validActs, timeline, state, nil, postHorizonValuation{}, settings, 0.90)
+		okValid, okReason := validateTrajectoryStates(validActs, okStates, okMetrics, timeline, settings, wear, state, 0)
+		assert.True(t, okValid)
+		assert.Empty(t, okReason)
+
+		badValid, badReason := validateTrajectoryStates(validActs, okStates[:2], okMetrics, timeline, settings, wear, state, 0)
+		assert.False(t, badValid)
+		assert.Equal(t, "length mismatch", badReason)
+	})
 }
 
 func TestScoreCandidateTrajectory(t *testing.T) {
@@ -2254,6 +2338,47 @@ func TestScoreCandidateTrajectory(t *testing.T) {
 		assert.InDelta(t, -0.30, physEarly, 1e-6, "Undiscounted physical export credit must be -$0.30")
 		assert.InDelta(t, -0.30, physLate, 1e-6, "Undiscounted physical export credit must be -$0.30")
 		assert.Less(t, scoreEarly, scoreLate, "Score must strictly prefer capturing equal-rate export revenue today over waiting >16h until tomorrow")
+	})
+
+	t.Run("ScoreTrajectoryStates_MatchesWrapperWithMandatoryVPP", func(t *testing.T) {
+		t.Parallel()
+		now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+		settings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+		}
+		timeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.12, exportRate: 0.08, batteryExportRate: 0.08, loadKWH: 0.8, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.30, batteryExportRate: 0.30, loadKWH: 1.2, minSOC: 20.0},
+		}
+		initial := planState{
+			time:           now,
+			soc:            35.0,
+			energyKWH:      13.5 * 0.35,
+			capacityKWH:    13.5,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+		vpp := []vppAnchor{
+			{
+				eventStart: now.Add(2 * time.Hour),
+				eventEnd:   now.Add(4 * time.Hour),
+				deadline:   now.Add(time.Hour),
+				mandatory:  true,
+			},
+		}
+		postHorizon := postHorizonValuation{knownPostHorizonRate: 0.15}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny, targetSOC: 20.0},
+		}
+		wantScore, wantPhys, states, metrics := scoreCandidateTrajectory(acts, timeline, initial, vpp, postHorizon, settings, 0.90)
+		wear := getWearRates(settings, settings.GetOptimizationParams())
+		gotScore, gotPhys := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vpp, postHorizon, settings, wear, 0.90)
+		assert.Equal(t, wantScore, gotScore)
+		assert.Equal(t, wantPhys, gotPhys)
 	})
 }
 
@@ -2947,6 +3072,38 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		negBlocks := buildTimelineBlocks(ctx, negTimeline, negVPP, vppSettings, status40, nil)
 		_, negScore := critiqueBlockPlan(ctx, negBlocks, negTimeline, state40, negVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil)
 		assert.Less(t, negScore, math.MaxFloat64, "Negative-price charge before zero-price VPP export must not fail all trajectories")
+	})
+
+	t.Run("SharedScratchReuse_MatchesFreshCritiqueWithReserveRecovery", func(t *testing.T) {
+		t.Parallel()
+		stepUpSettings := settings
+		stepUpSettings.MinBatterySOC = 20.0
+		tlA := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.06, exportRate: 0.03, batteryExportRate: 0.03, loadKWH: 0.8, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.11, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 1.2, minSOC: 50.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.36, exportRate: 0.30, batteryExportRate: 0.30, loadKWH: 1.5, minSOC: 20.0},
+		}
+		blocksA := buildTimelineBlocks(ctx, tlA, nil, stepUpSettings, types.SystemStatus{}, nil)
+		initA := planState{soc: 22.0, energyKWH: 13.5 * 0.22, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+
+		tlB := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.5, minSOC: 40.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.28, exportRate: 0.22, batteryExportRate: 0.22, loadKWH: 1.0, minSOC: 20.0},
+		}
+		blocksB := buildTimelineBlocks(ctx, tlB, nil, stepUpSettings, types.SystemStatus{}, nil)
+		initB := planState{soc: 15.0, energyKWH: 13.5 * 0.15, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+
+		scratch := newPlanSearchScratch(len(tlA), len(blocksA))
+		gotChoicesA, gotScoreA := critiqueBlockPlanWithScratch(ctx, blocksA, tlA, initA, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, stepUpSettings, types.SystemStatus{}, nil, 0, nil, scratch)
+		gotChoicesB, gotScoreB := critiqueBlockPlanWithScratch(ctx, blocksB, tlB, initB, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, stepUpSettings, types.SystemStatus{}, nil, 0, nil, scratch)
+
+		wantChoicesA, wantScoreA := critiqueBlockPlan(ctx, blocksA, tlA, initA, nil, postHorizonValuation{knownPostHorizonRate: 0.12}, stepUpSettings, types.SystemStatus{}, nil, 0, nil)
+		wantChoicesB, wantScoreB := critiqueBlockPlan(ctx, blocksB, tlB, initB, nil, postHorizonValuation{knownPostHorizonRate: 0.10}, stepUpSettings, types.SystemStatus{}, nil, 0, nil)
+
+		assert.Equal(t, wantChoicesA, gotChoicesA)
+		assert.Equal(t, wantScoreA, gotScoreA)
+		assert.Equal(t, wantChoicesB, gotChoicesB)
+		assert.Equal(t, wantScoreB, gotScoreB)
 	})
 }
 
@@ -3903,6 +4060,54 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		// Must preserve the 85% (> 80%) post-peak reserve entering 09:00.
 		assert.GreaterOrEqual(t, path.states[15].soc, 84.5,
 			"Must stay at or above the 85%% post-peak reserve at 09:00")
+	})
+
+	t.Run("SharedScratchReuse_DoesNotAliasReturnedPlanPathSlices", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		t0 := time.Date(2026, 6, 15, 6, 0, 0, 0, time.UTC)
+
+		tl1 := []planInterval{
+			{startTime: t0, endTime: t0.Add(time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 1.2, minSOC: 20.0},
+			{startTime: t0.Add(time.Hour), endTime: t0.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.08, exportRate: 0.04, batteryExportRate: 0.04, loadKWH: 0.3, solarKWH: 4.5, minSOC: 20.0},
+			{startTime: t0.Add(2 * time.Hour), endTime: t0.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.30, batteryExportRate: 0.30, loadKWH: 1.0, minSOC: 20.0},
+		}
+		blocks1 := []timelineBlock{
+			{startIdx: 0, endIdx: 0, durationHours: 1.0, minSOC: 20.0, avgImportRate: 0.08, minImportRate: 0.08, maxImportRate: 0.08, maxExportRate: 0.04, maxBatteryExportRate: 0.04, netSolarKWH: -1.2},
+			{startIdx: 1, endIdx: 1, durationHours: 1.0, minSOC: 20.0, avgImportRate: 0.08, minImportRate: 0.08, maxImportRate: 0.08, maxExportRate: 0.04, maxBatteryExportRate: 0.04, netSolarKWH: 4.2},
+			{startIdx: 2, endIdx: 2, durationHours: 1.0, minSOC: 20.0, avgImportRate: 0.35, minImportRate: 0.35, maxImportRate: 0.35, maxExportRate: 0.30, maxBatteryExportRate: 0.30, netSolarKWH: -1.0},
+		}
+		choices1 := []blockActionChoice{
+			{actionType: blockActionStandby},
+			{actionType: blockActionLoad},
+			{actionType: blockActionExport, targetSOC: 20.0},
+		}
+		init1 := planState{time: t0, soc: 85.0, energyKWH: 13.5 * 0.85, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0}
+		post1 := postHorizonValuation{knownPostHorizonRate: 0.08}
+
+		wantPath1 := optimizeBlockTargets(ctx, choices1, blocks1, tl1, init1, nil, post1, settings, types.SystemStatus{}, nil, 0, nil)
+
+		scratch := newPlanSearchScratch(len(tl1), len(blocks1))
+		gotPath1 := optimizeBlockTargetsWithScratch(ctx, choices1, blocks1, tl1, init1, nil, post1, settings, types.SystemStatus{}, nil, 0, nil, scratch)
+		snapshotActs1 := append([]actionCandidate(nil), gotPath1.actions...)
+		snapshotStates1 := append([]planState(nil), gotPath1.states...)
+		snapshotMetrics1 := append([]intervalMetrics(nil), gotPath1.metrics...)
+
+		// Reuse the same scratch arena on a completely different Charge + Export plan and confirm gotPath1 is untouched.
+		choices2 := []blockActionChoice{
+			{actionType: blockActionCharge, targetSOC: 100.0},
+			{actionType: blockActionDirectSolarExport, targetSOC: 20.0},
+			{actionType: blockActionExport, targetSOC: 20.0},
+		}
+		init2 := planState{time: t0, soc: 25.0, energyKWH: 13.5 * 0.25, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0}
+		gotPath2 := optimizeBlockTargetsWithScratch(ctx, choices2, blocks1, tl1, init2, nil, post1, settings, types.SystemStatus{}, nil, 0, nil, scratch)
+		wantPath2 := optimizeBlockTargets(ctx, choices2, blocks1, tl1, init2, nil, post1, settings, types.SystemStatus{}, nil, 0, nil)
+
+		assert.Equal(t, wantPath1, gotPath1)
+		assert.Equal(t, snapshotActs1, gotPath1.actions, "Reusing planSearchScratch must not mutate prior planPath.actions")
+		assert.Equal(t, snapshotStates1, gotPath1.states, "Reusing planSearchScratch must not mutate prior planPath.states")
+		assert.Equal(t, snapshotMetrics1, gotPath1.metrics, "Reusing planSearchScratch must not mutate prior planPath.metrics")
+		assert.Equal(t, wantPath2, gotPath2)
 	})
 }
 
@@ -5175,45 +5380,133 @@ func BenchmarkSearchOptimalPlanBlocks(b *testing.B) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
 
-	timeline := make([]planInterval, 24)
-	for i := 0; i < 24; i++ {
-		tStep := now.Add(time.Duration(i) * time.Hour)
-		rate := 0.08
-		if i >= 9 && i <= 12 {
-			rate = 0.45 // peak
+	b.Run("TOUPeak", func(b *testing.B) {
+		timeline := make([]planInterval, 24)
+		for i := 0; i < 24; i++ {
+			tStep := now.Add(time.Duration(i) * time.Hour)
+			rate := 0.08
+			if i >= 9 && i <= 12 {
+				rate = 0.45 // peak
+			}
+			timeline[i] = planInterval{
+				startTime:         tStep,
+				endTime:           tStep.Add(time.Hour),
+				durationHours:     1.0,
+				importRate:        rate,
+				exportRate:        0.05,
+				batteryExportRate: 0.05,
+				loadKWH:           1.5,
+				solarKWH:          0.0,
+				minSOC:            20.0,
+			}
 		}
-		timeline[i] = planInterval{
-			startTime:         tStep,
-			endTime:           tStep.Add(time.Hour),
-			durationHours:     1.0,
-			importRate:        rate,
-			exportRate:        0.05,
-			batteryExportRate: 0.05,
-			loadKWH:           1.5,
-			solarKWH:          0.0,
-			minSOC:            20.0,
+
+		initialState := planState{
+			energyKWH:   13.5 * 0.5,
+			soc:         50.0,
+			capacityKWH: 13.5,
 		}
-	}
 
-	initialState := planState{
-		energyKWH:   13.5 * 0.5,
-		soc:         50.0,
-		capacityKWH: 13.5,
-	}
+		status := types.SystemStatus{
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50.0,
+		}
 
-	status := types.SystemStatus{
-		BatteryCapacityKWH: 13.5,
-		BatterySOC:         50.0,
-	}
+		settings := types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+		}
 
-	settings := types.Settings{
-		MinBatterySOC:       20,
-		GridChargeBatteries: true,
-	}
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = c.searchOptimalPlanBlocks(ctx, timeline, initialState, nil, postHorizonValuation{}, settings, status, nil, nil)
+		}
+	})
 
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = c.searchOptimalPlanBlocks(ctx, timeline, initialState, nil, postHorizonValuation{}, settings, status, nil, nil)
-	}
+	b.Run("DynamicTariffSolarReserveStepUp", func(b *testing.B) {
+		// 72 x 20-minute intervals (24h horizon) with dynamic hourly rates, midday solar exports,
+		// afternoon/evening peak spike, and a post-peak reserve step-up from 20% to 50% SOC.
+		hourlyImport := [24]float64{
+			0.072, 0.068, 0.085, 0.110, // 08:00-12:00 morning valley & shoulder
+			0.135, 0.148, 0.162, 0.195, // 12:00-16:00 sunny afternoon ramp
+			0.340, 0.420, 0.390, 0.280, // 16:00-20:00 evening peak spike
+			0.140, 0.115, 0.095, 0.082, // 20:00-00:00 post-peak (50% reserve step-up)
+			0.064, 0.058, 0.055, 0.060, // 00:00-04:00 overnight valley (50% reserve)
+			0.075, 0.098, 0.145, 0.180, // 04:00-08:00 morning ramp
+		}
+		timeline := make([]planInterval, 72)
+		for i := 0; i < 72; i++ {
+			tStep := now.Add(time.Duration(i*20) * time.Minute)
+			hourIdx := i / 3
+			hourOfDay := tStep.Hour()
+			imp := hourlyImport[hourIdx]
+			exp := max(0.03, imp-0.035)
+			var solarKWH float64
+			if hourOfDay >= 9 && hourOfDay < 17 {
+				solarKWH = 1.6 // 4.8 kW daytime solar
+			}
+			loadKWH := 0.45
+			if hourOfDay >= 17 && hourOfDay < 22 {
+				loadKWH = 0.95
+			}
+			minSOC := 20.0
+			if hourOfDay >= 20 || hourOfDay < 6 {
+				minSOC = 50.0
+			}
+			timeline[i] = planInterval{
+				startTime:         tStep,
+				endTime:           tStep.Add(20 * time.Minute),
+				durationHours:     1.0 / 3.0,
+				importRate:        imp,
+				exportRate:        exp,
+				batteryExportRate: exp,
+				loadKWH:           loadKWH,
+				solarKWH:          solarKWH,
+				minSOC:            minSOC,
+			}
+		}
+
+		initialState := planState{
+			time:           now,
+			energyKWH:      27.0 * 0.35,
+			soc:            35.0,
+			capacityKWH:    27.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			planStartTime:  now,
+		}
+
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    27.0,
+			BatterySOC:            35.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+		}
+
+		settings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 6}}},
+					MinBatterySOC: 50.0,
+				},
+			},
+		}
+
+		postHorizon := postHorizonValuation{knownPostHorizonRate: 0.16}
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = c.searchOptimalPlanBlocks(ctx, timeline, initialState, nil, postHorizon, settings, status, nil, nil)
+		}
+	})
 }

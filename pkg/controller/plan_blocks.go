@@ -732,10 +732,94 @@ func findSolarExportStartIdx(
 	return 0, false
 }
 
-// findBestBatteryRateWindows scans all contiguous K-interval windows in [startIdx .. endIdx] and returns
-// the start indices of all windows whose average import rate (when importRate is true) or average
-// battery export rate (when importRate is false) is within priceEpsilonForEquality of the block's best K-window rate.
-func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
+// planSearchScratch holds reusable trajectory, window, and choice buffers for a single
+// searchOptimalPlanBlocks invocation so Pass 1 and Pass 2 avoid per-trial heap allocations
+// while concurrent Plan calls remain completely isolated.
+type planSearchScratch struct {
+	trialActions   []actionCandidate
+	trialStates    []planState
+	trialMetrics   []intervalMetrics
+	tiedPositions  []int
+	blockActs      []actionCandidate
+	nextBlockActs  []actionCandidate
+	peekActs       []actionCandidate
+	peekStates     []planState
+	stepStatesBuf  []planState
+	currentStates  []planState
+	bestStates     []planState
+	initActs       []actionCandidate
+	initStates     []planState
+	coarseGridC    []float64
+	coarseGridE    []float64
+	blockEntry     []planState
+	blockDrained   []float64
+	blockHasSolar  []bool
+	candidateTypes []blockActionChoice
+	baseTrial      []blockActionChoice
+	bestChoices    []blockActionChoice
+	pairedTrials   [][2]blockActionChoice
+	variantChoices [][]blockActionChoice
+	choicePool     []blockActionChoice
+	choicePoolUsed int
+}
+
+func newPlanSearchScratch(numIntervals, numBlocks int) *planSearchScratch {
+	poolCap := 24 * max(1, numBlocks)
+	return &planSearchScratch{
+		trialActions:   make([]actionCandidate, 0, numIntervals),
+		trialStates:    make([]planState, 0, numIntervals+1),
+		trialMetrics:   make([]intervalMetrics, 0, numIntervals),
+		tiedPositions:  make([]int, 0, numIntervals),
+		blockActs:      make([]actionCandidate, 0, numIntervals),
+		nextBlockActs:  make([]actionCandidate, 0, numIntervals),
+		peekActs:       make([]actionCandidate, 0, numIntervals),
+		peekStates:     make([]planState, 0, numIntervals+1),
+		stepStatesBuf:  make([]planState, numIntervals+1),
+		currentStates:  make([]planState, 0, numIntervals+1),
+		bestStates:     make([]planState, 0, numIntervals+1),
+		initActs:       make([]actionCandidate, 0, numIntervals),
+		initStates:     make([]planState, 0, numIntervals+1),
+		coarseGridC:    make([]float64, 0, 16),
+		coarseGridE:    make([]float64, 0, 16),
+		blockEntry:     make([]planState, numBlocks),
+		blockDrained:   make([]float64, numBlocks),
+		blockHasSolar:  make([]bool, numBlocks),
+		candidateTypes: make([]blockActionChoice, 0, 48),
+		baseTrial:      make([]blockActionChoice, numBlocks),
+		bestChoices:    make([]blockActionChoice, numBlocks),
+		pairedTrials:   make([][2]blockActionChoice, 0, 128),
+		variantChoices: make([][]blockActionChoice, 0, 16),
+		choicePool:     make([]blockActionChoice, poolCap),
+	}
+}
+
+func (s *planSearchScratch) resetVariants() {
+	s.variantChoices = s.variantChoices[:0]
+	s.choicePoolUsed = 0
+}
+
+func (s *planSearchScratch) cloneChoices(src []blockActionChoice) []blockActionChoice {
+	n := len(src)
+	if n == 0 {
+		return nil
+	}
+	if s.choicePoolUsed+n > len(s.choicePool) {
+		newLen := max(len(s.choicePool)*2, s.choicePoolUsed+n)
+		newPool := make([]blockActionChoice, newLen)
+		copy(newPool, s.choicePool[:s.choicePoolUsed])
+		s.choicePool = newPool
+	}
+	dst := s.choicePool[s.choicePoolUsed : s.choicePoolUsed+n : s.choicePoolUsed+n]
+	s.choicePoolUsed += n
+	copy(dst, src)
+	return dst
+}
+
+// findBestBatteryRateWindowsInto scans all contiguous K-interval windows in [startIdx .. endIdx] and
+// appends into dst[:0] the start indices of all windows whose average import rate (when importRate is
+// true) or average battery export rate (when importRate is false) is within priceEpsilonForEquality
+// of the block's best K-window rate.
+func findBestBatteryRateWindowsInto(dst []int, timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
 	bestAvg := -math.MaxFloat64
 	if importRate {
 		bestAvg = math.MaxFloat64
@@ -754,7 +838,7 @@ func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int
 			bestAvg = avg
 		}
 	}
-	var tiedPositions []int
+	tiedPositions := dst[:0]
 	for s := startIdx; s <= endIdx-K+1; s++ {
 		var sum float64
 		for t := s; t < s+K; t++ {
@@ -772,6 +856,13 @@ func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int
 	return tiedPositions
 }
 
+// findBestBatteryRateWindows scans all contiguous K-interval windows in [startIdx .. endIdx] and returns
+// the start indices of all windows whose average import rate (when importRate is true) or average
+// battery export rate (when importRate is false) is within priceEpsilonForEquality of the block's best K-window rate.
+func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
+	return findBestBatteryRateWindowsInto(nil, timeline, startIdx, endIdx, K, importRate)
+}
+
 // expandBlockAction expands a single canonical blockActionChoice for a timeline block into concrete
 // interval actionCandidates, enforcing strictly contiguous charging or exporting windows.
 func expandBlockAction(
@@ -785,8 +876,39 @@ func expandBlockAction(
 	lastAction *types.Action,
 	history []types.EnergyStats,
 ) []actionCandidate {
+	var tiedBuf []int
+	return expandBlockActionInto(nil, &tiedBuf, block, choice, startState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+}
+
+// expandBlockActionInto expands a single canonical blockActionChoice into dst (reusing dst's backing
+// array when cap(dst) >= L and reusing *tiedBuf for contiguous K-window rate scans).
+func expandBlockActionInto(
+	dst []actionCandidate,
+	tiedBuf *[]int,
+	block timelineBlock,
+	choice blockActionChoice,
+	startState planState,
+	timeline []planInterval,
+	vppEvents []vppAnchor,
+	settings types.Settings,
+	currentStatus types.SystemStatus,
+	lastAction *types.Action,
+	history []types.EnergyStats,
+) []actionCandidate {
 	L := block.endIdx - block.startIdx + 1
-	actions := make([]actionCandidate, L)
+	if L <= 0 {
+		return dst[:0]
+	}
+	var actions []actionCandidate
+	if cap(dst) >= L {
+		actions = dst[:L]
+	} else {
+		actions = make([]actionCandidate, L)
+	}
+	var localTied []int
+	if tiedBuf == nil {
+		tiedBuf = &localTied
+	}
 	defaultSolarMode := types.SolarModeAny
 	if !settings.GridExportSolar || block.maxExportRate < 0 {
 		defaultSolarMode = types.SolarModeNoExport
@@ -923,7 +1045,8 @@ func expandBlockAction(
 			// dynamic-tariff block (spread <= $0.06/kWh), sliding this K-interval window locks onto the cheapest
 			// sub-window (e.g. the cheapest hour plus the cheaper of its two neighbors if K > 3) while keeping
 			// charging contiguous.
-			tiedPositions := findBestBatteryRateWindows(timeline, block.startIdx, block.endIdx, K, true)
+			tiedPositions := findBestBatteryRateWindowsInto(*tiedBuf, timeline, block.startIdx, block.endIdx, K, true)
+			*tiedBuf = tiedPositions
 			// Tie-breaking among equal-rate windows:
 			// - If the battery enters the block in an active reserve deficit (startState.soc < block.minSOC),
 			//   charging must begin immediately at block.startIdx (or at step 1 only when block.startIdx == 0
@@ -1048,7 +1171,8 @@ func expandBlockAction(
 		isSuperSpike := block.maxBatteryExportRate > block.avgImportRate+priceMaterialityThresholdDollars
 
 		for K := 1; K <= L; K++ {
-			tiedPositions := findBestBatteryRateWindows(timeline, block.startIdx, block.endIdx, K, false)
+			tiedPositions := findBestBatteryRateWindowsInto(*tiedBuf, timeline, block.startIdx, block.endIdx, K, false)
+			*tiedBuf = tiedPositions
 			// Tie-breaking among windows that share the block's highest average export rate:
 			// - Default to the latest tied position (tiedPositions[len(tiedPositions)-1]) so on a normal TOU peak
 			//   block (where exportRate <= importRate), the battery covers peak home load first and dumps remaining
@@ -1088,9 +1212,68 @@ func expandBlockAction(
 				actions[i] = prefixCandForStep(step)
 			}
 		}
+
+	default:
+		clear(actions)
 	}
 
 	return actions
+}
+
+// expandAndStepBlockPlanInto expands all timeline block choices into scratch.trialActions and
+// computes scratch.trialStates and scratch.trialMetrics in a single forward stepPhysics pass.
+func expandAndStepBlockPlanInto(
+	scratch *planSearchScratch,
+	choices []blockActionChoice,
+	blocks []timelineBlock,
+	initial planState,
+	timeline []planInterval,
+	vppEvents []vppAnchor,
+	settings types.Settings,
+	currentStatus types.SystemStatus,
+	lastAction *types.Action,
+	roundTripEff float64,
+	history []types.EnergyStats,
+) ([]actionCandidate, []planState, []intervalMetrics) {
+	totalSteps := 0
+	for b := 0; b < len(blocks); b++ {
+		if L := blocks[b].endIdx - blocks[b].startIdx + 1; L > 0 {
+			totalSteps += L
+		}
+	}
+	if cap(scratch.trialActions) < totalSteps {
+		scratch.trialActions = make([]actionCandidate, totalSteps)
+	}
+	actions := scratch.trialActions[:totalSteps]
+
+	if cap(scratch.trialStates) < totalSteps+1 {
+		scratch.trialStates = make([]planState, totalSteps+1)
+	}
+	states := scratch.trialStates[:totalSteps+1]
+
+	if cap(scratch.trialMetrics) < totalSteps {
+		scratch.trialMetrics = make([]intervalMetrics, totalSteps)
+	}
+	metrics := scratch.trialMetrics[:totalSteps]
+
+	states[0] = initial
+	pos := 0
+	for b := 0; b < len(blocks); b++ {
+		L := blocks[b].endIdx - blocks[b].startIdx + 1
+		if L <= 0 {
+			continue
+		}
+		expanded := expandBlockActionInto(actions[pos:pos+L:pos+L], &scratch.tiedPositions, blocks[b], choices[b], states[pos], timeline, vppEvents, settings, currentStatus, lastAction, history)
+		for i := 0; i < L; i++ {
+			states[pos+i+1], metrics[pos+i] = stepPhysics(states[pos+i], expanded[i], timeline[pos+i], settings, roundTripEff)
+		}
+		pos += L
+	}
+
+	scratch.trialActions = actions
+	scratch.trialStates = states
+	scratch.trialMetrics = metrics
+	return actions, states, metrics
 }
 
 // expandBlockPlan expands a full slice of timeline block choices into an interval-level action schedule
@@ -1108,12 +1291,23 @@ func expandBlockPlan(
 	history []types.EnergyStats,
 ) []actionCandidate {
 	full := make([]actionCandidate, 0, len(timeline))
+	var tiedBuf []int
 	st := initial
 	for b := 0; b < len(blocks); b++ {
-		expanded := expandBlockAction(blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction, history)
-		for _, act := range expanded {
-			full = append(full, act)
-			st, _ = stepPhysics(st, act, timeline[len(full)-1], settings, roundTripEff)
+		L := blocks[b].endIdx - blocks[b].startIdx + 1
+		if L <= 0 {
+			continue
+		}
+		offset := len(full)
+		if cap(full) < offset+L {
+			grown := make([]actionCandidate, offset, offset+L)
+			copy(grown, full)
+			full = grown
+		}
+		full = full[:offset+L]
+		expanded := expandBlockActionInto(full[offset:offset+L:offset+L], &tiedBuf, blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction, history)
+		for i, act := range expanded {
+			st, _ = stepPhysics(st, act, timeline[offset+i], settings, roundTripEff)
 		}
 	}
 	return full
@@ -1466,11 +1660,34 @@ func validateCandidateTrajectory(
 	metrics := make([]intervalMetrics, len(timeline))
 	states[0] = initialState
 
-	firstChargeIdx := -1
 	for i := 0; i < len(timeline); i++ {
 		states[i+1], metrics[i] = stepPhysics(states[i], actions[i], timeline[i], settings, roundTripEff)
-		if actions[i].batteryMode == types.BatteryModeChargeAny && firstChargeIdx == -1 {
+	}
+
+	return validateTrajectoryStates(actions, states, metrics, timeline, settings, wear, initialState, initialDeficitWait)
+}
+
+// validateTrajectoryStates checks full-trajectory economic and dominance guardrails on precomputed
+// actions, states, and metrics without running stepPhysics or allocating slices.
+func validateTrajectoryStates(
+	actions []actionCandidate,
+	states []planState,
+	metrics []intervalMetrics,
+	timeline []planInterval,
+	settings types.Settings,
+	wear wearRates,
+	initialState planState,
+	initialDeficitWait time.Duration,
+) (bool, string) {
+	if len(actions) != len(timeline) || len(states) != len(timeline)+1 || len(metrics) != len(timeline) {
+		return false, "length mismatch"
+	}
+
+	firstChargeIdx := -1
+	for i := 0; i < len(timeline); i++ {
+		if actions[i].batteryMode == types.BatteryModeChargeAny {
 			firstChargeIdx = i
+			break
 		}
 	}
 
@@ -1810,10 +2027,29 @@ func scoreCandidateTrajectory(
 	states[0] = initial
 	optParams := settings.GetOptimizationParams()
 	wear := getWearRates(settings, optParams)
-
-	var discountedPhysicalCost, wearSum, penaltySum, elapsedHours float64
 	for i := 0; i < len(timeline); i++ {
 		states[i+1], metrics[i] = stepPhysics(states[i], actions[i], timeline[i], settings, roundTripEff)
+	}
+	score, totalPhysicalCost = scoreTrajectoryStates(actions, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
+	return score, totalPhysicalCost, states, metrics
+}
+
+// scoreTrajectoryStates evaluates the exact physical economics, wear, VPP deficit score, and
+// terminal battery valuation from precomputed actions, states, and metrics without running stepPhysics.
+func scoreTrajectoryStates(
+	actions []actionCandidate,
+	states []planState,
+	metrics []intervalMetrics,
+	timeline []planInterval,
+	initial planState,
+	vppEvents []vppAnchor,
+	postHorizon postHorizonValuation,
+	settings types.Settings,
+	wear wearRates,
+	roundTripEff float64,
+) (score float64, totalPhysicalCost float64) {
+	var discountedPhysicalCost, wearSum, penaltySum, elapsedHours float64
+	for i := 0; i < len(timeline); i++ {
 		totalPhysicalCost += metrics[i].costDollars
 		dur := max(0.0, timeline[i].durationHours)
 		midHours := elapsedHours + 0.5*dur
@@ -1844,7 +2080,7 @@ func scoreCandidateTrajectory(
 		score += float64(vppDeficitSOC) * 1000.0
 	}
 
-	return score, totalPhysicalCost, states, metrics
+	return score, totalPhysicalCost
 }
 
 // estimatePairedBlockStartState approximates the starting state of block b (stateB) after applying
@@ -1934,6 +2170,39 @@ func critiqueBlockPlan(
 	initialDeficitWait time.Duration,
 	history []types.EnergyStats,
 ) ([]blockActionChoice, float64) {
+	return critiqueBlockPlanWithScratch(
+		ctx,
+		blocks,
+		timeline,
+		initialState,
+		vppEvents,
+		postHorizon,
+		settings,
+		currentStatus,
+		lastAction,
+		initialDeficitWait,
+		history,
+		newPlanSearchScratch(len(timeline), len(blocks)),
+	)
+}
+
+func critiqueBlockPlanWithScratch(
+	ctx context.Context,
+	blocks []timelineBlock,
+	timeline []planInterval,
+	initialState planState,
+	vppEvents []vppAnchor,
+	postHorizon postHorizonValuation,
+	settings types.Settings,
+	currentStatus types.SystemStatus,
+	lastAction *types.Action,
+	initialDeficitWait time.Duration,
+	history []types.EnergyStats,
+	scratch *planSearchScratch,
+) ([]blockActionChoice, float64) {
+	if scratch == nil {
+		scratch = newPlanSearchScratch(len(timeline), len(blocks))
+	}
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := resolveRoundTripEfficiency(optParams.RoundTripEfficiency, currentStatus)
 	wear := getWearRates(settings, optParams)
@@ -1947,9 +2216,28 @@ func critiqueBlockPlan(
 		currentChoices[b] = blockActionChoice{actionType: blockActionLoad}
 	}
 
-	stepStatesBuf := make([]planState, len(timeline)+1)
-	blockEntryStates := make([]planState, len(blocks))
-	blockDrainedSOC := make([]float64, len(blocks))
+	contiguousBlocks := len(blocks) > 0 && blocks[0].startIdx == 0 && blocks[len(blocks)-1].endIdx == len(timeline)-1
+	for k := 0; contiguousBlocks && k < len(blocks); k++ {
+		if blocks[k].startIdx < 0 || blocks[k].endIdx < blocks[k].startIdx || blocks[k].endIdx >= len(timeline) ||
+			(k > 0 && blocks[k].startIdx != blocks[k-1].endIdx+1) {
+			contiguousBlocks = false
+		}
+	}
+
+	if cap(scratch.stepStatesBuf) < len(timeline)+1 {
+		scratch.stepStatesBuf = make([]planState, len(timeline)+1)
+	} else {
+		scratch.stepStatesBuf = scratch.stepStatesBuf[:len(timeline)+1]
+	}
+	if cap(scratch.blockEntry) < len(blocks) {
+		scratch.blockEntry = make([]planState, len(blocks))
+	}
+	blockEntryStates := scratch.blockEntry[:len(blocks)]
+	if cap(scratch.blockDrained) < len(blocks) {
+		scratch.blockDrained = make([]float64, len(blocks))
+	}
+	blockDrainedSOC := scratch.blockDrained[:len(blocks)]
+
 	// ensureReserveRecoveryBlocks returns a copy of tc where any Load block k (excluding skipIdxA and skipIdxB)
 	// containing a reserve deficit step that remains unrecovered past chargeCompletionBufferDuration (when grid
 	// charging is enabled) is upgraded to a reserve recovery charge (blockActionCharge, targetSOC = blocks[k].minSOC),
@@ -1957,13 +2245,45 @@ func critiqueBlockPlan(
 	// reverted to blockActionLoad. When allowAvoidable is false, downstream deficits that were caused solely by
 	// discharging battery energy in an earlier cheaper-or-equal Load block (where Standby is allowed) are left
 	// unmasked so Pass 1 holds energy in Standby rather than cycling Load -> GridCharge at the same rate.
-	ensureReserveRecoveryBlocks := func(tc []blockActionChoice, skipIdxA, skipIdxB int, allowAvoidable bool) ([]blockActionChoice, bool) {
+	ensureReserveRecoveryBlocks := func(tc []blockActionChoice, tcActs []actionCandidate, tcStates []planState, skipIdxA, skipIdxB int, allowAvoidable bool) ([]blockActionChoice, bool) {
 		if !settings.GridChargeBatteries || initialState.chargingDisabled {
 			return tc, false
 		}
-		tcRec := make([]blockActionChoice, len(tc))
-		copy(tcRec, tc)
+		hasPrecomputed := contiguousBlocks && len(tcActs) == len(timeline) && len(tcStates) == len(timeline)+1
+		if hasPrecomputed {
+			needCheck := false
+			for k := 0; k < len(blocks); k++ {
+				if k == skipIdxA || k == skipIdxB {
+					continue
+				}
+				if tc[k].actionType == blockActionCharge && tc[k].targetSOC <= blocks[k].minSOC+socTargetTolerancePct {
+					needCheck = true
+					break
+				}
+				if tc[k].actionType == blockActionLoad {
+					for tIdx := blocks[k].startIdx; tIdx <= blocks[k].endIdx; tIdx++ {
+						floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+						if tcStates[tIdx].soc < floorSOC &&
+							tcStates[tIdx+1].soc < floorSOC &&
+							!isReserveDeficitExemptAction(tcActs[tIdx]) {
+							needCheck = true
+							break
+						}
+					}
+					if needCheck {
+						break
+					}
+				}
+			}
+			if !needCheck {
+				return tc, false
+			}
+		}
+
+		poolStart := scratch.choicePoolUsed
+		tcRec := scratch.cloneChoices(tc)
 		changed := false
+		diverged := !hasPrecomputed
 		blockStartState := initialState
 		hasPriorCharge := false
 		deficitStartIdx := -1
@@ -1978,13 +2298,24 @@ func critiqueBlockPlan(
 				tcRec[k] = blockActionChoice{actionType: blockActionLoad}
 				wasRecoveryCharge = true
 			}
-			expanded := expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-			stepStates := stepStatesBuf[:len(expanded)+1]
-			stepStates[0] = blockStartState
+			var expanded []actionCandidate
+			var stepStates []planState
+			if !diverged && !wasRecoveryCharge {
+				expanded = tcActs[blocks[k].startIdx : blocks[k].endIdx+1]
+				stepStates = tcStates[blocks[k].startIdx : blocks[k].endIdx+2]
+			} else {
+				expanded = expandBlockActionInto(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+				scratch.blockActs = expanded
+				stepStates = scratch.stepStatesBuf[:len(expanded)+1]
+				stepStates[0] = blockStartState
+				for idx, act := range expanded {
+					tIdx := blocks[k].startIdx + idx
+					stepStates[idx+1], _ = stepPhysics(stepStates[idx], act, timeline[tIdx], settings, roundTripEff)
+				}
+			}
 			blockDeficitStartIdx := deficitStartIdx
 			for idx, act := range expanded {
 				tIdx := blocks[k].startIdx + idx
-				stepStates[idx+1], _ = stepPhysics(stepStates[idx], act, timeline[tIdx], settings, roundTripEff)
 				floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
 				if stepStates[idx].soc >= floorSOC || stepStates[idx+1].soc >= floorSOC || isReserveDeficitExemptAction(act) {
 					blockDeficitStartIdx = -1
@@ -1993,6 +2324,7 @@ func critiqueBlockPlan(
 				}
 			}
 			endState := stepStates[len(expanded)]
+			restoredExact := false
 			if k != skipIdxA && k != skipIdxB && tcRec[k].actionType == blockActionLoad {
 				checkActs := expanded
 				checkStates := stepStates
@@ -2004,14 +2336,15 @@ func critiqueBlockPlan(
 					peekStartTime := timeline[blockDeficitStartIdx].startTime
 					if !(blockDeficitStartIdx == 0 && peekWait >= chargeCompletionBufferDuration) &&
 						timeline[blocks[k].endIdx+1].startTime.Sub(peekStartTime)+peekWait <= chargeCompletionBufferDuration+time.Minute {
-						checkActs = append([]actionCandidate(nil), expanded...)
-						checkStates = append([]planState(nil), stepStates...)
+						checkActs = append(scratch.peekActs[:0], expanded...)
+						checkStates = append(scratch.peekStates[:0], stepStates...)
 						peekState := endState
 						for nextB := k + 1; nextB < len(blocks); nextB++ {
 							if timeline[blocks[nextB].startIdx].startTime.Sub(peekStartTime)+peekWait > chargeCompletionBufferDuration+time.Minute {
 								break
 							}
-							nextExp := expandBlockAction(blocks[nextB], tcRec[nextB], peekState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							nextExp := expandBlockActionInto(scratch.nextBlockActs, &scratch.tiedPositions, blocks[nextB], tcRec[nextB], peekState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							scratch.nextBlockActs = nextExp
 							for idx, act := range nextExp {
 								tIdx := blocks[nextB].startIdx + idx
 								if timeline[tIdx].startTime.Sub(peekStartTime)+peekWait > chargeCompletionBufferDuration+time.Minute {
@@ -2022,6 +2355,8 @@ func critiqueBlockPlan(
 								checkStates = append(checkStates, peekState)
 							}
 						}
+						scratch.peekActs = checkActs
+						scratch.peekStates = checkStates
 					}
 				}
 				avoidableByEarlierHold := false
@@ -2046,19 +2381,37 @@ func critiqueBlockPlan(
 						if !wasRecoveryCharge {
 							changed = true
 						}
-						expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-						endState = blockStartState
-						blockDeficitStartIdx = deficitStartIdx
-						for idx, act := range expanded {
-							tIdx := blocks[k].startIdx + idx
-							nextState, _ := stepPhysics(endState, act, timeline[tIdx], settings, roundTripEff)
-							floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-							if endState.soc >= floorSOC || nextState.soc >= floorSOC || isReserveDeficitExemptAction(act) {
-								blockDeficitStartIdx = -1
-							} else if blockDeficitStartIdx == -1 {
-								blockDeficitStartIdx = tIdx
+						if !diverged && wasRecoveryCharge && tc[k] == cand {
+							restoredExact = true
+							expanded = tcActs[blocks[k].startIdx : blocks[k].endIdx+1]
+							endState = tcStates[blocks[k].endIdx+1]
+							blockDeficitStartIdx = deficitStartIdx
+							for idx, act := range expanded {
+								tIdx := blocks[k].startIdx + idx
+								floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+								if tcStates[tIdx].soc >= floorSOC || tcStates[tIdx+1].soc >= floorSOC || isReserveDeficitExemptAction(act) {
+									blockDeficitStartIdx = -1
+								} else if blockDeficitStartIdx == -1 {
+									blockDeficitStartIdx = tIdx
+								}
 							}
-							endState = nextState
+						} else {
+							diverged = true
+							expanded = expandBlockActionInto(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							scratch.blockActs = expanded
+							endState = blockStartState
+							blockDeficitStartIdx = deficitStartIdx
+							for idx, act := range expanded {
+								tIdx := blocks[k].startIdx + idx
+								nextState, _ := stepPhysics(endState, act, timeline[tIdx], settings, roundTripEff)
+								floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
+								if endState.soc >= floorSOC || nextState.soc >= floorSOC || isReserveDeficitExemptAction(act) {
+									blockDeficitStartIdx = -1
+								} else if blockDeficitStartIdx == -1 {
+									blockDeficitStartIdx = tIdx
+								}
+								endState = nextState
+							}
 						}
 					} else if wasRecoveryCharge {
 						changed = true
@@ -2066,6 +2419,9 @@ func critiqueBlockPlan(
 				} else if wasRecoveryCharge {
 					changed = true
 				}
+			}
+			if wasRecoveryCharge && !restoredExact {
+				diverged = true
 			}
 			if tcRec[k].actionType == blockActionLoad && blockStartState.soc > endState.soc+socTargetTolerancePct {
 				blockDrainedSOC[k] = blockStartState.soc - endState.soc
@@ -2082,6 +2438,9 @@ func critiqueBlockPlan(
 			deficitStartIdx = blockDeficitStartIdx
 			blockStartState = endState
 		}
+		if !changed {
+			scratch.choicePoolUsed = poolStart
+		}
 		return tcRec, changed
 	}
 
@@ -2089,14 +2448,18 @@ func critiqueBlockPlan(
 	// reason it can fail validateCandidateTrajectory is an unrecovered reserve deficit (e.g. starting below
 	// minSOC or encountering a downstream minSOC step-up). If invalid, immediately try repairing the baseline
 	// with ensureReserveRecoveryBlocks so Pass 1 starts from a valid reserve-compliant schedule.
-	baseActs := expandBlockPlan(currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-	baseValid, baseValidReason := validateCandidateTrajectory(baseActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
+	baseActs, baseStates, baseMetrics := expandAndStepBlockPlanInto(scratch, currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+	scratch.currentStates = append(scratch.currentStates[:0], baseStates...)
+	baseValid, baseValidReason := validateTrajectoryStates(baseActs, baseStates, baseMetrics, timeline, settings, wear, initialState, initialDeficitWait)
+	baseScore, _ := scoreTrajectoryStates(baseActs, baseStates, baseMetrics, timeline, initialState, vppEvents, postHorizon, settings, wear, roundTripEff)
 	if !baseValid {
-		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1, false); ok {
-			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-			if recValid, recReason := validateCandidateTrajectory(recActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait); recValid {
-				currentChoices = tcRec
-				baseActs = recActs
+		scratch.resetVariants()
+		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, baseActs, baseStates, -1, -1, false); ok {
+			recActs, recStates, recMetrics := expandAndStepBlockPlanInto(scratch, tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+			if recValid, recReason := validateTrajectoryStates(recActs, recStates, recMetrics, timeline, settings, wear, initialState, initialDeficitWait); recValid {
+				copy(currentChoices, tcRec)
+				scratch.currentStates = append(scratch.currentStates[:0], recStates...)
+				baseScore, _ = scoreTrajectoryStates(recActs, recStates, recMetrics, timeline, initialState, vppEvents, postHorizon, settings, wear, roundTripEff)
 				baseValid = true
 				baseValidReason = recReason
 			} else {
@@ -2107,7 +2470,7 @@ func critiqueBlockPlan(
 			}
 		}
 	}
-	baseScore, _, currentStates, _ := scoreCandidateTrajectory(baseActs, timeline, initialState, vppEvents, postHorizon, settings, roundTripEff)
+	currentStates := scratch.currentStates
 	currentScore := math.MaxFloat64
 	if baseValid {
 		currentScore = baseScore
@@ -2118,10 +2481,10 @@ func critiqueBlockPlan(
 		slog.Float64("baselineScoreDollars", currentScore),
 	)
 
-	// holdInterveningOffPeakBlocks bridges 1-block and 2-block mutations across multi-block horizons.
+	// appendInterveningOffPeakHolds bridges 1-block and 2-block mutations across multi-block horizons.
 	// When we test charging or holding in Standby at holdBlockIdx to prepare for a downstream peak block,
 	// any intermediate Load blocks k (holdBlockIdx < k < limitIdx) would otherwise immediately discharge
-	// that battery energy before the peak arrives. It returns up to two variants of tc:
+	// that battery energy before the peak arrives. It appends up to two variants of tc to scratch.variantChoices:
 	//   - Variant 1 (tcGate): Switches consecutive Load blocks k after holdBlockIdx to Standby only while
 	//     their import rate does not clear `gate` over holdBlockIdx's rate (stopping at the first intermediate
 	//     block that is expensive enough to profitably discharge, e.g. when a large battery can cover both a
@@ -2129,11 +2492,10 @@ func critiqueBlockPlan(
 	//   - Variant 2 (tcAll): Switches ALL consecutive Load blocks k after holdBlockIdx (up to limitIdx) that
 	//     sit ahead of a materially more expensive block p > k to Standby, preserving finite battery energy
 	//     past intermediate shoulder blocks so it reaches the highest peak.
-	holdInterveningOffPeakBlocks := func(tc []blockActionChoice, holdBlockIdx, limitIdx int) [][]blockActionChoice {
-		tcGate := make([]blockActionChoice, len(tc))
-		tcAll := make([]blockActionChoice, len(tc))
-		copy(tcGate, tc)
-		copy(tcAll, tc)
+	appendInterveningOffPeakHolds := func(tc []blockActionChoice, holdBlockIdx, limitIdx int) {
+		poolStart := scratch.choicePoolUsed
+		tcGate := scratch.cloneChoices(tc)
+		tcAll := scratch.cloneChoices(tc)
 		changedGate := false
 		changedAll := false
 		allDiffersFromGate := false
@@ -2173,19 +2535,25 @@ func critiqueBlockPlan(
 				allDiffersFromGate = true
 			}
 		}
-		var out [][]blockActionChoice
+		if !changedGate && !changedAll {
+			scratch.choicePoolUsed = poolStart
+			return
+		}
 		if changedGate {
-			out = append(out, tcGate)
+			scratch.variantChoices = append(scratch.variantChoices, tcGate)
 		}
 		if changedAll && (!changedGate || allDiffersFromGate) {
-			out = append(out, tcAll)
+			scratch.variantChoices = append(scratch.variantChoices, tcAll)
 		}
-		return out
 	}
 
 	// Precompute per-block solar presence once so dark blocks do not generate redundant
 	// blockActionDirectSolarExport candidates or paired trials.
-	blockHasSolar := make([]bool, len(blocks))
+	if cap(scratch.blockHasSolar) < len(blocks) {
+		scratch.blockHasSolar = make([]bool, len(blocks))
+	}
+	blockHasSolar := scratch.blockHasSolar[:len(blocks)]
+	clear(blockHasSolar)
 	for b := range blocks {
 		for k := blocks[b].startIdx; k <= blocks[b].endIdx; k++ {
 			if timeline[k].solarKWH >= minSolarGenerationKW*timeline[k].durationHours {
@@ -2196,7 +2564,7 @@ func critiqueBlockPlan(
 	}
 
 	// predefine slices with large enough backing arrays
-	candidateTypes := make([]blockActionChoice, 0, 48)
+	candidateTypes := scratch.candidateTypes[:0]
 	addCandidate := func(c blockActionChoice) {
 		for _, existing := range candidateTypes {
 			if sameBlockChoice(existing, c) {
@@ -2205,10 +2573,15 @@ func critiqueBlockPlan(
 		}
 		candidateTypes = append(candidateTypes, c)
 	}
-	baseTrial := make([]blockActionChoice, len(currentChoices))
-	bestIterChoices := make([]blockActionChoice, len(currentChoices))
-	trialVariants := make([][]blockActionChoice, 0, 12)
-	pairedTrials := make([][2]blockActionChoice, 0, 128)
+	if cap(scratch.baseTrial) < len(currentChoices) {
+		scratch.baseTrial = make([]blockActionChoice, len(currentChoices))
+	}
+	baseTrial := scratch.baseTrial[:len(currentChoices)]
+	if cap(scratch.bestChoices) < len(currentChoices) {
+		scratch.bestChoices = make([]blockActionChoice, len(currentChoices))
+	}
+	bestIterChoices := scratch.bestChoices[:len(currentChoices)]
+	pairedTrials := scratch.pairedTrials[:0]
 	addPairedTrial := func(pair [2]blockActionChoice) {
 		for _, existing := range pairedTrials {
 			if sameBlockChoice(existing[0], pair[0]) && sameBlockChoice(existing[1], pair[1]) {
@@ -2221,8 +2594,40 @@ func critiqueBlockPlan(
 	maxCritiqueIters := 5
 	for iter := 0; iter < maxCritiqueIters; iter++ {
 		bestIterScore := currentScore
-		var bestIterStates []planState
 		foundImprovement := false
+
+		evaluateVariantBatch := func(skipA, skipB int) {
+			numBase := len(scratch.variantChoices)
+			for i := 0; i < numBase; i++ {
+				trialChoices := scratch.variantChoices[i]
+				trialActs, trialStates, trialMetrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				if tcRec, ok := ensureReserveRecoveryBlocks(trialChoices, trialActs, trialStates, skipA, skipB, false); ok {
+					scratch.variantChoices = append(scratch.variantChoices, tcRec)
+				}
+				if valid, _ := validateTrajectoryStates(trialActs, trialStates, trialMetrics, timeline, settings, wear, initialState, initialDeficitWait); valid {
+					score, _ := scoreTrajectoryStates(trialActs, trialStates, trialMetrics, timeline, initialState, vppEvents, postHorizon, settings, wear, roundTripEff)
+					if score < bestIterScore-planScoreTieEpsilon {
+						bestIterScore = score
+						copy(bestIterChoices, trialChoices)
+						scratch.bestStates = append(scratch.bestStates[:0], trialStates...)
+						foundImprovement = true
+					}
+				}
+			}
+			for i := numBase; i < len(scratch.variantChoices); i++ {
+				trialChoices := scratch.variantChoices[i]
+				trialActs, trialStates, trialMetrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				if valid, _ := validateTrajectoryStates(trialActs, trialStates, trialMetrics, timeline, settings, wear, initialState, initialDeficitWait); valid {
+					score, _ := scoreTrajectoryStates(trialActs, trialStates, trialMetrics, timeline, initialState, vppEvents, postHorizon, settings, wear, roundTripEff)
+					if score < bestIterScore-planScoreTieEpsilon {
+						bestIterScore = score
+						copy(bestIterChoices, trialChoices)
+						scratch.bestStates = append(scratch.bestStates[:0], trialStates...)
+						foundImprovement = true
+					}
+				}
+			}
+		}
 
 		// 1. Single-block trials: test replacing one block's action at a time.
 
@@ -2324,32 +2729,13 @@ func critiqueBlockPlan(
 				// also test variants that hold subsequent off-peak Load blocks in Standby so the energy is
 				// not drained before the upcoming peak, as well as variants that recover any downstream
 				// reserve deficits.
-				trialVariants = trialVariants[:0]
-				trialVariants = append(trialVariants, baseTrial)
+				scratch.resetVariants()
+				scratch.variantChoices = append(scratch.variantChoices, baseTrial)
 				if (cand.actionType == blockActionCharge && cand.targetSOC > minSOC+socTargetTolerancePct) ||
 					cand.actionType == blockActionStandby {
-					trialVariants = append(trialVariants, holdInterveningOffPeakBlocks(baseTrial, b, len(blocks))...)
+					appendInterveningOffPeakHolds(baseTrial, b, len(blocks))
 				}
-				for _, sv := range trialVariants {
-					if tcRec, ok := ensureReserveRecoveryBlocks(sv, b, -1, false); ok {
-						trialVariants = append(trialVariants, tcRec)
-					}
-				}
-
-				for _, trialChoices := range trialVariants {
-					trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-					valid, _ := validateCandidateTrajectory(trialActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
-					if !valid {
-						continue
-					}
-					score, _, states, _ := scoreCandidateTrajectory(trialActs, timeline, initialState, vppEvents, postHorizon, settings, roundTripEff)
-					if score < bestIterScore-planScoreTieEpsilon {
-						bestIterScore = score
-						copy(bestIterChoices, trialChoices)
-						bestIterStates = states
-						foundImprovement = true
-					}
-				}
+				evaluateVariantBatch(b, -1)
 			}
 		}
 
@@ -2701,14 +3087,14 @@ func critiqueBlockPlan(
 					copy(baseTrial, currentChoices)
 					baseTrial[a] = pt[0]
 					baseTrial[b] = pt[1]
-					trialVariants = trialVariants[:0]
-					trialVariants = append(trialVariants, baseTrial)
+					scratch.resetVariants()
+					scratch.variantChoices = append(scratch.variantChoices, baseTrial)
 					// When testing a charge at block a > 0, also test holding in Standby across preceding Load blocks
 					// (0..a-1) that are allowed to Standby so the battery does not drain to reserve at a lower rate
 					// and force extra grid charging at a.
 					if pt[0].actionType == blockActionCharge && a > 0 {
-						tcHold := make([]blockActionChoice, len(baseTrial))
-						copy(tcHold, baseTrial)
+						poolStart := scratch.choicePoolUsed
+						tcHold := scratch.cloneChoices(baseTrial)
 						hasPrecedingLoad := false
 						standbyCand := blockActionChoice{actionType: blockActionStandby}
 						for k := 0; k < a; k++ {
@@ -2725,39 +3111,23 @@ func critiqueBlockPlan(
 							}
 						}
 						if hasPrecedingLoad {
-							trialVariants = append(trialVariants, tcHold)
+							scratch.variantChoices = append(scratch.variantChoices, tcHold)
+						} else {
+							scratch.choicePoolUsed = poolStart
 						}
 					}
 					// Also test holding intervening cheaper Load blocks (a+1 .. b-1) in Standby so energy charged or held in a
 					// does not discharge before reaching block b.
 					if (pt[0].actionType == blockActionCharge && pt[0].targetSOC > minSOCA+socTargetTolerancePct) ||
 						pt[0].actionType == blockActionStandby {
-						trialVariants = append(trialVariants, holdInterveningOffPeakBlocks(baseTrial, a, b)...)
+						appendInterveningOffPeakHolds(baseTrial, a, b)
 					}
 					// When block b is a Charge or Standby block, also test holding intervening cheaper Load blocks after b.
 					if (pt[1].actionType == blockActionCharge && pt[1].targetSOC > minSOCB+socTargetTolerancePct) ||
 						pt[1].actionType == blockActionStandby {
-						trialVariants = append(trialVariants, holdInterveningOffPeakBlocks(baseTrial, b, len(blocks))...)
+						appendInterveningOffPeakHolds(baseTrial, b, len(blocks))
 					}
-					for _, tv := range trialVariants {
-						if tcRec, ok := ensureReserveRecoveryBlocks(tv, a, b, false); ok {
-							trialVariants = append(trialVariants, tcRec)
-						}
-					}
-					for _, trialChoices := range trialVariants {
-						trialActs := expandBlockPlan(trialChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-						valid, _ := validateCandidateTrajectory(trialActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait)
-						if !valid {
-							continue
-						}
-						score, _, states, _ := scoreCandidateTrajectory(trialActs, timeline, initialState, vppEvents, postHorizon, settings, roundTripEff)
-						if score < bestIterScore-planScoreTieEpsilon {
-							bestIterScore = score
-							copy(bestIterChoices, trialChoices)
-							bestIterStates = states
-							foundImprovement = true
-						}
-					}
+					evaluateVariantBatch(a, b)
 				}
 			}
 		}
@@ -2766,7 +3136,8 @@ func critiqueBlockPlan(
 			savedDollars := currentScore - bestIterScore
 			currentScore = bestIterScore
 			copy(currentChoices, bestIterChoices)
-			currentStates = bestIterStates
+			scratch.currentStates = append(scratch.currentStates[:0], scratch.bestStates...)
+			currentStates = scratch.currentStates
 			log.Ctx(ctx).DebugContext(ctx, "plan critique round accepted",
 				slog.Int("round", iter+1),
 				slog.Float64("newScoreDollars", currentScore),
@@ -2777,12 +3148,17 @@ func critiqueBlockPlan(
 		}
 	}
 
+	scratch.candidateTypes = candidateTypes[:0]
+	scratch.pairedTrials = pairedTrials[:0]
+
 	if currentScore == math.MaxFloat64 {
-		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, -1, -1, true); ok {
-			recActs := expandBlockPlan(tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-			if valid, _ := validateCandidateTrajectory(recActs, timeline, settings, wear, roundTripEff, initialState, initialDeficitWait); valid {
-				currentChoices = tcRec
-				currentScore, _, _, _ = scoreCandidateTrajectory(recActs, timeline, initialState, vppEvents, postHorizon, settings, roundTripEff)
+		curActs, curStates, _ := expandAndStepBlockPlanInto(scratch, currentChoices, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+		scratch.resetVariants()
+		if tcRec, ok := ensureReserveRecoveryBlocks(currentChoices, curActs, curStates, -1, -1, true); ok {
+			recActs, recStates, recMetrics := expandAndStepBlockPlanInto(scratch, tcRec, blocks, initialState, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+			if valid, _ := validateTrajectoryStates(recActs, recStates, recMetrics, timeline, settings, wear, initialState, initialDeficitWait); valid {
+				copy(currentChoices, tcRec)
+				currentScore, _ = scoreTrajectoryStates(recActs, recStates, recMetrics, timeline, initialState, vppEvents, postHorizon, settings, wear, roundTripEff)
 			}
 		}
 	}
@@ -2796,11 +3172,11 @@ func critiqueBlockPlan(
 	return currentChoices, currentScore
 }
 
-// coarseSOCGrid returns coarse SOC candidates from minSOC to maxSOC, including minSOC and
-// every multiple of 10% in (minSOC, maxSOC] so standard reserve boundaries (20%, 40%, 50%, etc.)
+// coarseSOCGridInto appends coarse SOC candidates from minSOC to maxSOC into dst[:0], including minSOC
+// and every multiple of 10% in (minSOC, maxSOC] so standard reserve boundaries (20%, 40%, 50%, etc.)
 // are always evaluated even when minSOC is not a multiple of 10% (e.g. 5% or 25%).
-func coarseSOCGrid(minSOC, maxSOC float64) []float64 {
-	grid := []float64{minSOC}
+func coarseSOCGridInto(dst []float64, minSOC, maxSOC float64) []float64 {
+	grid := append(dst[:0], minSOC)
 	firstTen := math.Ceil((minSOC+socTargetTolerancePct)/10.0) * 10.0
 	for v := firstTen; v <= maxSOC; v += 10.0 {
 		grid = append(grid, v)
@@ -2809,6 +3185,13 @@ func coarseSOCGrid(minSOC, maxSOC float64) []float64 {
 		grid = append(grid, maxSOC)
 	}
 	return grid
+}
+
+// coarseSOCGrid returns coarse SOC candidates from minSOC to maxSOC, including minSOC and
+// every multiple of 10% in (minSOC, maxSOC] so standard reserve boundaries (20%, 40%, 50%, etc.)
+// are always evaluated even when minSOC is not a multiple of 10% (e.g. 5% or 25%).
+func coarseSOCGrid(minSOC, maxSOC float64) []float64 {
+	return coarseSOCGridInto(nil, minSOC, maxSOC)
 }
 
 // optimizeBlockTargets executes Pass 2 of the solver: it refines the continuous targetSOC on winning
@@ -2827,13 +3210,51 @@ func optimizeBlockTargets(
 	initialDeficitWait time.Duration,
 	history []types.EnergyStats,
 ) *planPath {
+	return optimizeBlockTargetsWithScratch(
+		ctx,
+		winningChoices,
+		blocks,
+		timeline,
+		initial,
+		vppEvents,
+		postHorizon,
+		settings,
+		currentStatus,
+		lastAction,
+		initialDeficitWait,
+		history,
+		newPlanSearchScratch(len(timeline), len(blocks)),
+	)
+}
+
+func optimizeBlockTargetsWithScratch(
+	ctx context.Context,
+	winningChoices []blockActionChoice,
+	blocks []timelineBlock,
+	timeline []planInterval,
+	initial planState,
+	vppEvents []vppAnchor,
+	postHorizon postHorizonValuation,
+	settings types.Settings,
+	currentStatus types.SystemStatus,
+	lastAction *types.Action,
+	initialDeficitWait time.Duration,
+	history []types.EnergyStats,
+	scratch *planSearchScratch,
+) *planPath {
+	if scratch == nil {
+		scratch = newPlanSearchScratch(len(timeline), len(blocks))
+	}
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := resolveRoundTripEfficiency(optParams.RoundTripEfficiency, currentStatus)
 	wear := getWearRates(settings, optParams)
 
 	choices := make([]blockActionChoice, len(winningChoices))
 	copy(choices, winningChoices)
-	trialChoices := make([]blockActionChoice, len(choices))
+	if cap(scratch.baseTrial) < len(choices) {
+		scratch.baseTrial = make([]blockActionChoice, len(choices))
+	}
+	trialChoices := scratch.baseTrial[:len(choices)]
 
 	// 1. Identify active Charge and Export (or DirectSolarExport) blocks in the winning Pass 1 plan.
 	// Prefer blockActionExport when both are present, falling back to blockActionDirectSolarExport so
@@ -2904,27 +3325,31 @@ func optimizeBlockTargets(
 		// Seed bestScore with Pass 1's winning (initialC, initialE) so non-10%-multiple floors
 		// (e.g. an 85% downstream reserve or standbyFloor) can never be overwritten by a worse
 		// coarse-grid candidate.
-		if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); initActs != nil {
-			if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-				initScore, _, initStates, _ := scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+		if initActs, initStates, initMetrics := expandAndStepBlockPlanInto(scratch, choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); initActs != nil {
+			if valid, _ := validateTrajectoryStates(initActs, initStates, initMetrics, timeline, settings, wear, initial, initialDeficitWait); valid {
+				initScore, _ := scoreTrajectoryStates(initActs, initStates, initMetrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 				bestScore = initScore
 				bestBlockMinSOC = computeExportBlockMinSOC(initialE, initStates)
 			}
 		}
 
 		// Coarse 10% 2D grid
-		for _, C := range coarseSOCGrid(minC, maxC) {
-			for _, E := range coarseSOCGrid(minE, maxE) {
+		gridC := coarseSOCGridInto(scratch.coarseGridC, minC, maxC)
+		scratch.coarseGridC = gridC
+		gridE := coarseSOCGridInto(scratch.coarseGridE, minE, maxE)
+		scratch.coarseGridE = gridE
+		for _, C := range gridC {
+			for _, E := range gridE {
 				copy(trialChoices, choices)
 				trialChoices[chargeBlockIdx].targetSOC = C
 				trialChoices[exportBlockIdx].targetSOC = E
 
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+				acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 				if !valid {
 					continue
 				}
-				score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 				if better, blockMinSOC := isBetterJointPair(score, E, states); better {
 					bestScore = score
 					bestC = C
@@ -2944,12 +3369,12 @@ func optimizeBlockTargets(
 				trialChoices[chargeBlockIdx].targetSOC = C
 				trialChoices[exportBlockIdx].targetSOC = E
 
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+				acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 				if !valid {
 					continue
 				}
-				score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 				if better, blockMinSOC := isBetterJointPair(score, E, states); better {
 					bestScore = score
 					bestC = C
@@ -2987,21 +3412,23 @@ func optimizeBlockTargets(
 				bestScore := math.MaxFloat64
 				initialC := choices[b].targetSOC
 				bestC := initialC
-				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); len(initActs) > 0 {
-					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-						bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+				if initActs, initStates, initMetrics := expandAndStepBlockPlanInto(scratch, choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history); len(initActs) > 0 {
+					if valid, _ := validateTrajectoryStates(initActs, initStates, initMetrics, timeline, settings, wear, initial, initialDeficitWait); valid {
+						bestScore, _ = scoreTrajectoryStates(initActs, initStates, initMetrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 					}
 				}
 
-				for _, C := range coarseSOCGrid(minC, maxC) {
+				gridC := coarseSOCGridInto(scratch.coarseGridC, minC, maxC)
+				scratch.coarseGridC = gridC
+				for _, C := range gridC {
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = C
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+					valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 					if !valid {
 						continue
 					}
-					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
 						bestScore = score
 						bestC = C
@@ -3013,12 +3440,12 @@ func optimizeBlockTargets(
 					C := min(maxC, max(minC, coarseC+dT))
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = C
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+					valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 					if !valid {
 						continue
 					}
-					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
 						bestScore = score
 						bestC = C
@@ -3039,11 +3466,15 @@ func optimizeBlockTargets(
 				minE := blocks[b].minSOC
 				maxE := 100.0
 				bestScore := math.MaxFloat64
-				initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				tInitActs, tInitStates, tInitMetrics := expandAndStepBlockPlanInto(scratch, choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+				scratch.initActs = append(scratch.initActs[:0], tInitActs...)
+				initActs := scratch.initActs
 				var initStates []planState
 				if len(initActs) > 0 {
-					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-						bestScore, _, initStates, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if valid, _ := validateTrajectoryStates(tInitActs, tInitStates, tInitMetrics, timeline, settings, wear, initial, initialDeficitWait); valid {
+						bestScore, _ = scoreTrajectoryStates(tInitActs, tInitStates, tInitMetrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
+						scratch.initStates = append(scratch.initStates[:0], tInitStates...)
+						initStates = scratch.initStates
 					}
 				}
 				initialE := choices[b].targetSOC
@@ -3154,15 +3585,17 @@ func optimizeBlockTargets(
 					return false, blockMinSOC
 				}
 
-				for _, E := range coarseSOCGrid(minE, maxE) {
+				gridE := coarseSOCGridInto(scratch.coarseGridE, minE, maxE)
+				scratch.coarseGridE = gridE
+				for _, E := range gridE {
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = E
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+					valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 					if !valid {
 						continue
 					}
-					score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 					if better, blockMinSOC := isBetterExportFloor(score, E, states); better {
 						bestScore = score
 						bestE = E
@@ -3175,12 +3608,12 @@ func optimizeBlockTargets(
 					E := min(maxE, max(minE, coarseE+dF))
 					copy(trialChoices, choices)
 					trialChoices[b].targetSOC = E
-					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					acts, states, metrics := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+					valid, _ := validateTrajectoryStates(acts, states, metrics, timeline, settings, wear, initial, initialDeficitWait)
 					if !valid {
 						continue
 					}
-					score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					score, _ := scoreTrajectoryStates(acts, states, metrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 					if better, blockMinSOC := isBetterExportFloor(score, E, states); better {
 						bestScore = score
 						bestE = E
@@ -3209,8 +3642,15 @@ func optimizeBlockTargets(
 	}
 
 	// 3. Final trajectory execution and step-0 mode comparison debug log.
-	finalActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
-	score, totalPhys, states, metrics := scoreCandidateTrajectory(finalActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+	winActs, winStates, winMetrics := expandAndStepBlockPlanInto(scratch, choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+	score, totalPhys := scoreTrajectoryStates(winActs, winStates, winMetrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
+
+	finalActs := make([]actionCandidate, len(winActs))
+	copy(finalActs, winActs)
+	finalStates := make([]planState, len(winStates))
+	copy(finalStates, winStates)
+	finalMetrics := make([]intervalMetrics, len(winMetrics))
+	copy(finalMetrics, winMetrics)
 
 	if len(blocks) > 0 && len(finalActs) > 0 {
 		defaultSolarMode := types.SolarModeAny
@@ -3228,15 +3668,29 @@ func optimizeBlockTargets(
 			{"Export", blockActionChoice{actionType: blockActionExport, targetSOC: blocks[0].minSOC}, actionCandidate{batteryMode: types.BatteryModeExport, solarMode: defaultSolarMode}},
 			{"DirectSolarExport", blockActionChoice{actionType: blockActionDirectSolarExport}, actionCandidate{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeExport}},
 		}
-		var modeDeltas []string
+		modeDeltas := make([]string, 0, len(step0Modes))
 		for _, m := range step0Modes {
 			copy(trialChoices, choices)
 			trialChoices[0] = m.choice
-			tActs := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
+			tActs, _, _ := expandAndStepBlockPlanInto(scratch, trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff, history)
 			if len(tActs) > 0 {
 				tActs[0] = m.cand
 			}
-			sc, _, _, _ := scoreCandidateTrajectory(tActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+			if cap(scratch.trialStates) < len(timeline)+1 {
+				scratch.trialStates = make([]planState, len(timeline)+1)
+			}
+			tStates := scratch.trialStates[:len(timeline)+1]
+			if cap(scratch.trialMetrics) < len(timeline) {
+				scratch.trialMetrics = make([]intervalMetrics, len(timeline))
+			}
+			tMetrics := scratch.trialMetrics[:len(timeline)]
+			tStates[0] = initial
+			for i := 0; i < len(timeline); i++ {
+				tStates[i+1], tMetrics[i] = stepPhysics(tStates[i], tActs[i], timeline[i], settings, roundTripEff)
+			}
+			scratch.trialStates = tStates
+			scratch.trialMetrics = tMetrics
+			sc, _ := scoreTrajectoryStates(tActs, tStates, tMetrics, timeline, initial, vppEvents, postHorizon, settings, wear, roundTripEff)
 			modeDeltas = append(modeDeltas, fmt.Sprintf("%s:$%.3f(+$%.3f)", m.name, sc, max(0.0, sc-score)))
 		}
 		log.Ctx(ctx).DebugContext(ctx, "plan step 0 modes compared",
@@ -3247,8 +3701,8 @@ func optimizeBlockTargets(
 
 	return &planPath{
 		actions:   finalActs,
-		states:    states,
-		metrics:   metrics,
+		states:    finalStates,
+		metrics:   finalMetrics,
 		timeline:  timeline,
 		vppEvents: vppEvents,
 		totalCost: totalPhys,
@@ -3305,9 +3759,11 @@ func (c *Controller) searchOptimalPlanBlocks(
 		return &planPath{}
 	}
 
+	scratch := newPlanSearchScratch(len(timeline), len(blocks))
+
 	// 2. Pass 1: Critique loop
-	winningChoices, _ := critiqueBlockPlan(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history)
+	winningChoices, _ := critiqueBlockPlanWithScratch(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
 
 	// 3. Pass 2: Target SOC line search
-	return optimizeBlockTargets(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history)
+	return optimizeBlockTargetsWithScratch(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
 }
