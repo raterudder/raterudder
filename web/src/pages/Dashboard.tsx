@@ -421,10 +421,14 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     prevSOC
                 );
 
+                const isEVCharging = action.reason === ActionReason.EVChargingStandby;
+                const prevIsEVCharging = currentSummary?.reason === ActionReason.EVChargingStandby;
+
                 if (
                     currentSummary &&
                     currentSummary.type === 'grouped' &&
                     (currentSummary.loadSubType ?? 'load') === actionLoadSubType &&
+                    prevIsEVCharging === isEVCharging &&
                     (
                         (currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === effectiveBatteryMode) ||
                         (action.batteryMode === BatteryMode.NoChange)
