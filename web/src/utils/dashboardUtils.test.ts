@@ -1580,5 +1580,87 @@ describe('dashboardUtils', () => {
             expect(solarSeg!.leftPercent).toBeLessThan(42);
             expect(solarSeg!.widthPercent).toBeGreaterThan(20);
         });
+
+        it('snaps start and end to midnight when within 30 minutes of day boundaries', () => {
+            const lateStandby: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.HoldSimilarPrice,
+                startTime: '2026-11-27T18:00:00-06:00',
+                endTime: '2026-11-27T23:45:00-06:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-27T23:45:00-06:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.HoldSimilarPrice,
+                    systemStatus: { batterySOC: 50 }
+                },
+                count: 18,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.08,
+                min: 0.08,
+                max: 0.08,
+                hasSOC: true,
+                avgSOC: 50,
+                minSOC: 50,
+                maxSOC: 50,
+                startSOC: 50,
+                endSOC: 50
+            };
+
+            const earlyStandby: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.HoldSimilarPrice,
+                startTime: '2026-11-27T00:12:00-06:00',
+                endTime: '2026-11-27T17:40:00-06:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-27T17:40:00-06:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.HoldSimilarPrice,
+                    systemStatus: { batterySOC: 50 }
+                },
+                count: 50,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.08,
+                min: 0.08,
+                max: 0.08,
+                hasSOC: true,
+                avgSOC: 50,
+                minSOC: 50,
+                maxSOC: 50,
+                startSOC: 50,
+                endSOC: 50
+            };
+
+            const snapped = buildDaySummary([lateStandby, earlyStandby], '$', 'America/Chicago');
+            expect(snapped.segments).toHaveLength(1);
+            expect(snapped.segments[0].leftPercent).toBe(0);
+            expect(snapped.segments[0].leftPercent + snapped.segments[0].widthPercent).toBe(100);
+
+            const outsideWindow: ActionSummary = {
+                ...earlyStandby,
+                startTime: '2026-11-27T00:35:00-06:00',
+                endTime: '2026-11-27T23:25:00-06:00',
+                latestAction: {
+                    ...earlyStandby.latestAction,
+                    timestamp: '2026-11-27T23:25:00-06:00'
+                }
+            };
+            const unsnapped = buildDaySummary([outsideWindow], '$', 'America/Chicago');
+            expect(unsnapped.segments).toHaveLength(1);
+            expect(unsnapped.segments[0].leftPercent).toBeCloseTo((35 / 1440) * 100, 4);
+            expect(unsnapped.segments[0].leftPercent + unsnapped.segments[0].widthPercent).toBeCloseTo(
+                (1405 / 1440) * 100,
+                4
+            );
+        });
     });
 });

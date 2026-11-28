@@ -1176,6 +1176,17 @@ export const buildDaySummary = (
         }
     }
 
+    if (mergedBarPhases.length > 0) {
+        const first = mergedBarPhases[0];
+        if (first.startMinutes > 0 && first.startMinutes <= 30) {
+            first.startMinutes = 0;
+        }
+        const last = mergedBarPhases[mergedBarPhases.length - 1];
+        if (last.endMinutes < 1440 && 1440 - last.endMinutes <= 30) {
+            last.endMinutes = 1440;
+        }
+    }
+
     const segments: DaySummarySegment[] = mergedBarPhases.map(seg => {
         const leftPercent = Math.max(0, Math.min(100, (seg.startMinutes / 1440) * 100));
         const rightPercent = Math.max(leftPercent, Math.min(100, (seg.endMinutes / 1440) * 100));
