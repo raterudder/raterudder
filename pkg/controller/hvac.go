@@ -27,6 +27,11 @@ const (
 	// HVAC slope, preventing tiny dips past the base temperature from producing exaggerated slopes.
 	hvacMinActiveDegreeSpreadC = 3.0
 
+	// coldHeatingWindowMinActiveMedianKWH requires the overnight/morning window median on cold days
+	// to exceed typical gas-furnace blower loads (~0.6-1.0 kW) so skipping EV hours does not cause
+	// gas-heated homes with overnight EV charging to falsely trigger window-level electric heating.
+	coldHeatingWindowMinActiveMedianKWH = 1.2
+
 	// Window-level electric heating gates applied to the 00:00-08:59 daily median load vs. HDD(10°C).
 	// Using the Winsorized daily window median resists intermittent EV charges while catching whole-night heat pumps.
 	// coldHeatingMinSlopeKWHPerC is set above 400-600W gas furnace blowers (~0.02-0.03 kWh/°C) to avoid
@@ -203,10 +208,17 @@ func detectSingleHVACMode(
 	dayMap map[string]*dayPoints,
 	weatherByHour map[time.Time]float64,
 	loc *time.Location,
+	ignoredOutlierHours map[dayHourKey]bool,
+	siteEVMinThresholdKW float64,
 	p hvacModeParams,
 ) (windowDetected bool, hourActive [24]bool, hourSlopeKWHPerC [24]float64, hourInterceptKWH [24]float64) {
 	if len(weatherByHour) == 0 || len(dayMap) < p.minDays {
 		return false, hourActive, hourSlopeKWHPerC, hourInterceptKWH
+	}
+
+	loadCapKW := EVMinThresholdKW
+	if !p.isCold && !math.IsNaN(siteEVMinThresholdKW) && siteEVMinThresholdKW > loadCapKW {
+		loadCapKW = siteEVMinThresholdKW
 	}
 
 	degreeDeltaC := func(tempC float64) float64 {
@@ -229,9 +241,11 @@ func detectSingleHVACMode(
 	}
 
 	// Window-level Winsorized daily median check (00:00-08:59 for heating, 11:00-19:00 for cooling).
-	// Winsorizing each hour at EVMinThresholdKW before taking the daily median ensures even 5+ hour
-	// EV sessions inside the window cannot masquerade as electric heating or cooling.
+	// Winsorizing each hour at loadCapKW (EVMinThresholdKW for heating, adaptive siteEVMinThresholdKW
+	// for cooling) before taking the daily median ensures even 5+ hour EV sessions inside the window
+	// cannot masquerade as electric heating or cooling.
 	var xsWin, ysWin []float64
+	var activeWinLoads, mildWinLoads []float64
 	activeDays := 0
 	minWinTempC := math.MaxFloat64
 	maxWinTempC := -math.MaxFloat64
@@ -272,11 +286,14 @@ func detectSingleHVACMode(
 			if hr < 0 || hr >= 24 {
 				continue
 			}
+			if ignoredOutlierHours[dayHourKey{date: d.date, hour: hr}] {
+				continue
+			}
 			tempC, ok := weatherByHour[pt.TSHourStart.Truncate(time.Hour).UTC()]
 			if !ok {
 				continue
 			}
-			cappedLoadKWH := min(pt.HomeKWH, EVMinThresholdKW)
+			cappedLoadKWH := min(pt.HomeKWH, loadCapKW)
 			if hr >= p.windowStartHr && hr <= p.windowEndHr {
 				winLoads = append(winLoads, cappedLoadKWH)
 				winTempCSum += tempC
@@ -319,11 +336,15 @@ func detectSingleHVACMode(
 			if winDegDeltaC > maxWinDegDeltaC {
 				maxWinDegDeltaC = winDegDeltaC
 			}
+			winMedKWH := medianSortedOrCopy(winLoads)
 			if isActiveTemp(avgTempC) {
 				activeDays++
+				activeWinLoads = append(activeWinLoads, winMedKWH)
+			} else if isMildTemp(avgTempC) {
+				mildWinLoads = append(mildWinLoads, winMedKWH)
 			}
 			xsWin = append(xsWin, winDegDeltaC)
-			ysWin = append(ysWin, medianSortedOrCopy(winLoads))
+			ysWin = append(ysWin, winMedKWH)
 		}
 	}
 
@@ -331,9 +352,21 @@ func detectSingleHVACMode(
 		activeDays >= p.minActiveDays &&
 		maxWinTempC-minWinTempC >= p.minTempSpreadC &&
 		maxWinDegDeltaC-minWinDegDeltaC >= p.minActiveDegreeSpreadC {
-		r, slopeKWHPerC, _ := linearRegression(xsWin, ysWin)
-		if r >= p.windowMinCorrR && slopeKWHPerC >= p.windowMinSlopeKWHPerC {
-			windowDetected = true
+		winMildOK := true
+		if len(activeWinLoads) > 0 {
+			activeWinMedKWH := medianSortedOrCopy(activeWinLoads)
+			if len(activeWinLoads) >= 3 && len(mildWinLoads) >= 3 && activeWinMedKWH <= medianSortedOrCopy(mildWinLoads) {
+				winMildOK = false
+			}
+			if p.isCold && activeWinMedKWH < coldHeatingWindowMinActiveMedianKWH {
+				winMildOK = false
+			}
+		}
+		if winMildOK {
+			r, slopeKWHPerC, _ := linearRegression(xsWin, ysWin)
+			if r >= p.windowMinCorrR && slopeKWHPerC >= p.windowMinSlopeKWHPerC {
+				windowDetected = true
+			}
 		}
 	}
 
@@ -384,10 +417,16 @@ func detectSingleHVACMode(
 //
 // Cooling mirrors this with daytime (11:00-19:00) Winsorized daily median load and per-hour EV-capped load vs CDD(22°C).
 // When loc is non-nil, hourly indices are resolved in loc rather than each timestamp's own location.
-func detectWeatherHVACSensitivity(dayMap map[string]*dayPoints, weatherByHour map[time.Time]float64, loc *time.Location) weatherHVACSensitivity {
+func detectWeatherHVACSensitivity(
+	dayMap map[string]*dayPoints,
+	weatherByHour map[time.Time]float64,
+	loc *time.Location,
+	ignoredOutlierHours map[dayHourKey]bool,
+	siteEVMinThresholdKW float64,
+) weatherHVACSensitivity {
 	var res weatherHVACSensitivity
 
-	winHeat, hrsHeat, slpHeat, intHeat := detectSingleHVACMode(dayMap, weatherByHour, loc, hvacModeParams{
+	winHeat, hrsHeat, slpHeat, intHeat := detectSingleHVACMode(dayMap, weatherByHour, loc, ignoredOutlierHours, siteEVMinThresholdKW, hvacModeParams{
 		windowStartHr:                  0,
 		windowEndHr:                    8,
 		windowMinHours:                 6,
@@ -419,7 +458,7 @@ func detectWeatherHVACSensitivity(dayMap map[string]*dayPoints, weatherByHour ma
 		}
 	}
 
-	winCool, hrsCool, slpCool, intCool := detectSingleHVACMode(dayMap, weatherByHour, loc, hvacModeParams{
+	winCool, hrsCool, slpCool, intCool := detectSingleHVACMode(dayMap, weatherByHour, loc, ignoredOutlierHours, siteEVMinThresholdKW, hvacModeParams{
 		windowStartHr:                  11,
 		windowEndHr:                    19,
 		windowMinHours:                 5,

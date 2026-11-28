@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 			}
 		}
 
-		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil)
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil, nil, EVMinThresholdKW)
 		assert.False(t, hvac.hasElectricHeating, "0.5C active HDD spread must not trigger electric heating")
 		assert.False(t, hvac.heatingWindowDetected)
 		assert.Empty(t, activeHourList(hvac.heatingHours))
@@ -91,7 +92,7 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 			}
 		}
 
-		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil)
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil, nil, EVMinThresholdKW)
 		assert.False(t, hvac.heatingWindowDetected, "Winsorized window median must resist 5-hour EV sessions")
 		assert.False(t, hvac.hasElectricHeating, "5-hour EV sessions on cold nights must not trigger electric heating")
 	})
@@ -117,7 +118,7 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 			}
 		}
 
-		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil)
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil, nil, EVMinThresholdKW)
 		assert.False(t, hvac.hasElectricHeating, "alternating cold-night EV on a Gas+EV home must not trigger heating")
 		assert.False(t, hvac.heatingHours[1])
 		assert.False(t, hvac.heatingHours[2])
@@ -147,7 +148,7 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 			}
 		}
 
-		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nyLoc), weatherByHour, nyLoc)
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nyLoc), weatherByHour, nyLoc, nil, EVMinThresholdKW)
 		assert.True(t, hvac.hasElectricHeating)
 		assert.True(t, hvac.heatingHours[5], "local 05:00 EST heating hour must be detected")
 		assert.True(t, hvac.heatingHours[6], "local 06:00 EST heating hour must be detected")
@@ -178,12 +179,97 @@ func TestDetectWeatherHVACSensitivity(t *testing.T) {
 			}
 		}
 
-		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil)
+		hvac := detectWeatherHVACSensitivity(buildDayMap(history, nil), weatherByHour, nil, nil, EVMinThresholdKW)
 		assert.False(t, hvac.hasElectricHeating, "intermittent daytime EV spikes on cold days must not trigger heating")
 		assert.False(t, hvac.heatingHours[8])
 		assert.False(t, hvac.heatingHours[9])
 		assert.False(t, hvac.heatingHours[15])
 		assert.False(t, hvac.heatingHours[16])
+	})
+
+	t.Run("OptionsSkipIgnoredOutliersAdaptCoolingCapAndProtectGasBlower", func(t *testing.T) {
+		// Part 1: High-load AC site (siteEVMinThresholdKW=6.8 kW) with daytime cooling up to 6.5 kW
+		// plus intermittent 10 kW EV spikes flagged in ignoredOutlierHours.
+		startSummer := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var summerHist []types.EnergyStats
+		summerWeather := make(map[time.Time]float64)
+		ignoredSummer := make(map[dayHourKey]bool)
+		for d := 0; d < 14; d++ {
+			dayTime := startSummer.AddDate(0, 0, d)
+			dateStr := dayTime.Format("2006-01-02")
+			tempC := 19.0 + float64(d)*1.2 // 19.0C .. 34.6C
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				summerWeather[ts.UTC()] = tempC
+				load := 1.0
+				if h >= 11 && h <= 19 {
+					load = 1.0 + 0.45*max(0.0, tempC-hotCoolingBaseTempC) // up to ~6.67 kW
+				}
+				if d < 4 && h == 15 {
+					load = 10.5
+					ignoredSummer[dayHourKey{date: dateStr, hour: h}] = true
+				}
+				summerHist = append(summerHist, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+			}
+		}
+		hvacAdaptive := detectWeatherHVACSensitivity(buildDayMap(summerHist, nil), summerWeather, nil, ignoredSummer, 6.8)
+		assert.True(t, hvacAdaptive.hasElectricCooling)
+		assert.True(t, hvacAdaptive.coolingWindowDetected)
+		assert.True(t, hvacAdaptive.coolingHours[15])
+		hvacDefaultCap := detectWeatherHVACSensitivity(buildDayMap(summerHist, nil), summerWeather, nil, ignoredSummer, EVMinThresholdKW)
+		assert.Greater(t, hvacAdaptive.coolingHourSlopeKWHPerC[15], hvacDefaultCap.coolingHourSlopeKWHPerC[15],
+			"site-adaptive cooling cap (6.8 kW) should avoid clipping 6.5 kW AC slope at 4.8 kW")
+
+		// Part 2: Gas-heated home (0.5 + 0.055*HDD, cold window median < 1.2 kWh) with flagged EV hours
+		// must not falsely trigger window-level electric heating when EV hours are skipped.
+		startWinter := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+		var winterHist []types.EnergyStats
+		winterWeather := make(map[time.Time]float64)
+		ignoredWinter := make(map[dayHourKey]bool)
+		for d := 0; d < 14; d++ {
+			dayTime := startWinter.AddDate(0, 0, d)
+			dateStr := dayTime.Format("2006-01-02")
+			tempC := 15.0 - float64(d) // 15C .. 2C
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				winterWeather[ts.UTC()] = tempC
+				load := 0.5 + 0.055*max(0.0, coldHeatingBaseTempC-tempC) // max ~0.94 kW (< 1.2 kW)
+				if d%3 == 0 && (h == 1 || h == 2) {
+					load = 9.0
+					ignoredWinter[dayHourKey{date: dateStr, hour: h}] = true
+				}
+				winterHist = append(winterHist, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+			}
+		}
+		hvacGas := detectWeatherHVACSensitivity(buildDayMap(winterHist, nil), winterWeather, nil, ignoredWinter, 6.8)
+		assert.False(t, hvacGas.heatingWindowDetected, "low-load gas furnace blower must not trigger heating window when EV hours are skipped")
+		assert.False(t, hvacGas.hasElectricHeating)
+
+		// Part 3: Window-level mild-weather sanity gate — if mild-day window median >= active-day
+		// window median (e.g. cold days have rising slope inside <10C but stay below mild-day baseline),
+		// heatingWindowDetected must stay false even when active median >= 1.2 kWh.
+		var mildGateHist []types.EnergyStats
+		mildGateWeather := make(map[time.Time]float64)
+		for d := 0; d < 10; d++ {
+			dayTime := startWinter.AddDate(0, 0, d)
+			var tempC, load float64
+			if d < 4 {
+				// Mild days (>= 12C) with higher non-heating load (2.4 kWh)
+				tempC = 14.0 + float64(d)
+				load = 2.4
+			} else {
+				// Cold days (8C down to -2C) with positive HDD slope but lower median (~1.6 kWh <= 2.4 kWh)
+				tempC = 8.0 - float64(d-4)*2.0
+				load = 1.2 + 0.08*max(0.0, coldHeatingBaseTempC-tempC)
+			}
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				mildGateWeather[ts.UTC()] = tempC
+				mildGateHist = append(mildGateHist, types.EnergyStats{TSHourStart: ts, HomeKWH: load})
+			}
+		}
+		hvacMildGate := detectWeatherHVACSensitivity(buildDayMap(mildGateHist, nil), mildGateWeather, nil, nil, math.NaN())
+		assert.False(t, hvacMildGate.heatingWindowDetected, "window mild-weather sanity check must reject cold median <= mild median")
 	})
 }
 

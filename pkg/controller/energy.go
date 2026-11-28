@@ -331,7 +331,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 	}
 
 	ignoredOutlierHours, outlierRefLoad, hourBaselineRef, siteEVMinThresholdKW, siteEVMinStepKW := detectIntermittentEVAndLoadSpikes(ctx, dayMap, weatherByHour, settings, standbyLoad)
-	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc)
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc, ignoredOutlierHours, siteEVMinThresholdKW)
 	if hvac.hasElectricHeating || hvac.hasElectricCooling {
 		log.Ctx(ctx).DebugContext(
 			ctx,
@@ -2663,7 +2663,7 @@ func applyOutlierDayCalmMorningDampening(
 	if currentHour < 9 || !dayOfWeekOutliers[nowLocal.Weekday()].any() {
 		return
 	}
-	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc)
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, loc, ignoredOutlierHours, EVMinThresholdKW)
 	todayPts := dayMap[todayStr]
 	if todayPts == nil {
 		return

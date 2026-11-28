@@ -635,7 +635,7 @@ func prepareEVOutlierContext(
 	// Pass nil for loc so detectWeatherHVACSensitivity indexes hours via pt.TSHourStart.Hour(),
 	// matching allHourLoads, allHourWithTemp, and computePointRefLoad (dayMap points are already
 	// localized by buildHistoryDayMapAndStandby).
-	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, nil)
+	hvac := detectWeatherHVACSensitivity(dayMap, weatherByHour, nil, nil, EVMinThresholdKW)
 
 	computePointRefLoad := func(pt types.EnergyStats, hr int, dayP65, dayP75 float64, hasDayStats bool) float64 {
 		refLoad := allRefByHour[hr]
