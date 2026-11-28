@@ -919,6 +919,35 @@ func TestExpandBlockAction(t *testing.T) {
 			assert.Equal(t, types.BatteryModeStandby, deferActs[2].batteryMode)
 		}
 
+		// 2b. Sub-minute boundary sliver at step 0 with cheaper step 1: defers when initialWait == 0,
+		// but charges immediately at step 0 when lastAction already exhausted the 20-minute deficit wait.
+		sliverStart := now.Add(-45 * time.Second)
+		sliverTimeline := []planInterval{
+			{startTime: sliverStart, endTime: now, durationHours: 45.0 / 3600.0, importRate: 0.13, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.02, minSOC: 20.0},
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.10, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.10, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+		}
+		sliverBlock := timelineBlock{startIdx: 0, endIdx: 2, durationHours: 45.0/3600.0 + 2.0/3.0, minSOC: 20.0, minImportRate: 0.10, avgImportRate: 0.11, maxImportRate: 0.13}
+		deficitAtSliver := deficit15
+		deficitAtSliver.time = sliverStart
+
+		freshSliverActs := expandBlockAction(sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, nil, nil)
+		if assert.Len(t, freshSliverActs, 3) {
+			assert.Equal(t, types.BatteryModeStandby, freshSliverActs[0].batteryMode, "Fresh deficit with initialWait == 0 may defer across 45s sliver")
+			assert.Equal(t, types.BatteryModeChargeAny, freshSliverActs[1].batteryMode)
+		}
+
+		exhaustedLastAct := &types.Action{
+			Timestamp:    sliverStart.Add(-20 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			ReserveSOC:   20.0,
+			SystemStatus: types.SystemStatus{BatterySOC: 15.0},
+		}
+		exhaustedSliverActs := expandBlockAction(sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, exhaustedLastAct, nil)
+		if assert.Len(t, exhaustedSliverActs, 3) {
+			assert.Equal(t, types.BatteryModeChargeAny, exhaustedSliverActs[0].batteryMode, "Exhausted 20m initialWait must charge immediately on 45s step-0 sliver")
+		}
+
 		// 3. Continuous ChargeAny across all intervals when inverter limits prevent reaching minSOC inside the block.
 		unreachTimeline := make([]planInterval, 3)
 		copy(unreachTimeline, deferTimeline)
@@ -1691,6 +1720,71 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		}
 		validFullDrain, reasonFullDrain := validateCandidateTrajectory(actionsFullDrainSolarRefill, timelineFullDrainSolarRefill, settings, wear10Cents, 0.90, state40, 0)
 		assert.True(t, validFullDrain, "Draining to min(preChargeSOC, minSOC) (30%%) before solar refill must clear hasPriorCharge: "+reasonFullDrain)
+
+		// Case D: Forced VPP exports (vpp.price == 0, ambient batteryExportRate below charge rate + exportGatePerKWH)
+		// after off-peak pre-charging, VPPPrep emergency top-up, or negative-price charging must be exempted.
+		timelineNegBeforeVPP := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: -0.02, exportRate: 0.01, batteryExportRate: 0.01, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.01, batteryExportRate: 0.01, loadKWH: 0.2, minSOC: 20.0},
+		}
+		actionsNegBeforeVPP := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonAlwaysChargeBelowThreshold, targetSOC: 100.0},
+			{batteryMode: types.BatteryModeExport, reason: types.ActionReasonVPPActive, targetSOC: 20.0},
+		}
+		validNegVPP, reasonNegVPP := validateCandidateTrajectory(actionsNegBeforeVPP, timelineNegBeforeVPP, settings, wear, 0.90, state20, 0)
+		assert.True(t, validNegVPP, "Negative-price charge before zero-price VPP export must be valid: "+reasonNegVPP)
+
+		// Case E: Mandatory VPPPrep clears hasPriorCharge (and VPPPrep emergency top-up does not set hasPriorCharge),
+		// decoupling mandatory 100% VPP pre-charging from post-VPP exports.
+		timelineMandatoryVPP := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.2, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.22, batteryExportRate: 0.22, loadKWH: 0.2, minSOC: 20.0},
+		}
+		actionsMandatoryVPP := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 90.0},
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonVPPPrep, targetSOC: 100.0},
+			{batteryMode: types.BatteryModeExport, reason: types.ActionReasonVPPActive, targetSOC: 50.0},
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+		}
+		validMandVPP, reasonMandVPP := validateCandidateTrajectory(actionsMandatoryVPP, timelineMandatoryVPP, settings, wear, 0.90, state20, 0)
+		assert.True(t, validMandVPP, "Mandatory VPPPrep must decouple prior charges and emergency top-ups from VPP and post-VPP exports: "+reasonMandVPP)
+
+		// Case F: Non-mandatory VPPActive export:
+		// - Partial discharge above min(preChargeSOC, minSOC) + 1.0 keeps hasPriorCharge set so later discretionary
+		//   exports below wear.exportGatePerKWH are still rejected.
+		// - Full discharge down to <= min(preChargeSOC, minSOC) + 1.0 clears hasPriorCharge so a subsequent solar
+		//   refill + export is accepted.
+		timelineNonMandPartialVPP := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.22, batteryExportRate: 0.22, loadKWH: 0.1, minSOC: 20.0},
+		}
+		actionsNonMandPartialVPP := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 80.0},
+			{batteryMode: types.BatteryModeExport, reason: types.ActionReasonVPPActive, targetSOC: 50.0},
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+		}
+		state20SlowDis := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, maxChargeKW: 10.0, maxDischargeKW: 4.0, time: now}
+		validPartialVPP, reasonPartialVPP := validateCandidateTrajectory(actionsNonMandPartialVPP, timelineNonMandPartialVPP, settings, wear, 0.90, state20SlowDis, 0)
+		assert.False(t, validPartialVPP, "Partial non-mandatory VPP discharge (~80%% -> ~50%% > 21%%) must keep hasPriorCharge set for later discretionary export")
+		assert.Equal(t, "UnprofitableGridChargeToExport", reasonPartialVPP)
+
+		timelineNonMandFullDrainVPP := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.22, batteryExportRate: 0.22, loadKWH: 0.2, solarKWH: 8.0, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.22, batteryExportRate: 0.22, loadKWH: 0.1, minSOC: 20.0},
+		}
+		actionsNonMandFullDrainVPP := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 80.0},
+			{batteryMode: types.BatteryModeExport, reason: types.ActionReasonVPPActive, targetSOC: 20.0},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+		}
+		validFullVPP, reasonFullVPP := validateCandidateTrajectory(actionsNonMandFullDrainVPP, timelineNonMandFullDrainVPP, settings, wear, 0.90, state20, 0)
+		assert.True(t, validFullVPP, "Non-mandatory VPP discharge down to min(preChargeSOC, minSOC) (20%%) must clear hasPriorCharge before solar refill: "+reasonFullVPP)
 	})
 
 	t.Run("Rejects_UnprofitableExportToGridCharge", func(t *testing.T) {
@@ -1995,6 +2089,33 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		validShort, reasonShort := validateCandidateTrajectory(actsShortStep0, tlShortStep0, settings, wear, 0.90, state115At0900, chargeCompletionBufferDuration)
 		assert.False(t, validShort)
 		assert.Equal(t, "ExceededMaxReserveDeficitWait", reasonShort)
+
+		// End-to-end block search on a 45-second boundary sliver with a cheaper step-1 rate ($0.1048 vs $0.1300)
+		// and exhausted initialDeficitWait must charge immediately at step 0 without critiqueBlockPlan fallback.
+		cSliver := NewController()
+		sliverStart := t0900.Add(-45 * time.Second)
+		tlSliverCheaperStep1 := []planInterval{
+			{startTime: sliverStart, endTime: t0900, durationHours: 45.0 / 3600.0, importRate: 0.1300, exportRate: 0.0238, batteryExportRate: 0.0238, loadKWH: 0.02, solarKWH: 0.01, minSOC: 15.0},
+			{startTime: t0900, endTime: t0900.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.1048, exportRate: 0.0238, batteryExportRate: 0.0238, loadKWH: 0.65, solarKWH: 0.20, minSOC: 15.0},
+			{startTime: t0900.Add(20 * time.Minute), endTime: t0900.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.1048, exportRate: 0.0238, batteryExportRate: 0.0238, loadKWH: 0.65, solarKWH: 0.20, minSOC: 15.0},
+		}
+		stateSliver := state115At0900
+		stateSliver.time = sliverStart
+		lastActExhausted := &types.Action{
+			Timestamp:    sliverStart.Add(-20 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			ReserveSOC:   15.0,
+			SystemStatus: types.SystemStatus{BatterySOC: 11.5},
+		}
+		sliverBlocks := buildTimelineBlocks(context.Background(), tlSliverCheaperStep1, nil, settings, types.SystemStatus{}, nil)
+		_, sliverScore := critiqueBlockPlan(context.Background(), sliverBlocks, tlSliverCheaperStep1, stateSliver, nil, postHorizonValuation{knownPostHorizonRate: 0.1048}, settings, types.SystemStatus{}, lastActExhausted, chargeCompletionBufferDuration, nil)
+		assert.Less(t, sliverScore, math.MaxFloat64, "critiqueBlockPlan must find a valid trajectory on a 45s deficit sliver with exhausted wait")
+		sliverPath := cSliver.searchOptimalPlanBlocks(context.Background(), tlSliverCheaperStep1, stateSliver, nil, postHorizonValuation{knownPostHorizonRate: 0.1048}, settings, types.SystemStatus{BatteryCapacityKWH: 15.0, BatterySOC: 11.5}, lastActExhausted, nil)
+		if assert.NotEmpty(t, sliverPath.actions) {
+			assert.Equal(t, types.BatteryModeChargeAny, sliverPath.actions[0].batteryMode, "Must recharge immediately on 45s boundary sliver when initialDeficitWait is exhausted")
+			validSliverPath, reasonSliverPath := validateCandidateTrajectory(sliverPath.actions, tlSliverCheaperStep1, settings, wear, 0.90, stateSliver, chargeCompletionBufferDuration)
+			assert.True(t, validSliverPath, "Selected sliver plan must pass trajectory validation: "+reasonSliverPath)
+		}
 
 		// Reserve-window-end loophole: dropping minSOC from 50% -> 5% at k=i+1 must NOT count as recovering timeline[i]'s 50% deficit.
 		state25 := planState{soc: 25.0, energyKWH: 15.0 * 0.25, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 10.0, time: t0900}
@@ -2756,6 +2877,76 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		if assert.NotEmpty(t, win992) {
 			assert.Equal(t, blockActionLoad, win992[0].actionType, "99.2%% SOC within BMS tolerance of 100%% reserve must stay in Load")
 		}
+	})
+
+	t.Run("ZeroPriceVPPEvent_PreChargesOffPeakAndHandlesNegativePricesWithoutFallback", func(t *testing.T) {
+		t.Parallel()
+		c := NewController()
+		vppSettings := settings
+		vppSettings.GridExportBatteries = true
+		vppSettings.GridExportSolar = true
+		vppSettings.ManageTOUSchedules = true
+		wear := getWearRates(vppSettings, vppSettings.GetOptimizationParams())
+
+		// 1. Mandatory VPP event with zero explicit VPP price (vpp.price == 0, ambient exportRate = $0.05/kWh):
+		// Timeline spans 2h off-peak ($0.10/kWh), 2h mandatory VPPPrep ($0.25/kWh), and 2h active VPP ($0.35/kWh import, $0.05/kWh export).
+		// critiqueBlockPlan must find a valid trajectory (score < MaxFloat64) that pre-charges during the $0.10 off-peak block
+		// rather than falling back to all-Load and relying on $0.25 VPPPrep emergency top-up.
+		vppStart := now.Add(4 * time.Hour)
+		mandVPP := []vppAnchor{
+			{
+				eventStart: vppStart,
+				eventEnd:   vppStart.Add(2 * time.Hour),
+				deadline:   now.Add(2 * time.Hour),
+				mandatory:  true,
+				vppSoc:     20.0,
+				price:      0.0,
+			},
+		}
+		mandTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(5 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.05, batteryExportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+		}
+		state40 := planState{soc: 40.0, energyKWH: 13.5 * 0.40, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		status40 := types.SystemStatus{BatteryCapacityKWH: 13.5, BatterySOC: 40.0}
+		mandBlocks := buildTimelineBlocks(ctx, mandTimeline, mandVPP, vppSettings, status40, nil)
+		winMand, mandScore := critiqueBlockPlan(ctx, mandBlocks, mandTimeline, state40, mandVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil)
+		assert.Less(t, mandScore, math.MaxFloat64, "Mandatory zero-price VPP event must produce a valid score without fallback")
+		if assert.NotEmpty(t, winMand) {
+			assert.Equal(t, blockActionCharge, winMand[0].actionType, "Must pre-charge during cheaper $0.10/kWh off-peak block before mandatory VPP prep")
+		}
+		pathMand := c.searchOptimalPlanBlocks(ctx, mandTimeline, state40, mandVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, nil)
+		if assert.Len(t, pathMand.actions, 6) {
+			assert.Equal(t, types.BatteryModeChargeAny, pathMand.actions[0].batteryMode)
+			assert.GreaterOrEqual(t, pathMand.states[2].soc, vppMinFullCapacitySOC, "Must reach full capacity before VPPPrep takeover")
+			assert.Equal(t, types.BatteryModeExport, pathMand.actions[4].batteryMode)
+			assert.Equal(t, types.ActionReasonVPPActive, pathMand.actions[4].reason)
+			validMandPath, reasonMandPath := validateCandidateTrajectory(pathMand.actions, mandTimeline, vppSettings, wear, 0.90, state40, 0)
+			assert.True(t, validMandPath, "Final mandatory VPP trajectory must be valid: "+reasonMandPath)
+		}
+
+		// 2. Negative import price (-$0.02/kWh) followed by non-mandatory zero-price VPP export ($0.01/kWh export, < $0.05 export gate):
+		negVPP := []vppAnchor{
+			{
+				eventStart: now.Add(time.Hour),
+				eventEnd:   now.Add(2 * time.Hour),
+				deadline:   now.Add(time.Hour),
+				mandatory:  false,
+				vppSoc:     20.0,
+				price:      0.0,
+			},
+		}
+		negTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: -0.02, exportRate: 0.01, batteryExportRate: 0.01, loadKWH: 0.3, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.01, batteryExportRate: 0.01, loadKWH: 0.5, minSOC: 20.0},
+		}
+		negBlocks := buildTimelineBlocks(ctx, negTimeline, negVPP, vppSettings, status40, nil)
+		_, negScore := critiqueBlockPlan(ctx, negBlocks, negTimeline, state40, negVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil)
+		assert.Less(t, negScore, math.MaxFloat64, "Negative-price charge before zero-price VPP export must not fail all trajectories")
 	})
 }
 
