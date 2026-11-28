@@ -753,6 +753,60 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
+	t.Run("ExpectedHomeLoadKWHCapturesRightSkewedPoolMean", func(t *testing.T) {
+		now := time.Date(2025, 7, 25, 4, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		// 14 days: steady 1.0 kWh at hour 3, right-skewed at hour 18 (10 days at 1.0 kWh, 4 days at 4.0 kWh)
+		for d := 14; d >= 1; d-- {
+			dayStart := now.AddDate(0, 0, -d).Truncate(24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				load := 1.0
+				if h == 18 && d%3 == 0 {
+					load = 4.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		if assert.Len(t, model, 24) {
+			assert.InDelta(t, 1.0, model[3].AvgHomeLoadKWH, 0.01)
+			assert.InDelta(t, 1.0, model[3].ExpectedHomeLoadKWH, 0.01, "steady hour should have ExpectedHomeLoadKWH equal to AvgHomeLoadKWH")
+			assert.Greater(t, model[18].ExpectedHomeLoadKWH, model[18].AvgHomeLoadKWH, "right-skewed hour should have ExpectedHomeLoadKWH above P55 AvgHomeLoadKWH")
+		}
+	})
+
+	t.Run("ConservativeStrategyFloorsExpectedHomeLoadAtP70", func(t *testing.T) {
+		now := time.Date(2025, 7, 25, 4, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		// 14 days with a left-skewed / bimodal distribution where P70 (2.0) > weighted mean (~1.6)
+		for d := 14; d >= 1; d-- {
+			dayStart := now.AddDate(0, 0, -d).Truncate(24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				load := 2.0
+				if d%3 == 0 {
+					load = 0.8
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		consSettings := types.Settings{HomeLoadPredictionStrategy: "conservative"}
+		model, _, _, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, consSettings)
+		if assert.Len(t, model, 24) {
+			for h := 0; h < 24; h++ {
+				assert.GreaterOrEqual(t, model[h].ExpectedHomeLoadKWH, model[h].AvgHomeLoadKWH,
+					"conservative strategy ExpectedHomeLoadKWH must never undercut P70 AvgHomeLoadKWH at hour %d", h)
+			}
+		}
+	})
+
 	t.Run("Basic Average All Low", func(t *testing.T) {
 		h1 := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
 		history := []types.EnergyStats{
@@ -2718,6 +2772,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			lift23 := modelOn[23].AvgHomeLoadKWH - modelOff[23].AvgHomeLoadKWH
 
 			assert.Greater(t, lift14, 0.80, "sustained 8-hour waking surge must lift near-term 14:00 AvgHomeLoadKWH")
+			assert.Greater(t, modelOn[14].ExpectedHomeLoadKWH-modelOff[14].ExpectedHomeLoadKWH, 0.80, "ExpectedHomeLoadKWH must also receive the positive intraday offset")
 			assert.Greater(t, modelOn[14].P75HomeLoadKWH-modelOff[14].P75HomeLoadKWH, 0.80, "P75HomeLoadKWH must also receive the positive intraday offset")
 			assert.Greater(t, lift14, lift16, "exponential horizon decay must reduce offset from 14:00 to 16:00")
 			assert.Greater(t, lift16, lift19, "exponential horizon decay must reduce offset from 16:00 to 19:00")
@@ -2726,6 +2781,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			// Tomorrow hours (00:00..13:00 of 2026-07-16) must remain untouched.
 			for h := 0; h < 14; h++ {
 				assert.InDelta(t, modelOff[h].AvgHomeLoadKWH, modelOn[h].AvgHomeLoadKWH, 1e-9, "tomorrow hour %d AvgHomeLoadKWH must be untouched", h)
+				assert.InDelta(t, modelOff[h].ExpectedHomeLoadKWH, modelOn[h].ExpectedHomeLoadKWH, 1e-9, "tomorrow hour %d ExpectedHomeLoadKWH must be untouched", h)
 				assert.InDelta(t, modelOff[h].P75HomeLoadKWH, modelOn[h].P75HomeLoadKWH, 1e-9, "tomorrow hour %d P75HomeLoadKWH must be untouched", h)
 			}
 		}
@@ -2775,6 +2831,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			drop11 := modelOff[11].AvgHomeLoadKWH - modelOn[11].AvgHomeLoadKWH
 			drop15 := modelOff[15].AvgHomeLoadKWH - modelOn[15].AvgHomeLoadKWH
 			assert.Greater(t, drop11, 0.70, "consistent negative waking residuals must lower near-term AvgHomeLoadKWH")
+			assert.Greater(t, modelOff[11].ExpectedHomeLoadKWH-modelOn[11].ExpectedHomeLoadKWH, 0.70, "ExpectedHomeLoadKWH must also shift downward")
 			assert.Greater(t, modelOff[11].P75HomeLoadKWH-modelOn[11].P75HomeLoadKWH, 0.70, "P75HomeLoadKWH must also shift downward")
 			assert.Greater(t, drop11, drop15, "negative intraday shift must decay exponentially across the afternoon")
 
@@ -2782,10 +2839,12 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			minClampKWH := 0.9 * 0.50
 			for h := 11; h < 24; h++ {
 				assert.GreaterOrEqual(t, modelOn[h].AvgHomeLoadKWH, minClampKWH-1e-6, "hour %d AvgHomeLoadKWH must clamp >= 0.9 * standbyLoad", h)
+				assert.GreaterOrEqual(t, modelOn[h].ExpectedHomeLoadKWH, minClampKWH-1e-6, "hour %d ExpectedHomeLoadKWH must clamp >= 0.9 * standbyLoad", h)
 				assert.GreaterOrEqual(t, modelOn[h].P75HomeLoadKWH, minClampKWH-1e-6, "hour %d P75HomeLoadKWH must clamp >= 0.9 * standbyLoad", h)
 			}
 			for h := 0; h < 11; h++ {
 				assert.InDelta(t, modelOff[h].AvgHomeLoadKWH, modelOn[h].AvgHomeLoadKWH, 1e-9, "tomorrow hour %d must be untouched", h)
+				assert.InDelta(t, modelOff[h].ExpectedHomeLoadKWH, modelOn[h].ExpectedHomeLoadKWH, 1e-9, "tomorrow hour %d ExpectedHomeLoadKWH must be untouched", h)
 			}
 		}
 	})
@@ -5139,9 +5198,11 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
 		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Waking: true}}
 
+		rawExpected := rawAvg
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg,
+			&rawExpected,
 			&rawP75,
 			hasHour,
 			targetTimes,
@@ -5160,8 +5221,10 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		)
 
 		assert.InDelta(t, 1.0, rawAvg[14], 0.15, "today's remaining hour 14 should cap to unboosted all-days P55 (~1.0 kWh)")
+		assert.Less(t, rawExpected[14], 2.0, "today's remaining hour 14 ExpectedHomeLoadKWH should also dampen")
 		assert.GreaterOrEqual(t, rawP75[14], rawAvg[14])
 		assert.InDelta(t, 2.6, rawAvg[8], 1e-6, "tomorrow's hour 8 must not be modified")
+		assert.InDelta(t, 2.6, rawExpected[8], 1e-6, "tomorrow's hour 8 ExpectedHomeLoadKWH must not be modified")
 	})
 
 	t.Run("SkipsWhenNotOutlierWeekdayOrFewerThanTwoMorningHours", func(t *testing.T) {
@@ -5173,6 +5236,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg,
+			nil,
 			&rawP75,
 			hasHour,
 			targetTimes,
@@ -5196,6 +5260,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg2,
+			nil,
 			&rawP752,
 			hasHour2,
 			targetTimes2,
@@ -5220,9 +5285,11 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		assertSkipped := func(t *testing.T, p weekdayOutlierPeriods) {
 			t.Helper()
 			dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.75, 3)
+			rawExpected := rawAvg
 			capFn := applyOutlierDayCalmMorningDampening(
 				context.Background(),
 				&rawAvg,
+				&rawExpected,
 				&rawP75,
 				hasHour,
 				targetTimes,
@@ -5241,6 +5308,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 			)
 			assert.Nil(t, capFn, "calm-morning dampening must return nil when Morning is false (%+v)", p)
 			assert.InDelta(t, 2.6, rawAvg[14], 1e-6, "afternoon forecast must not be capped when Morning is false (%+v)", p)
+			assert.InDelta(t, 2.6, rawExpected[14], 1e-6, "ExpectedHomeLoadKWH forecast must not be capped when Morning is false (%+v)", p)
 			assert.InDelta(t, 2.9, rawP75[14], 1e-6, "P75 forecast must not be capped when Morning is false (%+v)", p)
 		}
 
@@ -5280,10 +5348,12 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 
 		now14 := time.Date(2025, 7, 4, 14, 0, 0, 0, time.UTC)
 		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Afternoon: true, Waking: true}}
+		rawExpected := rawAvg
 
 		capFn := applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg,
+			&rawExpected,
 			&rawP75,
 			hasHour,
 			targetTimes,
@@ -5302,6 +5372,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		)
 		assert.Nil(t, capFn, "post-noon load exceeding baseline must abort calm-morning dampening at 14:00")
 		assert.InDelta(t, 2.6, rawAvg[15], 1e-6, "remaining afternoon hours must preserve boost when 12:00-13:59 exceeds baseline")
+		assert.InDelta(t, 2.6, rawExpected[15], 1e-6, "remaining afternoon ExpectedHomeLoadKWH must preserve boost when 12:00-13:59 exceeds baseline")
 		assert.InDelta(t, 2.9, rawP75[15], 1e-6)
 
 		// Contrast: when 12:00..13:59 stays calm (0.85 kWh <= unboosted baseline), dampening still caps remaining hours at 14:00.
@@ -5317,9 +5388,11 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 			types.EnergyStats{TSHourStart: todayDate.Add(12 * time.Hour), HomeKWH: 0.85},
 			types.EnergyStats{TSHourStart: todayDate.Add(13 * time.Hour), HomeKWH: 0.85},
 		)
+		rawExpectedCalm := rawAvgCalm
 		capFnCalm := applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvgCalm,
+			&rawExpectedCalm,
 			&rawP75Calm,
 			hasHourCalm,
 			targetTimesCalm,
@@ -5338,6 +5411,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		)
 		assert.NotNil(t, capFnCalm)
 		assert.InDelta(t, 1.0, rawAvgCalm[15], 0.15, "remaining afternoon hours should cap when both morning and 12:00-13:59 stay calm")
+		assert.Less(t, rawExpectedCalm[15], 2.0, "remaining afternoon ExpectedHomeLoadKWH should also cap when both morning and 12:00-13:59 stay calm")
 	})
 
 	t.Run("HonorsNonUTCLocationOnUTCTimestampsForMorningOutlier", func(t *testing.T) {
@@ -5401,6 +5475,7 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 		applyOutlierDayCalmMorningDampening(
 			context.Background(),
 			&rawAvg,
+			nil,
 			&rawP75,
 			hasHour,
 			targetTimes,
@@ -5420,6 +5495,81 @@ func TestApplyOutlierDayCalmMorningDampening(t *testing.T) {
 
 		assert.InDelta(t, 1.0, rawAvg[19], 0.15, "today's evening hour 19 should cap down when UTC-stored points show a calm Chicago morning")
 		assert.InDelta(t, 2.6, rawAvg[8], 1e-6, "tomorrow's hour 8 must remain untouched")
+	})
+
+	t.Run("DampensExpectedHomeLoadIndependentlyWhenMeanExceedsAllDaysMean", func(t *testing.T) {
+		dayMap, validDaysMap, hasHour, targetTimes, rawAvg, rawP75 := buildFixture(0.80, 3)
+		now := time.Date(2025, 7, 4, 10, 0, 0, 0, time.UTC)
+		outliers := map[time.Weekday]weekdayOutlierPeriods{time.Friday: {Morning: true, Waking: true}}
+
+		// Set rawAvg[14] already below all-days P55 (~1.0), while rawExpected[14] is inflated by a weekday spike.
+		rawAvg[14] = 0.9
+		rawExpected := rawAvg
+		rawExpected[14] = 2.8
+
+		applyOutlierDayCalmMorningDampening(
+			context.Background(),
+			&rawAvg,
+			&rawExpected,
+			&rawP75,
+			hasHour,
+			targetTimes,
+			now,
+			time.UTC,
+			10,
+			"2025-07-04",
+			dayMap,
+			validDaysMap,
+			nil,
+			outliers,
+			nil,
+			nil,
+			0.3,
+			types.Settings{},
+		)
+
+		assert.InDelta(t, 0.9, rawAvg[14], 1e-6, "already-low rawAvg should remain unchanged")
+		assert.Less(t, rawExpected[14], 2.0, "inflated rawExpected must still dampen independently of rawAvg")
+	})
+}
+
+func TestGetWeightedMean(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyAndSinglePoint", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, 0.0, getWeightedMean(nil))
+		assert.InDelta(t, 2.5, getWeightedMean([]weightedPoint{{Value: 2.5, Weight: 3.0}}), 1e-9)
+	})
+
+	t.Run("WeightedAverage", func(t *testing.T) {
+		t.Parallel()
+		pts := []weightedPoint{
+			{Value: 1.0, Weight: 3.0},
+			{Value: 5.0, Weight: 1.0},
+		}
+		assert.InDelta(t, 2.0, getWeightedMean(pts), 1e-9)
+	})
+
+	t.Run("IgnoresNonPositiveAndNonFiniteWeightsOrValues", func(t *testing.T) {
+		t.Parallel()
+		pts := []weightedPoint{
+			{Value: 2.0, Weight: 2.0},
+			{Value: 4.0, Weight: 2.0},
+			{Value: 100.0, Weight: 0.0},
+			{Value: 100.0, Weight: -5.0},
+			{Value: math.NaN(), Weight: 1.0},
+			{Value: math.Inf(1), Weight: 1.0},
+			{Value: 10.0, Weight: math.NaN()},
+			{Value: 10.0, Weight: math.Inf(1)},
+		}
+		assert.InDelta(t, 3.0, getWeightedMean(pts), 1e-9)
+
+		// All zero weights fall back to first finite value
+		assert.InDelta(t, 1.5, getWeightedMean([]weightedPoint{
+			{Value: math.NaN(), Weight: 0.0},
+			{Value: 1.5, Weight: 0.0},
+		}), 1e-9)
 	})
 }
 

@@ -22,8 +22,20 @@ func TestAdminListSites(t *testing.T) {
 	mockStorage := &mockStorage{}
 	mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 	sites := []types.Site{
-		{ID: "site1"},
-		{ID: "site2"},
+		{
+			ID:         "site1",
+			InviteCode: "mock-invite-code-1",
+			Permissions: []types.SitePermissions{
+				{UserID: "google:owner1"},
+			},
+		},
+		{
+			ID:         "site2",
+			InviteCode: "mock-invite-code-2",
+			Permissions: []types.SitePermissions{
+				{UserID: "google:owner2"},
+			},
+		},
 	}
 	mockStorage.On("ListSites", mock.Anything).Return(sites, nil)
 	mockStorage.On("GetLatestAction", mock.Anything, "site1").Return(&types.Action{Description: "test1 action"}, nil)
@@ -92,16 +104,26 @@ func TestAdminListSites(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, rr.Code)
 
-		var sites []AdminSite
-		err := json.NewDecoder(rr.Body).Decode(&sites)
+		bodyBytes := rr.Body.Bytes()
+		var rawSites []map[string]any
+		require.NoError(t, json.Unmarshal(bodyBytes, &rawSites))
+		if assert.Len(t, rawSites, 2) {
+			for _, item := range rawSites {
+				assert.NotContains(t, item, "inviteCode")
+				assert.NotContains(t, item, "permissions")
+			}
+		}
+
+		var decodedSites []AdminSite
+		err := json.Unmarshal(bodyBytes, &decodedSites)
 		require.NoError(t, err)
 
-		if assert.Len(t, sites, 2) {
-			siteIDs := []string{sites[0].ID, sites[1].ID}
+		if assert.Len(t, decodedSites, 2) {
+			siteIDs := []string{decodedSites[0].ID, decodedSites[1].ID}
 			assert.Contains(t, siteIDs, "site1")
 			assert.Contains(t, siteIDs, "site2")
 
-			for _, s := range sites {
+			for _, s := range decodedSites {
 				if s.ID == "site1" {
 					require.NotNil(t, s.LastAction)
 					assert.Equal(t, "test1 action", s.LastAction.Description)
@@ -113,6 +135,29 @@ func TestAdminListSites(t *testing.T) {
 				}
 			}
 		}
+	})
+
+	t.Run("Read-Only Admin Join Attempt Without InviteCode Forbidden", func(t *testing.T) {
+		joinReq := httptest.NewRequest(
+			http.MethodPost,
+			"/api/join",
+			strings.NewReader(`{"joinSiteID":"site1","inviteCode":"fake-wrong-guess","name":"Attempt"}`),
+		)
+		joinReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
+
+		mockStorage.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
+			Email: "admin@example.com",
+		}, nil).Once()
+		mockStorage.On("GetSite", mock.Anything, "site1").Return(sites[0], nil).Once()
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, joinReq)
+
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		var resp map[string]string
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+		assert.Equal(t, "invalid invite code", resp["error"])
 	})
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {

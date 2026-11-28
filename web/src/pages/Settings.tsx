@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useState, useRef, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
@@ -11,11 +11,14 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
-import { ConnectAIDialog } from '../components/ConnectAIDialog';
 import { isESSEnabled } from '../utils/enabledProviders';
 import { useFeatureFlag } from '../utils/features';
 import { areSettingsEqual } from '../utils/settingsUtils';
 import './Settings.css';
+
+const ConnectAIDialog = lazy(() =>
+    import('../components/ConnectAIDialog').then((m) => ({ default: m.ConnectAIDialog }))
+);
 
 const countries = [
     { label: 'United States', value: 'US' },
@@ -4077,12 +4080,16 @@ const Settings = ({
                         </Collapsible.Panel>
                     </Collapsible.Root>
 
-                    <ConnectAIDialog
-                        open={isConnectAIDialogOpen}
-                        onOpenChange={setIsConnectAIDialogOpen}
-                        apps={apps}
-                        onCreateApp={handleCreateAppWithName}
-                    />
+                    {isConnectAIDialogOpen && (
+                        <Suspense fallback={null}>
+                            <ConnectAIDialog
+                                open={isConnectAIDialogOpen}
+                                onOpenChange={setIsConnectAIDialogOpen}
+                                apps={apps}
+                                onCreateApp={handleCreateAppWithName}
+                            />
+                        </Suspense>
+                    )}
                 </div>
             )}
 

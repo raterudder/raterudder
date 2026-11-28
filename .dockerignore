@@ -13,6 +13,10 @@ tmp
 pkg/controller/testdata
 **/*_test.go
 web/src/**/*.test.*
+web/src/setupTests.tsx
+web/src/test
+web/tsconfig.test.json
+scripts
 examples
 user_guide
 .github

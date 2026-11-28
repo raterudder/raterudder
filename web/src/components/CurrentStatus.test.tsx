@@ -439,4 +439,61 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('Running on Solar • Battery Full')).toBeInTheDocument();
         expect(screen.getByText('Holding at 100% on solar until 3:00 PM')).toBeInTheDocument();
     });
+
+    it('renders EV Charging status instead of generic Hold Battery when reason is EVChargingStandby', () => {
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.Standby,
+            reason: ActionReason.EVChargingStandby,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 61.9,
+            },
+            plan: {
+                tsCreated: '2026-11-26T00:27:00-06:00',
+                horizonHours: 24,
+                totalProjectedCost: 1.0,
+                totalExportCredits: 0,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        tsStart: '2026-11-26T00:27:00-06:00',
+                        tsEnd: '2026-11-26T01:00:00-06:00',
+                        durationHours: 0.55,
+                        batteryMode: BatteryMode.Standby,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.EVChargingStandby,
+                        startSoc: 61.9,
+                        endSoc: 61.9,
+                        importDollars: 0.067,
+                        gridImportKWH: 0,
+                        gridExportKWH: 0,
+                        costDollars: 0,
+                    },
+                    {
+                        tsStart: '2026-11-26T13:00:00-06:00',
+                        tsEnd: '2026-11-26T17:00:00-06:00',
+                        durationHours: 4,
+                        batteryMode: BatteryMode.Load,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.DischargeAtPeak,
+                        startSoc: 61.9,
+                        endSoc: 25,
+                        importDollars: 0.20,
+                        gridImportKWH: 0,
+                        gridExportKWH: 0,
+                        costDollars: 0,
+                    },
+                ],
+            },
+        };
+        const { container } = render(<CurrentStatus action={action} />);
+        expect(screen.getByText('EV Charging')).toBeInTheDocument();
+        expect(screen.getByText('Holding Battery for EV')).toBeInTheDocument();
+        expect(screen.getByText('Charging EV from grid to preserve battery')).toBeInTheDocument();
+        expect(screen.getByText('🚗')).toBeInTheDocument();
+        expect(screen.queryByText('Hold Battery')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Saving reserve for/)).not.toBeInTheDocument();
+        expect(container.querySelector('.current-status-card.standby.ev-charging')).toBeInTheDocument();
+    });
 });

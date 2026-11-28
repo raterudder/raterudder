@@ -777,6 +777,11 @@ button {
   color: #94a3b8;
 }
 
+.current-status-card.ev-charging .status-icon {
+  background: rgba(20, 184, 166, 0.14);
+  color: #14b8a6;
+}
+
 .current-status-card.vpp .status-icon {
   background: rgba(59, 130, 246, 0.14);
   color: #3b82f6;

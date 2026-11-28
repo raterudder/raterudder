@@ -295,8 +295,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             setVapidEnabled(subRes.notificationsEnabled ?? true);
 
             const uid = currentUserID || '';
-            const server = (settings?.notifications && uid && settings.notifications[uid])
-                ? settings.notifications[uid]
+            const server = uid
+                ? settings?.notifications?.[uid]
                 : ((settings?.notifications && Object.values(settings.notifications).length > 0)
                     ? Object.values(settings.notifications)[0]
                     : (settings as any)?.settings);

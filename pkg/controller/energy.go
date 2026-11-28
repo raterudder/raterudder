@@ -988,7 +988,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 		slog.Any("recentDiffDetails", recentDiffDetails),
 	)
 
-	predictSingleHourRawLoad := func(h int, targetTime time.Time, includeToday bool, logNeighbor bool) (float64, float64) {
+	predictSingleHourRawLoad := func(h int, targetTime time.Time, includeToday bool, logNeighbor bool) (float64, float64, float64) {
 		wd := targetTime.Weekday()
 
 		// Build the Option A (same-weekday) historical date pool for target weekday wd.
@@ -1269,24 +1269,32 @@ func (c *Controller) BuildHourlyEnergyModel(
 			}
 		}
 
-		// Compute weighted percentile of the gathered points
+		// Compute weighted percentile and weighted pool mean of the gathered points.
+		// AvgHomeLoadKWH uses the strategy percentile (for low-MAE near-term forecasts), while
+		// ExpectedHomeLoadKWH preserves the weighted pool mean (additive across multi-hour horizons).
 		pct := defaultStrategyPercentile
 		if settings.HomeLoadPredictionStrategy == "conservative" {
 			pct = conservativeStrategyPercentile
 		}
-		var avgLoadA, p75LoadA float64
+		var avgLoadA, expectedLoadA, p75LoadA float64
 		if len(pts) > 0 {
 			avgLoadA = getWeightedPercentile(pts, pct)
+			expectedLoadA = getWeightedMean(pts)
+			if settings.HomeLoadPredictionStrategy == "conservative" {
+				expectedLoadA = max(avgLoadA, expectedLoadA)
+			}
 			p75LoadA = getWeightedPercentile(pts, 0.75)
 		} else if ref, ok := hourBaselineRef[h]; ok && ref > 0 {
 			// If all candidate days in the selected pool were filtered out as EV/spike outliers for hour h,
 			// fall back to the cross-day 30th-percentile baseline reference for this hour.
 			avgLoadA = ref
+			expectedLoadA = ref
 			p75LoadA = ref
 		} else {
 			// Sparse history fallback: when no historical points exist for this specific hour,
 			// fall back to the site's overall average load rather than collapsing to standby refrigerator floor.
 			avgLoadA = overallAvgLoad
+			expectedLoadA = overallAvgLoad
 			p75LoadA = overallAvgLoad
 		}
 
@@ -1327,13 +1335,15 @@ func (c *Controller) BuildHourlyEnergyModel(
 				)
 			}
 			avgLoadA += extraKWH
+			expectedLoadA += extraKWH
 			p75LoadA += extraKWH
 		}
 
-		return avgLoadA, p75LoadA
+		return avgLoadA, expectedLoadA, p75LoadA
 	}
 
 	var rawAvgLoadA [24]float64
+	var rawExpectedLoadA [24]float64
 	var rawP75LoadA [24]float64
 	var rawSolar [24]float64
 	var hasHour [24]bool
@@ -1356,7 +1366,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 		hasHour[h] = true
 		targetTimes[h] = targetTime
 
-		avgLoadA, p75LoadA := predictSingleHourRawLoad(h, targetTime, true, true)
+		avgLoadA, expectedLoadA, p75LoadA := predictSingleHourRawLoad(h, targetTime, true, true)
 
 		// Solar prediction.
 		// WeatherSolar uses forecasted values (preferred), falling back to SmoothedSolar if forecast is absent.
@@ -1370,15 +1380,17 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 
 		rawAvgLoadA[h] = avgLoadA
+		rawExpectedLoadA[h] = expectedLoadA
 		rawP75LoadA[h] = p75LoadA
 		rawSolar[h] = avgSolar
 	}
 
-	var capCalmMorningHour func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64)
+	var capCalmMorningHour func(h int, targetTime time.Time, rawAvgKWH, rawExpectedKWH, rawP75KWH float64) (float64, float64, float64)
 	if detectedShift == "none" {
 		capCalmMorningHour = applyOutlierDayCalmMorningDampening(
 			ctx,
 			&rawAvgLoadA,
+			&rawExpectedLoadA,
 			&rawP75LoadA,
 			hasHour,
 			targetTimes,
@@ -1410,22 +1422,33 @@ func (c *Controller) BuildHourlyEnergyModel(
 		dayMeanActiveLoadA = sumActiveLoadA / float64(activeHourCount)
 	}
 
-	applyOptionGShift := func(avgLoadA, p75LoadA float64) (float64, float64) {
+	applyOptionGShift := func(avgLoadA, expectedLoadA, p75LoadA float64) (float64, float64, float64) {
 		// Apply the adaptive shift derived via Option G.
 		// Negative shifts subtract strictly from active load above standbyLoad to protect the empirical standby floor.
 		// Positive shifts are weighted proportionally to each hour's active load share so overnight sleeping hours
 		// are not artificially inflated by daytime/evening load shifts.
+		var finalHomeLoadACAdj, finalExpectedHomeLoad, finalP75HomeLoad float64
 		if appliedShift < 0 {
 			activeAvg := max(0.0, avgLoadA-standbyLoad)
+			activeExpected := max(0.0, expectedLoadA-standbyLoad)
 			activeP75 := max(0.0, p75LoadA-standbyLoad)
-			return standbyLoad + max(0.0, activeAvg+appliedShift), standbyLoad + max(0.0, activeP75+appliedShift)
+			finalHomeLoadACAdj = standbyLoad + max(0.0, activeAvg+appliedShift)
+			finalExpectedHomeLoad = standbyLoad + max(0.0, activeExpected+appliedShift)
+			finalP75HomeLoad = standbyLoad + max(0.0, activeP75+appliedShift)
+		} else {
+			shiftWeight := 1.0
+			if dayMeanActiveLoadA > 0.1 {
+				activeAvg := max(0.0, avgLoadA-standbyLoad)
+				shiftWeight = min(1.5, activeAvg/dayMeanActiveLoadA)
+			}
+			finalHomeLoadACAdj = max(0.9*standbyLoad, avgLoadA+appliedShift*shiftWeight)
+			finalExpectedHomeLoad = max(0.9*standbyLoad, expectedLoadA+appliedShift*shiftWeight)
+			finalP75HomeLoad = max(0.9*standbyLoad, p75LoadA+appliedShift*shiftWeight)
 		}
-		shiftWeight := 1.0
-		if dayMeanActiveLoadA > 0.1 {
-			activeAvg := max(0.0, avgLoadA-standbyLoad)
-			shiftWeight = min(1.5, activeAvg/dayMeanActiveLoadA)
+		if settings.HomeLoadPredictionStrategy == "conservative" {
+			finalExpectedHomeLoad = max(finalHomeLoadACAdj, finalExpectedHomeLoad)
 		}
-		return max(0.9*standbyLoad, avgLoadA+appliedShift*shiftWeight), max(0.9*standbyLoad, p75LoadA+appliedShift*shiftWeight)
+		return finalHomeLoadACAdj, finalExpectedHomeLoad, finalP75HomeLoad
 	}
 
 	intradayShiftKWH := 0.0
@@ -1458,11 +1481,11 @@ func (c *Controller) BuildHourlyEnergyModel(
 					if obsTempC, hasTemp := weatherByHour[hrTargetTime.Truncate(time.Hour).UTC()]; hasTemp {
 						obsTempsC = append(obsTempsC, obsTempC)
 					}
-					rawBaseAvgKWH, rawBaseP75KWH := predictSingleHourRawLoad(hr, hrTargetTime, false, false)
+					rawBaseAvgKWH, rawBaseExpectedKWH, rawBaseP75KWH := predictSingleHourRawLoad(hr, hrTargetTime, false, false)
 					if capCalmMorningHour != nil {
-						rawBaseAvgKWH, rawBaseP75KWH = capCalmMorningHour(hr, hrTargetTime, rawBaseAvgKWH, rawBaseP75KWH)
+						rawBaseAvgKWH, rawBaseExpectedKWH, rawBaseP75KWH = capCalmMorningHour(hr, hrTargetTime, rawBaseAvgKWH, rawBaseExpectedKWH, rawBaseP75KWH)
 					}
-					baselineKWH, _ := applyOptionGShift(rawBaseAvgKWH, rawBaseP75KWH)
+					baselineKWH, _, _ := applyOptionGShift(rawBaseAvgKWH, rawBaseExpectedKWH, rawBaseP75KWH)
 					residualsKWH = append(residualsKWH, actualKWH-baselineKWH)
 					sumObsActiveBaseKWH += max(0.0, baselineKWH-standbyLoad)
 				}
@@ -1504,7 +1527,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 			result[h] = TimeProfile{Hour: h}
 			continue
 		}
-		finalHomeLoadACAdj, finalP75HomeLoad := applyOptionGShift(rawAvgLoadA[h], rawP75LoadA[h])
+		finalHomeLoadACAdj, finalExpectedHomeLoad, finalP75HomeLoad := applyOptionGShift(rawAvgLoadA[h], rawExpectedLoadA[h], rawP75LoadA[h])
 
 		if intradayShiftKWH != 0 && h >= currentHour && targetTimes[h].In(loc).Format("2006-01-02") == todayStr {
 			decayedShiftKWH := intradayShiftKWH * math.Exp(-float64(h-currentHour)/intradayMomentumDecayTauHours)
@@ -1523,15 +1546,20 @@ func (c *Controller) BuildHourlyEnergyModel(
 				offsetKWH = decayedShiftKWH * activeWeight
 			}
 			finalHomeLoadACAdj = max(0.9*standbyLoad, finalHomeLoadACAdj+offsetKWH)
+			finalExpectedHomeLoad = max(0.9*standbyLoad, finalExpectedHomeLoad+offsetKWH)
 			finalP75HomeLoad = max(0.9*standbyLoad, finalP75HomeLoad+offsetKWH)
+			if settings.HomeLoadPredictionStrategy == "conservative" {
+				finalExpectedHomeLoad = max(finalHomeLoadACAdj, finalExpectedHomeLoad)
+			}
 		}
 
 		result[h] = TimeProfile{
-			TSHourStart:    targetTimes[h],
-			Hour:           h,
-			AvgSolarKWH:    rawSolar[h],
-			AvgHomeLoadKWH: finalHomeLoadACAdj,
-			P75HomeLoadKWH: finalP75HomeLoad,
+			TSHourStart:         targetTimes[h],
+			Hour:                h,
+			AvgSolarKWH:         rawSolar[h],
+			AvgHomeLoadKWH:      finalHomeLoadACAdj,
+			ExpectedHomeLoadKWH: finalExpectedHomeLoad,
+			P75HomeLoadKWH:      finalP75HomeLoad,
 		}
 	}
 
@@ -1924,6 +1952,31 @@ func calculateWelchT(a, b []float64) float64 {
 type weightedPoint struct {
 	Value  float64
 	Weight float64
+}
+
+// getWeightedMean computes the weighted arithmetic mean of a slice of weighted data points.
+// Points with non-positive, NaN, or infinite weights or values are ignored.
+func getWeightedMean(points []weightedPoint) float64 {
+	if len(points) == 0 {
+		return 0.0
+	}
+	var sumVal, sumWeight float64
+	for _, p := range points {
+		if !(p.Weight > 0) || math.IsInf(p.Weight, 0) || math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
+			continue
+		}
+		sumVal += p.Value * p.Weight
+		sumWeight += p.Weight
+	}
+	if sumWeight > 0 {
+		return sumVal / sumWeight
+	}
+	for _, p := range points {
+		if !math.IsNaN(p.Value) && !math.IsInf(p.Value, 0) {
+			return p.Value
+		}
+	}
+	return 0.0
 }
 
 // getWeightedPercentile calculates the percentile value from a slice of weighted data points.
@@ -2713,6 +2766,7 @@ func identifyHistoricalVacationDays(
 func applyOutlierDayCalmMorningDampening(
 	ctx context.Context,
 	rawAvgLoadA *[24]float64,
+	rawExpectedLoadA *[24]float64,
 	rawP75LoadA *[24]float64,
 	hasHour [24]bool,
 	targetTimes [24]time.Time,
@@ -2728,7 +2782,7 @@ func applyOutlierDayCalmMorningDampening(
 	weatherByHour map[time.Time]float64,
 	standbyLoad float64,
 	settings types.Settings,
-) func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64) {
+) func(h int, targetTime time.Time, rawAvgKWH, rawExpectedKWH, rawP75KWH float64) (float64, float64, float64) {
 	// Only evaluate from 09:00 onward (ensuring at least 2 completed hours in [07:00, 09:00))
 	// and only on weekdays where historical morning loads qualified for a same-weekday Morning outlier boost.
 	nowLocal := now.In(loc)
@@ -3034,21 +3088,33 @@ func applyOutlierDayCalmMorningDampening(
 		pct = conservativeStrategyPercentile
 	}
 
-	capHour := func(h int, targetTime time.Time, rawAvgKWH, rawP75KWH float64) (float64, float64) {
+	capHour := func(h int, targetTime time.Time, rawAvgKWH, rawExpectedKWH, rawP75KWH float64) (float64, float64, float64) {
 		pts, extraKWH := computeAllDaysHourPts(h, targetTime, pct)
 		if len(pts) == 0 {
-			return rawAvgKWH, rawP75KWH
+			return rawAvgKWH, rawExpectedKWH, rawP75KWH
 		}
 		allDaysPctKWH := getWeightedPercentile(pts, pct)
+		allDaysExpectedKWH := getWeightedMean(pts)
+		if settings.HomeLoadPredictionStrategy == "conservative" {
+			allDaysExpectedKWH = max(allDaysPctKWH, allDaysExpectedKWH)
+		}
 		allDaysP75KWH := getWeightedPercentile(pts, 0.75)
 		if extraKWH > 0 {
 			allDaysPctKWH += extraKWH
+			allDaysExpectedKWH += extraKWH
 			allDaysP75KWH += extraKWH
 		}
+		cappedAvgKWH := rawAvgKWH
+		cappedP75KWH := rawP75KWH
 		if allDaysPctKWH < rawAvgKWH {
-			return allDaysPctKWH, max(allDaysPctKWH, min(rawP75KWH, allDaysP75KWH))
+			cappedAvgKWH = allDaysPctKWH
+			cappedP75KWH = max(allDaysPctKWH, min(rawP75KWH, allDaysP75KWH))
 		}
-		return rawAvgKWH, rawP75KWH
+		cappedExpectedKWH := rawExpectedKWH
+		if allDaysExpectedKWH < rawExpectedKWH {
+			cappedExpectedKWH = allDaysExpectedKWH
+		}
+		return cappedAvgKWH, cappedExpectedKWH, cappedP75KWH
 	}
 
 	// Cap remaining hours that fall on today (leaving tomorrow's profile hours untouched) down to
@@ -3058,10 +3124,22 @@ func applyOutlierDayCalmMorningDampening(
 		if !hasHour[h] || targetTimes[h].In(loc).Format("2006-01-02") != todayStr {
 			continue
 		}
-		cappedAvg, cappedP75 := capHour(h, targetTimes[h], rawAvgLoadA[h], rawP75LoadA[h])
+		origExpectedKWH := 0.0
+		if rawExpectedLoadA != nil {
+			origExpectedKWH = rawExpectedLoadA[h]
+		}
+		cappedAvg, cappedExpected, cappedP75 := capHour(h, targetTimes[h], rawAvgLoadA[h], origExpectedKWH, rawP75LoadA[h])
+		capped := false
 		if cappedAvg < rawAvgLoadA[h] {
 			rawAvgLoadA[h] = cappedAvg
 			rawP75LoadA[h] = cappedP75
+			capped = true
+		}
+		if rawExpectedLoadA != nil && cappedExpected < rawExpectedLoadA[h] {
+			rawExpectedLoadA[h] = cappedExpected
+			capped = true
+		}
+		if capped {
 			cappedHours++
 		}
 	}
@@ -3084,11 +3162,12 @@ func applyOutlierDayCalmMorningDampening(
 
 // TimeProfile holds modeled average solar production and home load for an hour.
 type TimeProfile struct {
-	TSHourStart    time.Time
-	Hour           int
-	AvgSolarKWH    float64
-	AvgHomeLoadKWH float64
-	P75HomeLoadKWH float64
+	TSHourStart         time.Time
+	Hour                int
+	AvgSolarKWH         float64
+	AvgHomeLoadKWH      float64
+	ExpectedHomeLoadKWH float64
+	P75HomeLoadKWH      float64
 }
 
 func findTimeProfile(model []TimeProfile, t time.Time) TimeProfile {

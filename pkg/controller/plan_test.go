@@ -1197,6 +1197,20 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			assert.InDelta(t, 6.0, totalLoad, 0.001, "must forecast 4 hours of home consumption from model")
 		}
 
+		// When ExpectedHomeLoadKWH is populated, post-horizon valuation (>= 6h ahead) uses it instead of AvgHomeLoadKWH
+		expectedModel := make([]TimeProfile, 24)
+		for h := 0; h < 24; h++ {
+			expectedModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5, ExpectedHomeLoadKWH: 2.25}
+		}
+		phExp := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, expectedModel)
+		if assert.Len(t, phExp.postHorizonSlices, 4) {
+			var totalLoad float64
+			for _, s := range phExp.postHorizonSlices {
+				totalLoad += s.loadKWH
+			}
+			assert.InDelta(t, 9.0, totalLoad, 0.001, "post-horizon valuation must use ExpectedHomeLoadKWH when available")
+		}
+
 		// Verify net load (AvgHomeLoadKWH - AvgSolarKWH) paired with per-hour futurePrices and sorted by rate descending
 		solarModel := make([]TimeProfile, 24)
 		for h := 0; h < 24; h++ {
@@ -6442,5 +6456,49 @@ func TestHorizonDiscountFactor(t *testing.T) {
 		assert.Less(t, df34, df24)
 		assert.Greater(t, df34, terminalTier1DiscountFactor,
 			"In-horizon discount at maxFlexibleHorizonHours (34h) must stay strictly above terminalTier1DiscountFactor (0.95) so post-horizon energy is never overvalued relative to late-horizon intervals")
+	})
+}
+
+func TestInterpolateHorizonLoadKWH(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NearTermUsesAvgHomeLoadKWHAndRampsLinearlyToExpectedHomeLoadKWH", func(t *testing.T) {
+		t.Parallel()
+
+		profile := TimeProfile{
+			Hour:                14,
+			AvgHomeLoadKWH:      1.0,
+			ExpectedHomeLoadKWH: 2.0,
+		}
+
+		// <= 1.0h uses AvgHomeLoadKWH directly
+		assert.InDelta(t, 1.0, interpolateHorizonLoadKWH(profile, 0.0), 1e-9)
+		assert.InDelta(t, 1.0, interpolateHorizonLoadKWH(profile, 1.0), 1e-9)
+		// Midpoint between 1.0h and 3.0h is 2.0h -> 50% blend (1.5 kWh/hr)
+		assert.InDelta(t, 1.5, interpolateHorizonLoadKWH(profile, 2.0), 1e-9)
+		// >= 3.0h converges to ExpectedHomeLoadKWH
+		assert.InDelta(t, 2.0, interpolateHorizonLoadKWH(profile, 3.0), 1e-9)
+		assert.InDelta(t, 2.0, interpolateHorizonLoadKWH(profile, 12.0), 1e-9)
+	})
+
+	t.Run("FallsBackToAvgHomeLoadKWHWhenExpectedHomeLoadKWHUnsetOrInvalid", func(t *testing.T) {
+		t.Parallel()
+
+		profile := TimeProfile{
+			Hour:           14,
+			AvgHomeLoadKWH: 1.4,
+		}
+		assert.InDelta(t, 1.4, interpolateHorizonLoadKWH(profile, 0.0), 1e-9)
+		assert.InDelta(t, 1.4, interpolateHorizonLoadKWH(profile, 10.0), 1e-9)
+
+		// Negative hoursAhead (e.g. partial current hour or clock skew) uses AvgHomeLoadKWH
+		skewProfile := TimeProfile{Hour: 14, AvgHomeLoadKWH: 1.2, ExpectedHomeLoadKWH: 2.4}
+		assert.InDelta(t, 1.2, interpolateHorizonLoadKWH(skewProfile, -0.5), 1e-9)
+		assert.InDelta(t, 1.2, interpolateHorizonLoadKWH(skewProfile, math.NaN()), 1e-9)
+
+		// Negative, NaN, or infinite ExpectedHomeLoadKWH falls back safely to AvgHomeLoadKWH
+		assert.InDelta(t, 1.4, interpolateHorizonLoadKWH(TimeProfile{Hour: 14, AvgHomeLoadKWH: 1.4, ExpectedHomeLoadKWH: -1.0}, 10.0), 1e-9)
+		assert.InDelta(t, 1.4, interpolateHorizonLoadKWH(TimeProfile{Hour: 14, AvgHomeLoadKWH: 1.4, ExpectedHomeLoadKWH: math.NaN()}, 10.0), 1e-9)
+		assert.InDelta(t, 1.4, interpolateHorizonLoadKWH(TimeProfile{Hour: 14, AvgHomeLoadKWH: 1.4, ExpectedHomeLoadKWH: math.Inf(1)}, 10.0), 1e-9)
 	})
 }

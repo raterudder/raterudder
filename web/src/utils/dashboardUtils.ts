@@ -994,6 +994,9 @@ export const getSummaryBeatHeadline = (
             return 'System fault detected';
         case 'standby':
         default:
+            if (action.reason === ActionReason.EVChargingStandby) {
+                return isCurrent ? 'Holding battery for EV charging' : 'Held battery for EV charging';
+            }
             return isCurrent ? 'Holding battery in standby' : 'Held battery in standby';
     }
 };
@@ -1013,6 +1016,7 @@ export const buildDaySummary = (
     interface RawPhase {
         category: SummaryPhaseCategory;
         solarFlat: boolean;
+        evCharging: boolean;
         startTime: string;
         endTime: string;
         effectiveEndTime: string;
@@ -1059,6 +1063,7 @@ export const buildDaySummary = (
         const startSOC = isSummary ? (item.startSOC ?? item.minSOC ?? item.avgSOC) : singleSOC;
         const ownEndSOC = isSummary ? (item.endSOC ?? item.maxSOC ?? item.avgSOC) : singleSOC;
         const category = classifySummaryItem(item, startSOC, ownEndSOC, hasSOC);
+        const evCharging = category === 'standby' && action.reason === ActionReason.EVChargingStandby;
         const solarFlat =
             category === 'load' &&
             ((isSummary && item.loadSubType === 'solarFull') ||
@@ -1131,6 +1136,7 @@ export const buildDaySummary = (
         return {
             category,
             solarFlat,
+            evCharging,
             startTime,
             endTime,
             effectiveEndTime,
@@ -1186,7 +1192,7 @@ export const buildDaySummary = (
 
     // 2. Build story beats:
     const isSameBeatPhase = (a: RawPhase, b: RawPhase) =>
-        a.category === b.category && a.solarFlat === b.solarFlat;
+        a.category === b.category && a.solarFlat === b.solarFlat && a.evCharging === b.evCharging;
 
     const mergePhaseInto = (prev: RawPhase, p: RawPhase) => {
         prev.endTime = p.endTime;
@@ -1241,6 +1247,7 @@ export const buildDaySummary = (
             p.category !== 'standby' &&
             prev &&
             prev.category === 'standby' &&
+            !prev.evCharging &&
             prevPrev &&
             isSameBeatPhase(prevPrev, p)
         ) {
@@ -1287,10 +1294,11 @@ export const buildDaySummary = (
     // Merge consecutive phases of the same category
     const mergedPhases = mergeAdjacentSameCategory(significantPhases);
 
-    // Hide standby from bullet points unless the entire day is standby
-    const hasNonStandby = mergedPhases.some(p => p.category !== 'standby');
+    // Hide generic standby from bullet points unless the entire day is standby
+    const isGenericStandby = (p: RawPhase) => p.category === 'standby' && !p.evCharging;
+    const hasNonStandby = mergedPhases.some(p => !isGenericStandby(p));
     let beatPhases = hasNonStandby
-        ? mergeAdjacentSameCategory(mergedPhases.filter(p => p.category !== 'standby'))
+        ? mergeAdjacentSameCategory(mergedPhases.filter(p => !isGenericStandby(p)))
         : mergedPhases;
 
     if (beatPhases.length === 0) {
@@ -1354,6 +1362,9 @@ export function getPlanStatusSubvalue(
 
     // Standby: find what we are waiting for or holding for
     if (state === 'standby') {
+        if (action.reason === ActionReason.EVChargingStandby) {
+            return 'Charging EV from grid to preserve battery';
+        }
         if (action.reason === ActionReason.PreventSolarCurtailment) {
             return 'Holding reserve for daytime solar recharge';
         }

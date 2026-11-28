@@ -1032,8 +1032,12 @@ func (c *Controller) buildPlanningTimeline(
 			}
 		}
 
-		// Projected home load energy for this interval (kWh)
-		loadKWH := profile.AvgHomeLoadKWH * durationHrs
+		// Projected home load energy for this interval (kWh), interpolating from near-term
+		// calibrated AvgHomeLoadKWH toward unbiased ExpectedHomeLoadKWH across multi-hour horizons
+		// to avoid multi-hour quantile summation bias.
+		hoursAhead := currentTime.Sub(now).Hours()
+		hourlyLoadKWH := interpolateHorizonLoadKWH(profile, hoursAhead)
+		loadKWH := hourlyLoadKWH * durationHrs
 		if (len(history) == 0 || loadKWH <= 0) && currentStatus.HomeKW > 0 {
 			loadKWH = currentStatus.HomeKW * durationHrs
 		}
@@ -1091,6 +1095,35 @@ func (c *Controller) buildPlanningTimeline(
 	)
 
 	return timeline, simParams, model, nil
+}
+
+// horizonMeanInterpStartHours and horizonMeanInterpEndHours define the lookahead window
+// over which plan interval load forecasts transition from the near-term calibrated
+// AvgHomeLoadKWH (preserving immediate quantile safety) to ExpectedHomeLoadKWH (the
+// weighted pool mean). Summing per-hour quantiles over many future hours creates
+// systematic multi-hour quantile summation bias, whereas expectations are additive.
+const (
+	horizonMeanInterpStartHours = 1.0
+	horizonMeanInterpEndHours   = 3.0
+)
+
+// interpolateHorizonLoadKWH returns the hourly load rate (kWh/hr) for a planning interval
+// starting hoursAhead hours after now. Near-term intervals (<= 1h) use profile.AvgHomeLoadKWH;
+// intervals between 1h and 3h ramp linearly toward profile.ExpectedHomeLoadKWH; intervals at
+// 3h+ use profile.ExpectedHomeLoadKWH. When ExpectedHomeLoadKWH is not populated (<= 0),
+// AvgHomeLoadKWH is returned unchanged.
+func interpolateHorizonLoadKWH(profile TimeProfile, hoursAhead float64) float64 {
+	if !(profile.ExpectedHomeLoadKWH > 0) || math.IsInf(profile.ExpectedHomeLoadKWH, 0) {
+		return profile.AvgHomeLoadKWH
+	}
+	if !(hoursAhead > horizonMeanInterpStartHours) {
+		return profile.AvgHomeLoadKWH
+	}
+	if hoursAhead >= horizonMeanInterpEndHours {
+		return profile.ExpectedHomeLoadKWH
+	}
+	alpha := (hoursAhead - horizonMeanInterpStartHours) / (horizonMeanInterpEndHours - horizonMeanInterpStartHours)
+	return (1.0-alpha)*profile.AvgHomeLoadKWH + alpha*profile.ExpectedHomeLoadKWH
 }
 
 // extractVPPAnchors scans currentStatus.VPPEvents for active (non-OptOut) VPP events that overlap the
@@ -1211,7 +1244,7 @@ func (c *Controller) buildPostHorizonValuation(
 
 	hasLoadModel := false
 	for _, p := range model {
-		if p.AvgHomeLoadKWH > 0.1 {
+		if p.AvgHomeLoadKWH > 0.1 || (p.ExpectedHomeLoadKWH > 0.1 && !math.IsInf(p.ExpectedHomeLoadKWH, 0)) {
 			hasLoadModel = true
 			break
 		}
@@ -1250,7 +1283,7 @@ func (c *Controller) buildPostHorizonValuation(
 		prof := findTimeProfile(model, tStart)
 		homeLoadKWH := defaultHourlyLoadKWH
 		if hasLoadModel {
-			homeLoadKWH = prof.AvgHomeLoadKWH
+			homeLoadKWH = interpolateHorizonLoadKWH(prof, tStart.Sub(timeline[0].startTime).Hours())
 		}
 		netLoadKWH := homeLoadKWH - prof.AvgSolarKWH
 		if netLoadKWH <= 0 {

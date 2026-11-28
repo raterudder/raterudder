@@ -14,7 +14,7 @@ import (
 
 // AdminSite is a site that is visible to admins along with the LastAction
 type AdminSite struct {
-	types.Site
+	ID         string          `json:"id"`
 	LastAction *types.Action   `json:"lastAction,omitempty"`
 	Alias      string          `json:"alias,omitempty"`
 	Features   map[string]bool `json:"features,omitempty"`
@@ -64,7 +64,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			adminSites[i] = AdminSite{
-				Site:       site,
+				ID:         site.ID,
 				LastAction: action,
 				Alias:      adminSettings.Aliases[site.ID],
 				Features:   featsEval.Evaluate(site.ID),

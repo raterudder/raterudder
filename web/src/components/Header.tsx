@@ -37,7 +37,12 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
         <header className={`raterudder-header ${loggedIn ? 'logged-in' : 'logged-out'}`}>
             <div className="content-container header-inner">
                 <div className="header-left">
-                    <Link to="/" className="brand-logo" onClick={() => setIsMenuOpen(false)}>
+                    <Link
+                        to="/"
+                        className="brand-logo"
+                        onClick={() => setIsMenuOpen(false)}
+                        {...getRoutePreloadProps('/')}
+                    >
                         <img src="/logo.svg" alt="RateRudder Logo" className="header-logo-img" />
                         RateRudder
                     </Link>
@@ -155,12 +160,12 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     <div className="header-right">
                         {loggedIn ? (
                             <>
-                                {showNotifications && (
+                                {showNotifications && onOpenNotifications && (
                                     <button
                                         type="button"
                                         className="notification-bell-btn"
                                         onClick={() => {
-                                            onOpenNotifications?.();
+                                            onOpenNotifications();
                                             setIsMenuOpen(false);
                                         }}
                                         aria-label="Notification settings"
