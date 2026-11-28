@@ -2,6 +2,7 @@ package types
 
 import (
 	"math"
+	"sync"
 	"time"
 )
 
@@ -629,6 +630,25 @@ func (a Action) CompactForStorage() Action {
 	return a
 }
 
+var locationCache sync.Map // map[string]*time.Location
+
+// LoadLocation resolves tz to a *time.Location, caching valid locations
+// process-wide so repeated storage reads do not re-parse tzdata on every record.
+func LoadLocation(tz string) *time.Location {
+	if tz == "" {
+		return nil
+	}
+	if cached, ok := locationCache.Load(tz); ok {
+		return cached.(*time.Location)
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil
+	}
+	actual, _ := locationCache.LoadOrStore(tz, loc)
+	return actual.(*time.Location)
+}
+
 func inLoc(t time.Time, loc *time.Location) time.Time {
 	if t.IsZero() || loc == nil {
 		return t
@@ -641,9 +661,7 @@ func inLoc(t time.Time, loc *time.Location) time.Time {
 func (a *Action) ExpandFromStorage() {
 	var loc *time.Location
 	if a.Location != "" {
-		if l, err := time.LoadLocation(a.Location); err == nil {
-			loc = l
-		}
+		loc = LoadLocation(a.Location)
 		a.Location = ""
 	}
 	a.SystemTimestamp = inLoc(a.SystemTimestamp, loc)

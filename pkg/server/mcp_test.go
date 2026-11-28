@@ -924,6 +924,58 @@ func TestHandleMCP(t *testing.T) {
 			assert.Equal(t, 25.0, respSavings.Result.StructuredContent.Daily[6].SolarGeneratedKWH)
 			assert.Equal(t, 8.0, respSavings.Result.StructuredContent.Daily[6].BatteryDischargedKWH)
 		}
+
+		// 3. Failed action history read returns isError tool result instead of $0.00 savings
+		_, errHandler, errToken, errStore := setupMCPTestServer(t)
+		errStore.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
+			Location:      &types.SiteLocation{TimeZone: "America/Chicago"},
+			MinBatterySOC: 10,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		errStore.On("GetLatestAction", mock.Anything, "site-1").Return((*types.Action)(nil), nil).Maybe()
+		errStore.On("GetPriceHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.Price{
+			{
+				TSStart:       time.Date(2026, 6, 15, 10, 0, 0, 0, loc),
+				TSEnd:         time.Date(2026, 6, 15, 11, 0, 0, 0, loc),
+				DollarsPerKWH: 0.15,
+			},
+		}, nil)
+		errStore.On("GetHistorySummaries", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		errStore.On("GetEnergyHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   time.Date(2026, 6, 15, 0, 0, 0, 0, loc),
+				TimeLocation: "America/Chicago",
+				Hourly: []types.EnergyStats{
+					{
+						TSHourStart:   time.Date(2026, 6, 15, 10, 0, 0, 0, loc),
+						SolarKWH:      12.0,
+						HomeKWH:       8.0,
+						GridImportKWH: 1.0,
+					},
+				},
+			},
+		}, nil)
+		errStore.On("GetActionHistory", mock.Anything, "site-1", mock.Anything, mock.Anything).Return([]types.Action(nil), errors.New("firestore stream unavailable")).Once()
+
+		reqErrSavings := newReq(errToken, `{
+			"jsonrpc": "2.0",
+			"id": 11,
+			"method": "tools/call",
+			"params": {
+				"name": "get_recent_savings"
+			}
+		}`, nil)
+		wErrSavings := httptest.NewRecorder()
+		errHandler.ServeHTTP(wErrSavings, reqErrSavings)
+		require.Equal(t, http.StatusOK, wErrSavings.Code)
+
+		var respErrSavings struct {
+			Result toolResult `json:"result"`
+		}
+		require.NoError(t, json.NewDecoder(wErrSavings.Body).Decode(&respErrSavings))
+		assert.True(t, respErrSavings.Result.IsError, "failed GetActionHistory must return isError instead of $0.00")
+		if assert.NotEmpty(t, respErrSavings.Result.Content) {
+			assert.Contains(t, respErrSavings.Result.Content[0].Text, "failed to calculate recent savings")
+		}
 	})
 
 	t.Run("ToolsCall_DailyHistory", func(t *testing.T) {

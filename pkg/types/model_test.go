@@ -487,3 +487,41 @@ func TestActionStorageCompaction(t *testing.T) {
 		assert.Less(t, len(data), maxRollupBytes, "12-hour SiteActionRollup JSON size (%d bytes) must stay under 720 KB (%d bytes)", len(data), maxRollupBytes)
 	})
 }
+
+func TestLoadLocation(t *testing.T) {
+	t.Run("CachesValidLocationPointer", func(t *testing.T) {
+		loc1 := LoadLocation("America/Chicago")
+		require.NotNil(t, loc1)
+		loc2 := LoadLocation("America/Chicago")
+		assert.Same(t, loc1, loc2)
+	})
+
+	t.Run("EmptyAndInvalidReturnNil", func(t *testing.T) {
+		assert.Nil(t, LoadLocation(""))
+		assert.Nil(t, LoadLocation("Invalid/Not_A_Timezone"))
+	})
+
+	t.Run("ExpandFromStorageReusesCachedLocation", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		ts := time.Date(2026, 6, 15, 10, 0, 0, 0, loc)
+
+		compacted := (Action{
+			Timestamp:       ts.UTC(),
+			SystemTimestamp: ts,
+			SystemStatus: SystemStatus{
+				Timestamp:    ts,
+				TimeLocation: loc.String(),
+			},
+		}).CompactForStorage()
+
+		a1 := compacted
+		a2 := compacted
+		a1.ExpandFromStorage()
+		a2.ExpandFromStorage()
+
+		assert.Empty(t, a1.Location)
+		assert.Equal(t, "America/Chicago", a1.SystemTimestamp.Location().String())
+		assert.Same(t, a1.SystemTimestamp.Location(), a2.SystemTimestamp.Location())
+	})
+}

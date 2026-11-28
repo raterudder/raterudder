@@ -48,6 +48,20 @@ func (m *historyMockStorage) GetActionHistory(ctx context.Context, siteID string
 	return result, nil
 }
 
+func (m *historyMockStorage) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var latest *types.Action
+	for i := range m.actions {
+		if latest == nil || m.actions[i].Timestamp.After(latest.Timestamp) {
+			a := m.actions[i]
+			latest = &a
+		}
+	}
+	return latest, nil
+}
+
 func (m *historyMockStorage) GetPriceHistory(ctx context.Context, provider string, start, end time.Time) ([]types.Price, error) {
 	m.lastStart = start
 	m.lastEnd = end
@@ -1231,6 +1245,43 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			assert.InDelta(t, 4.00, resp.SavingsPeriods[1].TotalSavingsDollars, 0.001)
 		}
 		assert.InDelta(t, 2.00, resp.Savings.TotalSavingsDollars, 0.001)
+	})
+
+	t.Run("Single Site ActionHistory Failure Returns 500 Without Cache-Control", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		pastStart := now.AddDate(0, 0, -2)
+		pastEnd := pastStart.Add(24 * time.Hour)
+
+		mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastStart, TSEnd: pastStart.Add(time.Hour), DollarsPerKWH: 0.15},
+		}, nil)
+		mockStore.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{TSDayStart: pastStart, Hourly: []types.EnergyStats{{TSHourStart: pastStart, HomeKWH: 5, GridImportKWH: 5}}},
+		}, nil)
+		mockStore.On("GetActionHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Action(nil), fmt.Errorf("action history stream failed"))
+
+		s := &Server{
+			storage:    mockStore,
+			utilities:  utility.NewMap(mockStore),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		q := make(url.Values)
+		q.Set("siteID", "site1")
+		q.Set("start", pastStart.Format(time.RFC3339))
+		q.Set("end", pastEnd.Format(time.RFC3339))
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "site1"))
+		rr := httptest.NewRecorder()
+
+		s.handleHistoryActionsAndSavings(rr, req)
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Empty(t, rr.Header().Get("Cache-Control"))
+		assert.Contains(t, rr.Body.String(), "failed to get savings")
 	})
 }
 

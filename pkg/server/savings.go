@@ -650,11 +650,11 @@ func (s *Server) getSiteSavingsWithSettings(
 	actions, err := s.storage.GetActionHistory(ctx, siteID, lookbackStart, actionQueryEnd)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get action history for new savings", slog.String("siteID", siteID), slog.Any("error", err))
-	} else {
-		sort.Slice(actions, func(i, j int) bool {
-			return actions[i].Timestamp.Before(actions[j].Timestamp)
-		})
+		return nil, nil, fmt.Errorf("failed to get action history: %w", err)
 	}
+	sort.Slice(actions, func(i, j int) bool {
+		return actions[i].Timestamp.Before(actions[j].Timestamp)
+	})
 
 	var filteredActions []types.Action
 	var latestActionWithPlan types.Action
@@ -668,6 +668,22 @@ func (s *Server) getSiteSavingsWithSettings(
 		}
 		if actions[i].SystemStatus.BatteryCapacityKWH > 0 {
 			capacityKWH = actions[i].SystemStatus.BatteryCapacityKWH
+		}
+	}
+
+	if len(actions) == 0 && len(energyStats) > 0 {
+		log.Ctx(ctx).DebugContext(ctx, "no actions in savings window, falling back to latest action for battery capacity",
+			slog.String("siteID", siteID),
+			slog.Time("lookbackStart", lookbackStart),
+			slog.Time("actionQueryEnd", actionQueryEnd),
+		)
+		latestAction, err := s.storage.GetLatestAction(ctx, siteID)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action for savings", slog.String("siteID", siteID), slog.Any("error", err))
+			return nil, nil, fmt.Errorf("failed to get latest action: %w", err)
+		}
+		if latestAction != nil && latestAction.SystemStatus.BatteryCapacityKWH > 0 {
+			capacityKWH = latestAction.SystemStatus.BatteryCapacityKWH
 		}
 	}
 

@@ -22,11 +22,14 @@ import (
 
 type mockSavingsStorage struct {
 	*mockStorage
-	settings  types.Settings
-	prices    []types.Price
-	stats     []types.EnergyStats
-	actions   []types.Action
-	summaries []types.HistorySummary
+	settings        types.Settings
+	prices          []types.Price
+	stats           []types.EnergyStats
+	actions         []types.Action
+	summaries       []types.HistorySummary
+	actionErr       error
+	latestAction    *types.Action
+	latestActionErr error
 }
 
 func (m *mockSavingsStorage) GetHistorySummaries(ctx context.Context, siteID string, start, end time.Time) ([]types.HistorySummary, error) {
@@ -70,6 +73,9 @@ func (m *mockSavingsStorage) GetEnergyHistory(ctx context.Context, siteID string
 }
 
 func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
+	if m.actionErr != nil {
+		return nil, m.actionErr
+	}
 	var result []types.Action
 	for _, a := range m.actions {
 		if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
@@ -77,6 +83,24 @@ func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string
 		}
 	}
 	return result, nil
+}
+
+func (m *mockSavingsStorage) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
+	if m.latestActionErr != nil {
+		return nil, m.latestActionErr
+	}
+	if m.latestAction != nil {
+		cp := *m.latestAction
+		return &cp, nil
+	}
+	var latest *types.Action
+	for i := range m.actions {
+		if latest == nil || m.actions[i].Timestamp.After(latest.Timestamp) {
+			a := m.actions[i]
+			latest = &a
+		}
+	}
+	return latest, nil
 }
 
 func TestHandleHistorySavings(t *testing.T) {
@@ -1194,6 +1218,107 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 1.00, savings.Credit, 1e-6)
 		assert.InDelta(t, 1.00, savings.SelfConsumptionCreditDollars, 1e-6)
 	})
+
+	t.Run("ActionHistory Error Returns 500 Without Cache-Control", func(t *testing.T) {
+		pastStart := start.AddDate(0, 0, -5)
+		pastEnd := pastStart.Add(24 * time.Hour)
+		mockStoreBase := &mockStorage{}
+		mockStore := &mockSavingsStorage{
+			mockStorage: mockStoreBase,
+			prices: []types.Price{
+				{TSStart: pastStart, TSEnd: pastStart.Add(time.Hour), DollarsPerKWH: 0.25},
+			},
+			stats: []types.EnergyStats{
+				{TSHourStart: pastStart, HomeKWH: 4.0, SolarKWH: 4.0, SolarToHomeKWH: 4.0},
+			},
+			actionErr: errors.New("firestore stream unavailable"),
+		}
+		mockStoreBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{MinBatterySOC: 20}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		s := &Server{
+			storage:    mockStore,
+			utilities:  utility.NewMap(mockStore),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return end },
+		}
+
+		req := httptest.NewRequest("GET", "/api/history/savings?start="+pastStart.Format(time.RFC3339)+"&end="+pastEnd.Format(time.RFC3339), nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Empty(t, rr.Header().Get("Cache-Control"))
+		assert.Contains(t, rr.Body.String(), "failed to calculate savings")
+	})
+
+	t.Run("Zero ActionHistory Falls Back To GetLatestAction For Capacity", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.actions = nil
+			m.latestAction = &types.Action{
+				Timestamp:    start.AddDate(0, 0, -20),
+				SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0},
+			}
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.05},
+				{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.30},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start,
+					MinBatterySOC:     20,
+					MaxBatterySOC:     70,
+					HomeKWH:           1,
+					GridImportKWH:     6,
+					BatteryChargedKWH: 5,
+				},
+				{
+					TSHourStart:      start.Add(time.Hour),
+					MinBatterySOC:    20,
+					MaxBatterySOC:    70,
+					HomeKWH:          4.5,
+					GridImportKWH:    0,
+					BatteryUsedKWH:   4.5,
+					BatteryToHomeKWH: 4.5,
+				},
+			}
+		})
+		assert.InDelta(t, 1.10, savings.RateRudderSavingsDollars, 0.001)
+		assert.InDelta(t, 1.10, savings.TotalSavingsDollars, 0.001)
+	})
+
+	t.Run("Zero ActionHistory Propagates GetLatestAction Error Without Cache-Control", func(t *testing.T) {
+		pastStart := start.AddDate(0, 0, -5)
+		pastEnd := pastStart.Add(24 * time.Hour)
+		mockStoreBase := &mockStorage{}
+		mockStore := &mockSavingsStorage{
+			mockStorage:     mockStoreBase,
+			actions:         nil,
+			latestActionErr: errors.New("latest action read failed"),
+			prices: []types.Price{
+				{TSStart: pastStart, TSEnd: pastStart.Add(time.Hour), DollarsPerKWH: 0.25},
+			},
+			stats: []types.EnergyStats{
+				{TSHourStart: pastStart, HomeKWH: 4.0, SolarKWH: 4.0, SolarToHomeKWH: 4.0},
+			},
+		}
+		mockStoreBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{MinBatterySOC: 20}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		s := &Server{
+			storage:    mockStore,
+			utilities:  utility.NewMap(mockStore),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return end },
+		}
+
+		req := httptest.NewRequest("GET", "/api/history/savings?start="+pastStart.Format(time.RFC3339)+"&end="+pastEnd.Format(time.RFC3339), nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Empty(t, rr.Header().Get("Cache-Control"))
+	})
 }
 
 func TestHandleHistorySavingsAll(t *testing.T) {
@@ -1375,6 +1500,48 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 		assert.Equal(t, 0.0, savings.HomeUsed)
 		mockStore.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
 		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("Site2 ActionHistory Failure Propagates 500 Without Cache-Control", func(t *testing.T) {
+		errStore := &mockStorage{}
+		pastStart := start.AddDate(0, 0, -4)
+		pastEnd := pastStart.Add(24 * time.Hour)
+		errSrv := &Server{
+			storage:    errStore,
+			utilities:  utility.NewMap(errStore),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return start.Add(12 * time.Hour) },
+		}
+
+		errStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		errStore.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastStart, TSEnd: pastStart.Add(time.Hour), DollarsPerKWH: 0.10},
+		}, nil)
+		errStore.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		errStore.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{TSDayStart: pastStart, Hourly: []types.EnergyStats{{TSHourStart: pastStart, HomeKWH: 10, GridImportKWH: 10}}},
+		}, nil)
+		errStore.On("GetActionHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Action{
+			{Timestamp: pastStart, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0}},
+		}, nil)
+
+		errStore.On("GetSettings", mock.Anything, "site2").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		errStore.On("GetPriceHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastStart, TSEnd: pastStart.Add(time.Hour), DollarsPerKWH: 0.20},
+		}, nil)
+		errStore.On("GetHistorySummaries", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		errStore.On("GetEnergyHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		errStore.On("GetActionHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Action(nil), errors.New("firestore stream broken"))
+
+		errReq := httptest.NewRequest("GET", "/api/history/savings?siteID=ALL&start="+pastStart.Format(time.RFC3339)+"&end="+pastEnd.Format(time.RFC3339), nil)
+		errCtx := context.WithValue(errReq.Context(), siteIDContextKey, SiteIDAll)
+		errCtx = context.WithValue(errCtx, allUserSitesContextKey, []types.UserSite{{ID: "site1"}, {ID: "site2"}})
+		errReq = errReq.WithContext(errCtx)
+
+		errRR := httptest.NewRecorder()
+		errSrv.handleHistorySavings(errRR, errReq)
+		assert.Equal(t, http.StatusInternalServerError, errRR.Code)
+		assert.Empty(t, errRR.Header().Get("Cache-Control"))
 	})
 }
 

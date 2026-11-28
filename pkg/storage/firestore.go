@@ -30,10 +30,14 @@ import (
 )
 
 const (
-	defaultFirestoreTimeout = 15 * time.Second
-	defaultAttemptTimeout   = 8 * time.Second
-	defaultPingTimeout      = 5 * time.Second
-	defaultGRPCPoolSize     = 2
+	defaultFirestoreTimeout     = 15 * time.Second
+	defaultActionHistoryTimeout = 30 * time.Second
+	defaultAttemptTimeout       = 8 * time.Second
+	defaultPingTimeout          = 5 * time.Second
+	defaultGRPCPoolSize         = 2
+
+	maxStreamConsecutiveFailures = 3
+	maxStreamTotalAttempts       = 5
 )
 
 // withDefaultTimeout ensures the context has a deadline so Firestore's GAPIC client
@@ -45,6 +49,13 @@ func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFun
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, defaultFirestoreTimeout)
+}
+
+func withActionHistoryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultActionHistoryTimeout)
 }
 
 // FirestoreProvider implements the Provider interface using Google Cloud Firestore.
@@ -504,7 +515,7 @@ func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, act
 
 // GetActionHistory retrieves action records within the specified time range from 12-hour rollup buckets.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
-	ctx, cancel := withDefaultTimeout(ctx)
+	ctx, cancel := withActionHistoryTimeout(ctx)
 	defer cancel()
 
 	if !start.Before(end) {
@@ -516,49 +527,109 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 	}
 
 	_, queryStart := actionBucket(start)
-
-	iter := coll.
-		Where("earliestDate", ">=", queryStart).
-		Where("earliestDate", "<", end.UTC()).
-		OrderBy("earliestDate", firestore.Asc).
-		Documents(ctx)
-	defer iter.Stop()
-
 	var actions []types.Action
-	for {
-		doc, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error iterating actions: %w", err)
+	var lastDoc *firestore.DocumentSnapshot
+
+	backoff := 50 * time.Millisecond
+	consecutiveFailures := 0
+
+	for totalAttempt := 0; totalAttempt < maxStreamTotalAttempts; totalAttempt++ {
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
+		q := coll.
+			Where("earliestDate", ">=", queryStart).
+			Where("earliestDate", "<", end.UTC()).
+			OrderBy("earliestDate", firestore.Asc)
+		if lastDoc != nil {
+			q = q.StartAfter(lastDoc)
 		}
 
-		val, err := doc.DataAt("json")
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "action doc missing json", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			return nil, fmt.Errorf("action document %s missing 'json' field: %w", doc.Ref.ID, err)
+		iter := q.Documents(attemptCtx)
+		progressed := false
+		var iterErr error
+
+		for {
+			doc, err := iter.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				iterErr = err
+				break
+			}
+
+			val, err := doc.DataAt("json")
+			if err != nil {
+				iter.Stop()
+				attemptCancel()
+				log.Ctx(ctx).WarnContext(ctx, "action doc missing json", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+				return nil, fmt.Errorf("action document %s missing 'json' field: %w", doc.Ref.ID, err)
+			}
+
+			jsonStr, ok := val.(string)
+			if !ok {
+				iter.Stop()
+				attemptCancel()
+				log.Ctx(ctx).WarnContext(ctx, "action doc json not string", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID))
+				return nil, fmt.Errorf("action document %s 'json' field is not string", doc.Ref.ID)
+			}
+
+			var rollup types.SiteActionBucket
+			if err := json.Unmarshal([]byte(jsonStr), &rollup); err != nil {
+				iter.Stop()
+				attemptCancel()
+				log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action rollup", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+				return nil, fmt.Errorf("failed to unmarshal action rollup (id=%s): %w", doc.Ref.ID, err)
+			}
+			for _, a := range rollup.Actions {
+				if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
+					a.ExpandFromStorage()
+					actions = append(actions, a)
+				}
+			}
+
+			lastDoc = doc
+			progressed = true
 		}
 
-		jsonStr, ok := val.(string)
-		if !ok {
-			log.Ctx(ctx).WarnContext(ctx, "action doc json not string", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID))
-			return nil, fmt.Errorf("action document %s 'json' field is not string", doc.Ref.ID)
+		attemptTimedOut := isAttemptTimeout(ctx, attemptCtx, iterErr)
+		iter.Stop()
+		attemptCancel()
+
+		if iterErr == nil {
+			return actions, nil
 		}
 
-		var rollup types.SiteActionBucket
-		if err := json.Unmarshal([]byte(jsonStr), &rollup); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action rollup", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			return nil, fmt.Errorf("failed to unmarshal action rollup (id=%s): %w", doc.Ref.ID, err)
+		if progressed {
+			consecutiveFailures = 0
+		} else {
+			consecutiveFailures++
 		}
-		for _, a := range rollup.Actions {
-			if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
-				a.ExpandFromStorage()
-				actions = append(actions, a)
+
+		retryable := (isRetryableFirestoreErr(iterErr) || attemptTimedOut) && ctx.Err() == nil
+		if retryable && consecutiveFailures < maxStreamConsecutiveFailures && totalAttempt < maxStreamTotalAttempts-1 {
+			var lastBucketID string
+			if lastDoc != nil && lastDoc.Ref != nil {
+				lastBucketID = lastDoc.Ref.ID
+			}
+			log.Ctx(ctx).WarnContext(ctx, "firestore action history stream failed with retryable error, resuming",
+				slog.String("siteID", siteID),
+				slog.String("lastBucket", lastBucketID),
+				slog.Int("attempt", totalAttempt+1),
+				slog.Any("error", iterErr),
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("error iterating actions: %w", ctx.Err())
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
 			}
 		}
+
+		return nil, fmt.Errorf("error iterating actions: %w", iterErr)
 	}
-	return actions, nil
+
+	return nil, fmt.Errorf("failed to read action history after retries")
 }
 
 // GetLatestAction retrieves the most recent action record. Will return nil if no actions found.
@@ -571,18 +642,43 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 		return nil, err
 	}
 
-	iter := coll.
-		OrderBy("latestDate", firestore.Desc).
-		Limit(1).
-		Documents(ctx)
-	defer iter.Stop()
+	const maxAttempts = 3
+	backoff := 50 * time.Millisecond
 
-	doc, err := iter.Next()
-	if errors.Is(err, iterator.Done) {
-		return nil, nil // No actions found
-	}
-	if err != nil {
-		return nil, fmt.Errorf("error getting latest action: %w", err)
+	var doc *firestore.DocumentSnapshot
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
+		iter := coll.
+			OrderBy("latestDate", firestore.Desc).
+			Limit(1).
+			Documents(attemptCtx)
+		var iterErr error
+		doc, iterErr = iter.Next()
+		attemptTimedOut := isAttemptTimeout(ctx, attemptCtx, iterErr)
+		iter.Stop()
+		attemptCancel()
+
+		if errors.Is(iterErr, iterator.Done) {
+			return nil, nil // No actions found
+		}
+		if iterErr == nil {
+			break
+		}
+		if (isRetryableFirestoreErr(iterErr) || attemptTimedOut) && ctx.Err() == nil && attempt < maxAttempts-1 {
+			log.Ctx(ctx).WarnContext(ctx, "firestore latest action read failed with retryable error, retrying",
+				slog.String("siteID", siteID),
+				slog.Int("attempt", attempt+1),
+				slog.Any("error", iterErr),
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("error getting latest action: %w", ctx.Err())
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
+			}
+		}
+		return nil, fmt.Errorf("error getting latest action: %w", iterErr)
 	}
 
 	val, err := doc.DataAt("json")
