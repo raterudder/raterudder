@@ -628,7 +628,6 @@ func apsUtilityInfo() types.UtilityProviderInfo {
 		Type:        types.UtilityOptionTypeSelect,
 		Description: "Select your Rate Rider RCP 10-year locked solar export cohort or grandfathered EPR-6 Net Metering.",
 		Choices: []types.UtilityOptionChoice{
-			{Value: "rcp", Name: "Rate Rider RCP Default ($0.06171 through Aug 2026, $0.05554/kWh from Sep 2026)"},
 			{Value: "rcp_2026", Name: "Rate Rider RCP Tranche 2026: Sep 2026 - Aug 2027 ($0.05554/kWh)"},
 			{Value: "rcp_2025", Name: "Rate Rider RCP Tranche 2025: Sep 2025 - Aug 2026 ($0.06171/kWh)"},
 			{Value: "rcp_2024", Name: "Rate Rider RCP Tranche 2024: Sep 2024 - Aug 2025 ($0.06857/kWh)"},
@@ -641,7 +640,7 @@ func apsUtilityInfo() types.UtilityProviderInfo {
 			{Value: "rcp_2017", Name: "Rate Rider RCP Tranche 2017: Sep 2017 - Aug 2018 ($0.12900/kWh)"},
 			{Value: "net", Name: "Net Energy Metering (Legacy EPR-6 1:1 Retail Credits)"},
 		},
-		Default: "rcp",
+		Default: "rcp_2026",
 	}
 
 	rateClassOption := types.UtilityRateOption{

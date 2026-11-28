@@ -1391,6 +1391,121 @@ describe('Dashboard', () => {
         expect(localStorage.getItem('sbp_application_year_warning_dismissed_site1')).toBe('true');
     });
 
+    it('shows APS RCP cohort warning banner when netMeteringScheme is legacy rcp or unset', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const { unmount } = renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'aps',
+                    utilityRate: 'aps_tou_e',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'rcp',
+                    },
+                    countryCode: 'US',
+                    postalCode: '85001',
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            const banner = screen.getByTestId('aps-rcp-cohort-warning-banner');
+            expect(banner).toBeInTheDocument();
+            expect(banner).toHaveClass('warning-banner');
+            expect(banner).toHaveTextContent(/APS Rate Rider RCP export credits vary significantly/i);
+            const link = screen.getByRole('link', { name: /Select your RCP cohort in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?tariff=1');
+        });
+        unmount();
+
+        renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'aps',
+                    utilityRate: 'aps_tou_e',
+                    utilityRateOptions: {},
+                    countryCode: 'US',
+                    postalCode: '85001',
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('aps-rcp-cohort-warning-banner')).toBeInTheDocument();
+        });
+    });
+
+    it('does not show APS RCP cohort warning banner when a specific RCP year cohort or net metering is selected', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+
+        const { unmount } = renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'aps',
+                    utilityRate: 'aps_tou_e',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'rcp_2026',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('aps-rcp-cohort-warning-banner')).not.toBeInTheDocument();
+        unmount();
+
+        renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'aps',
+                    utilityRate: 'aps_tou_e',
+                    utilityRateOptions: {
+                        netMeteringScheme: 'net',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('aps-rcp-cohort-warning-banner')).not.toBeInTheDocument();
+    });
+
+    it('can dismiss the APS RCP cohort warning banner and persists dismissal per siteID', async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'aps',
+            utilityRate: 'aps_tou_e',
+            utilityRateOptions: {
+                netMeteringScheme: 'rcp',
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('aps-rcp-cohort-warning-banner')).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss APS RCP cohort warning/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('aps-rcp-cohort-warning-banner')).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('aps_rcp_cohort_warning_dismissed_site1')).toBe('true');
+    });
+
     it('shows warning when ESS is connected and automation is paused', async () => {
         mockActionsAndSavings([]);
         const settings = {

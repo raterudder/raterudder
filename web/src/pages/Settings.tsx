@@ -120,12 +120,25 @@ interface UtilityFormProps {
     onUtilityChange?: (provider: string, rate: string, options: Record<string, any>) => void;
 }
 
+const isValidUtilityOptionValue = (
+    opt: UtilityRateOption,
+    val: any
+): boolean => {
+    if (val === undefined || val === null || val === '') {
+        return false;
+    }
+    if (opt.type === 'select' && opt.choices && opt.choices.length > 0) {
+        return opt.choices.some(c => c.value === val);
+    }
+    return true;
+};
+
 const getEffectiveOptionValue = (
     opt: UtilityRateOption,
     rateOptions: Record<string, any> | undefined
 ) => {
     const val = rateOptions?.[opt.field];
-    if (val !== undefined && val !== null && val !== '') {
+    if (isValidUtilityOptionValue(opt, val)) {
         return val;
     }
     if (opt.type === 'switch') {
@@ -161,7 +174,7 @@ const applyVisibleUtilityOptionDefaults = (
         if (!isUtilityOptionVisible(opt, rateOptions, finalOpts)) {
             return;
         }
-        if (finalOpts[opt.field] === undefined || finalOpts[opt.field] === null || finalOpts[opt.field] === "") {
+        if (!isValidUtilityOptionValue(opt, finalOpts[opt.field])) {
             if (opt.default !== undefined) {
                 finalOpts[opt.field] = opt.default;
             }
@@ -342,7 +355,7 @@ const UtilityForm = ({
                                     <>
                                         <Field.Label htmlFor={`opt-${opt.field}`}>{opt.name}</Field.Label>
                                         <Select.Root
-                                            value={settings.utilityRateOptions?.[opt.field] || opt.default}
+                                            value={getEffectiveOptionValue(opt, settings.utilityRateOptions)}
                                             onValueChange={(value) => {
                                                 const newOpts = {
                                                     ...settings.utilityRateOptions,
@@ -354,7 +367,7 @@ const UtilityForm = ({
                                         >
                                             <Select.Trigger className="select-trigger" id={`opt-${opt.field}`}>
                                                 <Select.Value>
-                                                    {opt.choices?.find(c => c.value === (settings.utilityRateOptions?.[opt.field] || opt.default))?.name || (settings.utilityRateOptions?.[opt.field] || opt.default)}
+                                                    {opt.choices?.find(c => c.value === getEffectiveOptionValue(opt, settings.utilityRateOptions))?.name || getEffectiveOptionValue(opt, settings.utilityRateOptions)}
                                                 </Select.Value>
                                                 <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

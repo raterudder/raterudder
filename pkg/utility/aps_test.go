@@ -371,15 +371,17 @@ func TestAPSExportRates(t *testing.T) {
 		info := apsUtilityInfo()
 		require.NotEmpty(t, info.Rates)
 		var choiceValues []string
+		var defaultValue any
 		for _, opt := range info.Rates[1].Options {
 			if opt.Field == "netMeteringScheme" {
+				defaultValue = opt.Default
 				for _, c := range opt.Choices {
 					choiceValues = append(choiceValues, c.Value)
 				}
 			}
 		}
+		assert.Equal(t, "rcp_2026", defaultValue)
 		assert.Equal(t, []string{
-			"rcp",
 			"rcp_2026",
 			"rcp_2025",
 			"rcp_2024",
