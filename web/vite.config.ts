@@ -69,6 +69,7 @@ function seoSubpagesPlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  tsconfig: process.env.VITEST ? './tsconfig.test.json' : './tsconfig.app.json',
   plugins: [
     react(),
     ...(process.env.ANALYZE === 'true'
