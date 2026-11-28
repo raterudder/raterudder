@@ -105,6 +105,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
     }
 
     const isBatteryAtReserve = action.reason === ActionReason.BatteryAtReserve;
+    const isEVChargingStandby = action.reason === ActionReason.EVChargingStandby;
     const isDirectExportReason = action.reason === ActionReason.DirectExport;
     const isDirectBatteryExport = isDirectExportReason && action.batteryMode === BatteryMode.Export;
     const isDirectSolarExportStandby = isDirectExportReason && action.batteryMode === BatteryMode.Standby;
@@ -119,7 +120,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
     const isSolarFull = mode === BatteryMode.Load && loadSubType === 'solarFull';
 
     let state: 'charging' | 'discharging' | 'standby' = 'standby';
-    if (isBatteryAtReserve || isDirectSolarExportStandby) {
+    if (isBatteryAtReserve || isEVChargingStandby || isDirectSolarExportStandby) {
         state = 'standby';
     } else if (isSolarCharging) {
         state = 'charging';
@@ -173,6 +174,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
     let statusSubvalueText = timeRemainingText;
     if (isAbnormalUsage) {
         statusSubvalueText = `Recent usage well above normal (${action.recentHomeUsageKWH!.toFixed(1)} vs ${action.q3HomeUsageKWH!.toFixed(1)} kWh)`;
+    } else if (isEVChargingStandby) {
+        statusSubvalueText = 'Charging EV from grid to preserve battery';
     } else if (defValid && deficitMs <= 60 * 60 * 1000) {
         statusSubvalueText = timeRemainingText;
     } else if (planSubvalue) {
@@ -185,6 +188,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? 'Direct Solar Export'
         : isDirectSolarExportStandby
         ? 'Peak Defense'
+        : isEVChargingStandby
+        ? 'EV Charging'
         : isBatteryAtReserve
         ? 'Battery At Reserve'
         : isSolarCharging
@@ -199,6 +204,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? 'Exporting Solar • Home on Battery'
         : isDirectSolarExportStandby
         ? 'Holding Reserve • Home on Solar'
+        : isEVChargingStandby
+        ? 'Holding Battery for EV'
         : isBatteryAtReserve
         ? 'Holding Reserve'
         : isSolarCharging
@@ -210,7 +217,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         : getBatteryModeLabel(mode);
 
     return (
-        <div className={`current-status-card ${state}${isSolarCharging ? ' solar-charging' : ''}`}>
+        <div className={`current-status-card ${state}${isSolarCharging ? ' solar-charging' : ''}${isEVChargingStandby ? ' ev-charging' : ''}`}>
             <div className="status-main">
                 <div className="status-icon">
                     {isDirectBatteryExport ? (
@@ -219,6 +226,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
                         <span className="icon" aria-hidden="true">☀️</span>
                     ) : isDirectSolarExportStandby ? (
                         <span className="icon" aria-hidden="true">🛡️</span>
+                    ) : isEVChargingStandby ? (
+                        <span className="icon" aria-hidden="true">🚗</span>
                     ) : isBatteryAtReserve ? (
                         <span className="icon" aria-hidden="true">🔋</span>
                     ) : (

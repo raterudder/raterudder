@@ -189,8 +189,38 @@ jobs:
 
       - name: Build CLI binaries
         run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/bin"
-          go build -tags timetzdata -o "${RUNNER_TEMP}/bin/" ./cmd/inspectsite ./cmd/replayplan ./cmd/fetchhistory
-          for bin in inspectsite replayplan fetchhistory; do
+          go build -tags timetzdata -o "${RUNNER_TEMP}/bin/" ./cmd/...
+          checked=0
+          for dir in cmd/*/; do
+            [ -d "${dir}" ] || continue
+            bin="$(basename "${dir}")"
             test -x "${RUNNER_TEMP}/bin/${bin}"
+            checked=$((checked + 1))
           done
+          test "${checked}" -gt 0
+
+  smoke-container:
+    name: Build & Smoke Test Container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          provenance: false
+          tags: raterudder:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run live container smoke checks
+        run: ./scripts/smoke-container.sh raterudder:smoke

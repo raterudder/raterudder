@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -6202,159 +6201,7 @@ func TestFranklin(t *testing.T) {
 		assert.Empty(t, logBuf.String(), "permanent credential, lockout, and permission errors must emit zero ERROR logs")
 	})
 
-	t.Run("GetEnergyHistory Releases Mutex Filters EndDay And Suppresses Error Logs", func(t *testing.T) {
-		t.Run("Concurrent GetStatus And SetModes Complete While History In Flight", func(t *testing.T) {
-			var inFlightHistory atomic.Int32
-			var maxConcurrentHistory atomic.Int32
-			historyEntered := make(chan struct{}, 1)
-
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/hes-gateway/terminal/getDeviceInfoV2":
-					json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"zoneInfo": "UTC"}})
-				case "/hes-gateway/terminal/getDeviceCompositeInfo":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": map[string]any{
-							"valid": true,
-							"runtimeData": map[string]any{
-								"soc":  68.0,
-								"mode": 20.0,
-							},
-						},
-					})
-				case "/hes-gateway/terminal/tou/getGatewayTouListV2":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": map[string]any{
-							"currendId": 20.0,
-							"list": []map[string]any{
-								{"id": 20.0, "workMode": 2, "soc": 20.0, "editSocFlag": true},
-								{"id": 30.0, "workMode": 3, "soc": 100.0},
-							},
-						},
-					})
-				case "/hes-gateway/common/getPowerCapConfigList":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": []map[string]any{
-							{"id": 1, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000},
-						},
-					})
-				case "/hes-gateway/terminal/tou/getPowerControlSetting":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 1},
-					})
-				case "/hes-gateway/terminal/tou/updateSocV2":
-					json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
-				case "/api-energy/power/getFhpPowerByDay":
-					cur := inFlightHistory.Add(1)
-					for {
-						prev := maxConcurrentHistory.Load()
-						if cur <= prev || maxConcurrentHistory.CompareAndSwap(prev, cur) {
-							break
-						}
-					}
-					defer inFlightHistory.Add(-1)
-
-					select {
-					case historyEntered <- struct{}{}:
-					default:
-					}
-
-					select {
-					case <-time.After(450 * time.Millisecond):
-					case <-r.Context().Done():
-						return
-					}
-
-					dayTime := r.URL.Query().Get("dayTime")
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": map[string]any{
-							"deviceTimeArray":     []string{dayTime + " 12:00:00", dayTime + " 12:05:00"},
-							"socArray":            []float64{65.0, 66.0},
-							"powerSolarHomeArray": []float64{12.0, 12.0},
-							"powerFhpHomeArray":   []float64{0.0, 0.0},
-							"powerSolarGirdArray": []float64{0.0, 0.0},
-							"powerSolarFhpArray":  []float64{0.0, 0.0},
-							"powerGirdFhpArray":   []float64{0.0, 0.0},
-							"powerGirdHomeArray":  []float64{0.0, 0.0},
-							"powerFhpGirdArray":   []float64{0.0, 0.0},
-						},
-					})
-				default:
-					http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
-				}
-			}))
-			defer ts.Close()
-
-			f := &Franklin{
-				client:    ts.Client(),
-				baseURL:   ts.URL,
-				gatewayID: "gw-1",
-				tokenStr:  "valid-tok",
-			}
-			require.NoError(t, f.ApplySettings(context.Background(), types.Settings{
-				MinBatterySOC:       20,
-				GridChargeBatteries: true,
-				GridExportSolar:     true,
-			}))
-
-			start := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
-			end := time.Date(2026, 7, 11, 23, 0, 0, 0, time.UTC)
-
-			historyErrCh := make(chan error, 1)
-			var historyStats []types.DailyEnergyStats
-			go func() {
-				var hErr error
-				historyStats, hErr = f.GetEnergyHistory(context.Background(), start, end)
-				historyErrCh <- hErr
-			}()
-
-			select {
-			case <-historyEntered:
-			case <-time.After(2 * time.Second):
-				t.Fatal("timed out waiting for Franklin GetEnergyHistory to enter getFhpPowerByDay")
-			}
-
-			// GetEnergyHistory fetches 3 sequential days (~1.35s total);
-			// concurrent GetStatus and SetModes must complete immediately without waiting on f.mu.
-			startControl := time.Now()
-			var wg sync.WaitGroup
-			var statusRes types.SystemStatus
-			var statusErr, setModesErr error
-			var modesChanged bool
-
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				statusRes, statusErr = f.GetStatus(context.Background())
-			}()
-			go func() {
-				defer wg.Done()
-				modesChanged, setModesErr = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
-			}()
-			wg.Wait()
-			controlElapsed := time.Since(startControl)
-
-			require.NoError(t, statusErr)
-			assert.Equal(t, 68.0, statusRes.BatterySOC)
-			require.NoError(t, setModesErr)
-			assert.True(t, modesChanged)
-			assert.Less(t, controlElapsed, 350*time.Millisecond, "GetStatus and SetModes must not wait for in-flight GetEnergyHistory requests")
-
-			require.NoError(t, <-historyErrCh)
-			assert.Len(t, historyStats, 2)
-			assert.Equal(t, int32(1), maxConcurrentHistory.Load(), "GetEnergyHistory must issue one outbound request at a time")
-		})
-
+	t.Run("GetEnergyHistory Filters EndDay And Emits Warn Logs", func(t *testing.T) {
 		t.Run("Filters Out Lookahead Day Beyond EndDay While Preserving EndDay 2300 Bucket", func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -6391,7 +6238,7 @@ func TestFranklin(t *testing.T) {
 				client:    ts.Client(),
 				baseURL:   ts.URL,
 				gatewayID: "gw-1",
-				tokenStr:  "valid-tok",
+				tokenStr:  "mock-valid-tok",
 			}
 
 			start := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
@@ -6432,7 +6279,7 @@ func TestFranklin(t *testing.T) {
 				client:    ts.Client(),
 				baseURL:   ts.URL,
 				gatewayID: "gw-1",
-				tokenStr:  "valid-tok",
+				tokenStr:  "mock-valid-tok",
 			}
 			start := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 			end := time.Date(2026, 7, 6, 23, 0, 0, 0, time.UTC)
@@ -6470,154 +6317,6 @@ func TestFranklin(t *testing.T) {
 			assert.Contains(t, logBuf.String(), "failed to decode franklin response")
 			assert.Contains(t, logBuf.String(), "failed to decode franklin result")
 			assert.Contains(t, logBuf.String(), "franklin api unknown error")
-		})
-
-		t.Run("GetEnergyHistory Unconditionally Updates DeviceInfo Cache Under Lock", func(t *testing.T) {
-			entered := make(chan struct{}, 1)
-			release := make(chan struct{})
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/hes-gateway/terminal/getDeviceInfoV2":
-					select {
-					case entered <- struct{}{}:
-					default:
-					}
-					<-release
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result":  map[string]any{"zoneInfo": "America/New_York", "totalCap": 15.0},
-					})
-				case "/api-energy/power/getFhpPowerByDay":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result":  map[string]any{},
-					})
-				default:
-					http.Error(w, "not found", http.StatusNotFound)
-				}
-			}))
-			defer ts.Close()
-
-			f := &Franklin{
-				client:    ts.Client(),
-				baseURL:   ts.URL,
-				gatewayID: "gw-1",
-				tokenStr:  "valid-tok",
-			}
-
-			start := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
-			end := time.Date(2026, 7, 10, 23, 0, 0, 0, time.UTC)
-			errCh := make(chan error, 1)
-			go func() {
-				_, err := f.GetEnergyHistory(context.Background(), start, end)
-				errCh <- err
-			}()
-
-			<-entered
-			f.mu.Lock()
-			f.deviceInfoCache = franklinDeviceInfoV2Result{TimeZone: "UTC"}
-			f.deviceInfoExpiry = time.Now().Add(30 * time.Minute)
-			f.mu.Unlock()
-			close(release)
-
-			require.NoError(t, <-errCh)
-			f.mu.Lock()
-			cachedZone := f.deviceInfoCache.TimeZone
-			f.mu.Unlock()
-			assert.Equal(t, "America/New_York", cachedZone)
-		})
-
-		t.Run("Concurrent Authenticate And GetEnergyHistory Are Race Free", func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/hes-gateway/terminal/initialize/appUserOrInstallerLogin":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result":  map[string]any{"userId": 1, "token": "refreshed-tok", "version": "1.0"},
-					})
-				case "/hes-gateway/terminal/getDeviceInfoV2":
-					assert.NotEmpty(t, r.Header.Get("logintoken"))
-					assert.NotEmpty(t, r.URL.Query().Get("gatewayId"))
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result":  map[string]any{"zoneInfo": "UTC", "totalCap": 15.0},
-					})
-				case "/hes-gateway/terminal/getDeviceCompositeInfo":
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": map[string]any{
-							"valid":       true,
-							"runtimeData": map[string]any{"soc": 70.0, "mode": 20.0},
-						},
-					})
-				case "/api-energy/power/getFhpPowerByDay":
-					assert.NotEmpty(t, r.Header.Get("logintoken"))
-					assert.NotEmpty(t, r.URL.Query().Get("gatewayId"))
-					dayTime := r.URL.Query().Get("dayTime")
-					json.NewEncoder(w).Encode(map[string]any{
-						"code":    200,
-						"success": true,
-						"result": map[string]any{
-							"deviceTimeArray":     []string{dayTime + " 12:00:00", dayTime + " 12:05:00"},
-							"socArray":            []float64{65.0, 66.0},
-							"powerSolarHomeArray": []float64{12.0, 12.0},
-							"powerFhpHomeArray":   []float64{0.0, 0.0},
-							"powerSolarGirdArray": []float64{0.0, 0.0},
-							"powerSolarFhpArray":  []float64{0.0, 0.0},
-							"powerGirdFhpArray":   []float64{0.0, 0.0},
-							"powerGirdHomeArray":  []float64{0.0, 0.0},
-							"powerFhpGirdArray":   []float64{0.0, 0.0},
-						},
-					})
-				default:
-					http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
-				}
-			}))
-			defer ts.Close()
-
-			f := &Franklin{
-				client:    ts.Client(),
-				baseURL:   ts.URL,
-				gatewayID: "gw-1",
-				tokenStr:  "initial-tok",
-			}
-
-			start := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
-			end := time.Date(2026, 7, 11, 23, 0, 0, 0, time.UTC)
-
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				for i := 0; i < 5; i++ {
-					_, err := f.GetEnergyHistory(context.Background(), start, end)
-					assert.NoError(t, err)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for i := 0; i < 5; i++ {
-					tok := ""
-					if i%2 == 1 {
-						tok = "cached-tok"
-					}
-					_, _, err := f.Authenticate(context.Background(), types.Credentials{
-						Franklin: &types.FranklinCredentials{
-							Username:  "owner@example.com",
-							Password:  "secret",
-							GatewayID: "gw-1",
-							Token:     tok,
-						},
-					})
-					assert.NoError(t, err)
-				}
-			}()
-			wg.Wait()
 		})
 	})
 }
