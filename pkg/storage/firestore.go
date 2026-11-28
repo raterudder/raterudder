@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"reflect"
 	"slices"
@@ -236,8 +237,9 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 	ctx, cancel := withDefaultTimeout(ctx)
 	defer cancel()
 
-	const maxRetries = 5
-	backoff := 200 * time.Millisecond
+	const maxRetries = 8
+	const maxBackoff = time.Second
+	backoff := 100 * time.Millisecond
 
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -278,11 +280,12 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 				slog.Int("attempt", attempt+1),
 				slog.Any("error", err),
 			)
+			sleep := backoff/2 + rand.N(backoff)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(backoff):
-				backoff *= 2
+			case <-time.After(sleep):
+				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 		}
@@ -1578,6 +1581,59 @@ func (f *FirestoreProvider) UpdateSite(ctx context.Context, siteID string, site 
 	}, firestore.MergeAll)
 	if err != nil {
 		return fmt.Errorf("failed to update site %s: %w", siteID, err)
+	}
+	return nil
+}
+
+// AddSitePermission atomically adds a permission entry to an existing site with optimistic concurrency.
+// It returns ErrSiteNotFound if the site document does not exist, and is a no-op if perm.UserID is already present.
+func (f *FirestoreProvider) AddSitePermission(ctx context.Context, siteID string, perm types.SitePermissions) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
+	if siteID == "" {
+		return errors.New("siteID cannot be empty")
+	}
+	if perm.UserID == "" {
+		return errors.New("permission userID cannot be empty")
+	}
+
+	docRef := f.client.Collection("sites").Doc(siteID)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrSiteNotFound, siteID)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return nil, fmt.Errorf("site %s missing json: %w", siteID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return nil, fmt.Errorf("site %s json not string", siteID)
+		}
+		var existing types.Site
+		if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal site %s: %w", siteID, err)
+		}
+
+		for _, p := range existing.Permissions {
+			if p.UserID == perm.UserID {
+				return nil, nil
+			}
+		}
+		existing.Permissions = append(existing.Permissions, perm)
+
+		siteJSON, err := json.Marshal(existing)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal site %s: %w", siteID, err)
+		}
+		return map[string]any{
+			"json": string(siteJSON),
+		}, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add permission to site %s: %w", siteID, err)
 	}
 	return nil
 }

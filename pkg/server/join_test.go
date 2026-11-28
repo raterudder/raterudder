@@ -172,13 +172,8 @@ func TestHandleJoin(t *testing.T) {
 				!user.TSTermsAccepted.IsZero()
 		})).Return(nil)
 
-		// Expect site update with new user added to permissions
-		store.On("UpdateSite", mock.Anything, "site1", mock.MatchedBy(func(site types.Site) bool {
-			if len(site.Permissions) != 2 {
-				return false
-			}
-			return site.Permissions[1].UserID == "newuser@test.com"
-		})).Return(nil)
+		// Expect site permission addition for new user
+		store.On("AddSitePermission", mock.Anything, "site1", types.SitePermissions{UserID: "newuser@test.com"}).Return(nil).Once()
 
 		s := newServer(store)
 
@@ -212,10 +207,8 @@ func TestHandleJoin(t *testing.T) {
 			return len(user.Sites) == 2 && user.Sites[1].ID == "site2" && !user.TSTermsAccepted.IsZero()
 		})).Return(nil)
 
-		// Expect site update
-		store.On("UpdateSite", mock.Anything, "site2", mock.MatchedBy(func(site types.Site) bool {
-			return len(site.Permissions) == 2 && site.Permissions[1].UserID == "existing@test.com"
-		})).Return(nil)
+		// Expect site permission addition for existing user
+		store.On("AddSitePermission", mock.Anything, "site2", types.SitePermissions{UserID: "existing@test.com"}).Return(nil).Once()
 
 		s := newServer(store)
 
@@ -255,10 +248,78 @@ func TestHandleJoin(t *testing.T) {
 
 		s.handleJoin(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
-		// UpdateSite should NOT be called since user already has permission
-		store.AssertNotCalled(t, "UpdateSite")
+		// AddSitePermission should NOT be called since user already has permission
+		store.AssertNotCalled(t, "AddSitePermission")
 		// UpdateUser should NOT be called since user already has site
 		store.AssertNotCalled(t, "UpdateUser")
+	})
+
+	t.Run("AddSitePermissionFailureLeavesNoDanglingUserSites", func(t *testing.T) {
+		t.Run("NewUser", func(t *testing.T) {
+			store := &mockStorage{}
+			store.On("GetSite", mock.Anything, "site1").Return(types.Site{
+				ID:          "site1",
+				InviteCode:  "secret123",
+				Permissions: []types.SitePermissions{{UserID: "owner@test.com"}},
+			}, nil).Once()
+			store.On("AddSitePermission", mock.Anything, "site1", types.SitePermissions{UserID: "newuser@test.com"}).Return(assert.AnError).Once()
+
+			s := newServer(store)
+			body := `{"inviteCode":"secret123","joinSiteID":"site1"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+			req = withNewUser(req, "newuser@test.com", "newuser@test.com")
+			w := httptest.NewRecorder()
+
+			s.handleJoin(w, req)
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			store.AssertNotCalled(t, "CreateUser", mock.Anything, mock.Anything)
+			store.AssertExpectations(t)
+		})
+
+		t.Run("ExistingUser", func(t *testing.T) {
+			store := &mockStorage{}
+			store.On("GetSite", mock.Anything, "site2").Return(types.Site{
+				ID:          "site2",
+				InviteCode:  "invite456",
+				Permissions: []types.SitePermissions{{UserID: "owner@test.com"}},
+			}, nil).Once()
+			store.On("AddSitePermission", mock.Anything, "site2", types.SitePermissions{UserID: "existing@test.com"}).Return(assert.AnError).Once()
+
+			s := newServer(store)
+			body := `{"inviteCode":"invite456","joinSiteID":"site2"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+			req = withUser(req, "existing@test.com", "existing@test.com")
+			w := httptest.NewRecorder()
+
+			s.handleJoin(w, req)
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			store.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+			store.AssertExpectations(t)
+		})
+
+		t.Run("ConcurrentlyDeletedSite", func(t *testing.T) {
+			store := &mockStorage{}
+			store.On("GetSite", mock.Anything, "site2").Return(types.Site{
+				ID:          "site2",
+				InviteCode:  "invite456",
+				Permissions: []types.SitePermissions{{UserID: "owner@test.com"}},
+			}, nil).Once()
+			store.On("AddSitePermission", mock.Anything, "site2", types.SitePermissions{UserID: "existing@test.com"}).Return(storage.ErrSiteNotFound).Once()
+
+			s := newServer(store)
+			body := `{"inviteCode":"invite456","joinSiteID":"site2"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+			req = withUser(req, "existing@test.com", "existing@test.com")
+			w := httptest.NewRecorder()
+
+			s.handleJoin(w, req)
+			assert.Equal(t, http.StatusNotFound, w.Code)
+			assert.Contains(t, w.Body.String(), "site not found")
+			store.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+			store.AssertExpectations(t)
+		})
 	})
 
 	t.Run("CreateNewSitePrefixTooShortFallback", func(t *testing.T) {
@@ -560,7 +621,7 @@ func TestHandleJoin(t *testing.T) {
 			}, nil).Once()
 			store.On("GetUser", mock.Anything, "user2").Return(types.User{ID: "user2", Email: "bob@example.com"}, nil).Once()
 			store.On("UpdateUser", mock.Anything, mock.Anything).Return(nil).Once()
-			store.On("UpdateSite", mock.Anything, "shared-site", mock.Anything).Return(nil).Once()
+			store.On("AddSitePermission", mock.Anything, "shared-site", types.SitePermissions{UserID: "user2"}).Return(nil).Once()
 
 			ctx, logBuf := captureJSONLogs(context.Background())
 			ctx = context.WithValue(ctx, userContextKey, types.User{ID: "user2", Email: "bob@example.com"})

@@ -662,6 +662,14 @@ func TestAuthMiddleware(t *testing.T) {
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID:          "site1",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "site2").Return(types.Site{
+			ID:          "site2",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -670,6 +678,114 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.Equal(t, "site1,site2", w.Header().Get("X-All-Site-IDs"))
 		assert.Equal(t, "user@example.com", w.Header().Get("X-Email"))
 		assert.Equal(t, "false", w.Header().Get("X-Admin"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Multi Site Mode - Auth and SiteID ALL Filters Revoked and Missing Sites", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("GET", "/api/history/savings?siteID=ALL", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "own-site"}, {ID: "revoked-site"}, {ID: "missing-site"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "own-site").Return(types.Site{
+			ID:          "own-site",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "revoked-site").Return(types.Site{
+			ID:          "revoked-site",
+			Permissions: []types.SitePermissions{{UserID: "google:site-owner"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "missing-site").Return(types.Site{}, storage.ErrSiteNotFound).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "ALL", w.Header().Get("X-Site-ID"))
+		assert.Equal(t, "own-site", w.Header().Get("X-All-Site-IDs"))
+		assert.Equal(t, "user@example.com", w.Header().Get("X-Email"))
+		assert.Equal(t, "false", w.Header().Get("X-Admin"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Multi Site Mode - Auth and SiteID ALL Zero Authorized Sites Returns 403", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("GET", "/api/history/savings?siteID=ALL", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "revoked-site"}, {ID: "missing-site"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "revoked-site").Return(types.Site{
+			ID:          "revoked-site",
+			Permissions: []types.SitePermissions{{UserID: "google:site-owner"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "missing-site").Return(types.Site{}, storage.ErrSiteNotFound).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Contains(t, w.Body.String(), "site access denied")
+		assert.Empty(t, w.Header().Get("X-Site-ID"))
+		assert.Empty(t, w.Header().Get("X-All-Site-IDs"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Multi Site Mode - Auth and SiteID ALL Transient GetSite Error Returns 500", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("GET", "/api/history/savings?siteID=ALL", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "own-site"}, {ID: "flaky-site"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "own-site").Return(types.Site{
+			ID:          "own-site",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
+		mocks.On("GetSite", mock.Anything, "flaky-site").Return(types.Site{}, assert.AnError).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "internal server error")
+		assert.Empty(t, w.Header().Get("X-Site-ID"))
+		assert.Empty(t, w.Header().Get("X-All-Site-IDs"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Multi Site Mode - Auth and SiteID ALL Empty User Sites Returns 200", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("GET", "/api/history/savings?siteID=ALL", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
+			Email: "user@example.com",
+			Sites: []types.UserSite{},
+		}, nil).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "ALL", w.Header().Get("X-Site-ID"))
+		assert.Equal(t, "", w.Header().Get("X-All-Site-IDs"))
+		mocks.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 

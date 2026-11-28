@@ -60,6 +60,7 @@ type Database interface {
 	ListSites(ctx context.Context) ([]types.Site, error)
 	CreateSite(ctx context.Context, siteID string, site types.Site) error
 	UpdateSite(ctx context.Context, siteID string, site types.Site) error
+	AddSitePermission(ctx context.Context, siteID string, perm types.SitePermissions) error
 	DeleteSite(ctx context.Context, siteID string) error
 	GetUser(ctx context.Context, userID string) (types.User, error)
 	CreateUser(ctx context.Context, user types.User) error

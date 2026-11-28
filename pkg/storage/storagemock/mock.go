@@ -135,6 +135,11 @@ func (m *MockDatabase) UpdateSite(ctx context.Context, siteID string, site types
 	return args.Error(0)
 }
 
+func (m *MockDatabase) AddSitePermission(ctx context.Context, siteID string, perm types.SitePermissions) error {
+	args := m.Called(ctx, siteID, perm)
+	return args.Error(0)
+}
+
 func (m *MockDatabase) CreateSite(ctx context.Context, siteID string, site types.Site) error {
 	args := m.Called(ctx, siteID, site)
 	return args.Error(0)

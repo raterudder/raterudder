@@ -167,7 +167,21 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 1. Create or Update User
+	// 1. Add site permission atomically before writing User.Sites so failed site writes leave no dangling site IDs
+	if !alreadyJoined {
+		if err := s.storage.AddSitePermission(ctx, req.JoinSiteID, types.SitePermissions{UserID: userID}); err != nil {
+			if errors.Is(err, storage.ErrSiteNotFound) {
+				log.Ctx(ctx).WarnContext(ctx, "join: site not found", slog.String("siteID", req.JoinSiteID), slog.Any("error", err))
+				writeJSONError(w, "site not found", http.StatusNotFound)
+				return
+			}
+			log.Ctx(ctx).ErrorContext(ctx, "join: failed to add site permission", slog.String("siteID", req.JoinSiteID), slog.Any("error", err))
+			writeJSONError(w, "failed to join site", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 2. Create or Update User
 	isNewUser := false
 	if _, ok := ctx.Value(userToRegisterContextKey).(types.User); ok {
 		isNewUser = true
@@ -256,16 +270,6 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, "failed to join site", http.StatusInternalServerError)
 				return
 			}
-		}
-	}
-
-	// 2. Update Site (Add permission)
-	if !alreadyJoined {
-		site.Permissions = append(site.Permissions, types.SitePermissions{UserID: userID})
-		if err := s.storage.UpdateSite(ctx, req.JoinSiteID, site); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "join: failed to update site", slog.String("siteID", req.JoinSiteID), slog.Any("error", err))
-			writeJSONError(w, "failed to join site", http.StatusInternalServerError)
-			return
 		}
 	}
 

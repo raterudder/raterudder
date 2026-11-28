@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -707,6 +708,85 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, got.Permissions, 2)
 			assert.Equal(t, "newuser@test.com", got.Permissions[1].UserID)
+		})
+
+		t.Run("UpdateSiteRemovePermission", func(t *testing.T) {
+			site.Permissions = []types.SitePermissions{{UserID: "owner@test.com"}}
+			require.NoError(t, f.UpdateSite(ctx, "test-site-crud", site))
+
+			got, err := f.GetSite(ctx, "test-site-crud")
+			require.NoError(t, err)
+			require.Len(t, got.Permissions, 1)
+			assert.Equal(t, "owner@test.com", got.Permissions[0].UserID)
+		})
+
+		t.Run("AddSitePermission", func(t *testing.T) {
+			require.Error(t, f.AddSitePermission(ctx, "", types.SitePermissions{UserID: "u@test.com"}))
+			require.Error(t, f.AddSitePermission(ctx, "test-site-crud", types.SitePermissions{}))
+
+			err := f.AddSitePermission(ctx, "nonexistent-site-perms", types.SitePermissions{UserID: "u@test.com"})
+			require.ErrorIs(t, err, ErrSiteNotFound)
+			_, getErr := f.GetSite(ctx, "nonexistent-site-perms")
+			require.ErrorIs(t, getErr, ErrSiteNotFound)
+
+			// Rotate InviteCode via UpdateSite before AddSitePermission to verify AddSitePermission preserves concurrent field updates
+			site.InviteCode = "rotated-invite-456"
+			require.NoError(t, f.UpdateSite(ctx, "test-site-crud", site))
+
+			require.NoError(t, f.AddSitePermission(ctx, "test-site-crud", types.SitePermissions{UserID: "invited@test.com"}))
+			// Adding an already-present user is an idempotent no-op
+			require.NoError(t, f.AddSitePermission(ctx, "test-site-crud", types.SitePermissions{UserID: "invited@test.com"}))
+
+			got, err := f.GetSite(ctx, "test-site-crud")
+			require.NoError(t, err)
+			assert.Equal(t, "rotated-invite-456", got.InviteCode)
+			require.Len(t, got.Permissions, 2)
+			assert.Equal(t, "owner@test.com", got.Permissions[0].UserID)
+			assert.Equal(t, "invited@test.com", got.Permissions[1].UserID)
+		})
+
+		t.Run("AddSitePermissionConcurrent", func(t *testing.T) {
+			concurrentSiteID := "test-site-concurrent-perms"
+			initial := types.Site{
+				ID:         concurrentSiteID,
+				InviteCode: "invite-concurrent",
+				Permissions: []types.SitePermissions{
+					{UserID: "owner@test.com"},
+				},
+			}
+			require.NoError(t, f.CreateSite(ctx, concurrentSiteID, initial))
+
+			const joiners = 8
+			var wg sync.WaitGroup
+			errs := make([]error, joiners)
+			for i := 0; i < joiners; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					errs[idx] = f.AddSitePermission(ctx, concurrentSiteID, types.SitePermissions{
+						UserID: fmt.Sprintf("joiner-%d@test.com", idx),
+					})
+				}(i)
+			}
+			wg.Wait()
+
+			for i, err := range errs {
+				require.NoError(t, err, "joiner %d AddSitePermission failed", i)
+			}
+
+			got, err := f.GetSite(ctx, concurrentSiteID)
+			require.NoError(t, err)
+			assert.Equal(t, "invite-concurrent", got.InviteCode)
+			if assert.Len(t, got.Permissions, 1+joiners) {
+				gotUsers := make([]string, len(got.Permissions))
+				for i, p := range got.Permissions {
+					gotUsers[i] = p.UserID
+				}
+				assert.Contains(t, gotUsers, "owner@test.com")
+				for i := 0; i < joiners; i++ {
+					assert.Contains(t, gotUsers, fmt.Sprintf("joiner-%d@test.com", i))
+				}
+			}
 		})
 
 		t.Run("ListSites", func(t *testing.T) {

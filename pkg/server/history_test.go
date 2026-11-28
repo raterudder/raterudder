@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
@@ -765,15 +766,46 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 	})
 
 	t.Run("Fetch Actions and Savings Data ALL Sites", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+		validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user-1")
+
 		mockStore := &mockStorage{}
 		mockUtilities := utility.NewMap(mockStore)
 		start := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
-		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true, nowFunc: func() time.Time { return start.Add(12 * time.Hour) }}
+		nowTime := start.Add(12 * time.Hour)
+		s := &Server{
+			storage:        mockStore,
+			utilities:      mockUtilities,
+			nowFunc:        func() time.Time { return nowTime },
+			featsEvaluator: feats.NewEvaluator(feats.Config{}),
+			featsFetchedAt: nowTime,
+			oidcAudiences:  map[string]string{"google": "test-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
 
 		end := start.Add(24 * time.Hour).UTC()
 
 		startQuery := start.AddDate(0, 0, -shadowWarmupLookbackDays)
 		endQuery := end.AddDate(0, 0, nextDayValuationLookaheadDays)
+
+		mockStore.On("GetUser", mock.Anything, "google:user-1").Return(types.User{
+			ID:    "google:user-1",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
+		}, nil).Once()
+		mockStore.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID:          "site1",
+			Permissions: []types.SitePermissions{{UserID: "google:user-1"}},
+		}, nil).Once()
+		mockStore.On("GetSite", mock.Anything, "site2").Return(types.Site{
+			ID:          "site2",
+			Permissions: []types.SitePermissions{{UserID: "google:user-1"}},
+		}, nil).Once()
 
 		// Site 1 data
 		mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.MatchedBy(func(t time.Time) bool {
@@ -809,15 +841,11 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		}, nil)
 		mockStore.On("GetSettings", mock.Anything, "site2").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
 
-		req, _ := http.NewRequest("GET", "/api/history/actionsAndSavings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
-		// Mock authMiddleware effects
-		ctx := req.Context()
-		ctx = context.WithValue(ctx, siteIDContextKey, SiteIDAll)
-		ctx = context.WithValue(ctx, allUserSitesContextKey, []types.UserSite{{ID: "site1"}, {ID: "site2"}})
-		req = req.WithContext(ctx)
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
 
 		rr := httptest.NewRecorder()
-		s.handleHistoryActionsAndSavings(rr, req)
+		s.authMiddleware(http.HandlerFunc(s.handleHistoryActionsAndSavings)).ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusOK, rr.Code)
 
@@ -825,7 +853,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			Actions []types.Action     `json:"actions"`
 			Savings types.SavingsStats `json:"savings"`
 		}
-		err := json.Unmarshal(rr.Body.Bytes(), &resp)
+		err = json.Unmarshal(rr.Body.Bytes(), &resp)
 		require.NoError(t, err)
 
 		// Site 1 cost: 10 * 0.10 = 1.00
@@ -835,6 +863,142 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		assert.Equal(t, 30.0, resp.Savings.HomeUsed) // 10 + 20
 		assert.Empty(t, resp.Savings.HourlyDebugging)
 		assert.Empty(t, resp.Actions) // siteID = ALL should not return actions
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("Fetch Actions and Savings Data ALL Sites Excludes Revoked Site", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+		validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user-1")
+
+		mockStore := &mockStorage{}
+		mockUtilities := utility.NewMap(mockStore)
+		start := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		end := start.Add(24 * time.Hour).UTC()
+		nowTime := start.Add(12 * time.Hour)
+		s := &Server{
+			storage:        mockStore,
+			utilities:      mockUtilities,
+			nowFunc:        func() time.Time { return nowTime },
+			featsEvaluator: feats.NewEvaluator(feats.Config{}),
+			featsFetchedAt: nowTime,
+			oidcAudiences:  map[string]string{"google": "test-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		startQuery := start.AddDate(0, 0, -shadowWarmupLookbackDays)
+		endQuery := end.AddDate(0, 0, nextDayValuationLookaheadDays)
+
+		// User.Sites contains both "own-site" and "revoked-site",
+		// while "revoked-site" Site.Permissions contains only "google:site-owner".
+		mockStore.On("GetUser", mock.Anything, "google:user-1").Return(types.User{
+			ID:    "google:user-1",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "own-site"}, {ID: "revoked-site"}},
+		}, nil).Twice()
+		mockStore.On("GetSite", mock.Anything, "own-site").Return(types.Site{
+			ID:          "own-site",
+			Permissions: []types.SitePermissions{{UserID: "google:user-1"}},
+		}, nil).Once()
+		mockStore.On("GetSite", mock.Anything, "revoked-site").Return(types.Site{
+			ID:          "revoked-site",
+			Permissions: []types.SitePermissions{{UserID: "google:site-owner"}},
+		}, nil).Twice()
+
+		// own-site costs $1.00 (10 kWh * $0.10); revoked-site would cost $50.00 (100 kWh * $0.50) if queried
+		mockStore.On("GetPriceHistory", mock.Anything, "own-site", mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(startQuery)
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(endQuery)
+		})).Return([]types.Price{
+			{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
+		}, nil).Once()
+		mockStore.On("GetHistorySummaries", mock.Anything, "own-site", mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Once()
+		mockStore.On("GetEnergyHistory", mock.Anything, "own-site", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{TSDayStart: start, Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
+		}, nil).Once()
+		mockStore.On("GetActionHistory", mock.Anything, "own-site", mock.Anything, mock.Anything).Return([]types.Action{
+			{Timestamp: start, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0}},
+		}, nil).Once()
+		mockStore.On("GetSettings", mock.Anything, "own-site").Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		handler := s.authMiddleware(http.HandlerFunc(s.handleHistoryActionsAndSavings))
+
+		// 1. Direct request to ?siteID=revoked-site must return 403 Forbidden.
+		directReq := httptest.NewRequest("GET", "/api/history/actionsAndSavings?siteID=revoked-site&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		directReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+		directRR := httptest.NewRecorder()
+		handler.ServeHTTP(directRR, directReq)
+		assert.Equal(t, http.StatusForbidden, directRR.Code)
+
+		// 2. GET /api/history/actionsAndSavings?siteID=ALL must exclude "revoked-site".
+		allReq := httptest.NewRequest("GET", "/api/history/actionsAndSavings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		allReq.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+		allRR := httptest.NewRecorder()
+		handler.ServeHTTP(allRR, allReq)
+		require.Equal(t, http.StatusOK, allRR.Code)
+
+		var resp struct {
+			Actions []types.Action     `json:"actions"`
+			Savings types.SavingsStats `json:"savings"`
+		}
+		require.NoError(t, json.Unmarshal(allRR.Body.Bytes(), &resp))
+		assert.Equal(t, 1.00, resp.Savings.Cost)
+		assert.Equal(t, 10.0, resp.Savings.HomeUsed)
+		assert.Empty(t, resp.Actions)
+		mockStore.AssertNotCalled(t, "GetSettings", mock.Anything, "revoked-site")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("Fetch Actions and Savings Data ALL Sites Empty User Sites", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+		validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user-empty")
+
+		mockStore := &mockStorage{}
+		mockUtilities := utility.NewMap(mockStore)
+		start := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		end := start.Add(24 * time.Hour).UTC()
+		nowTime := start.Add(12 * time.Hour)
+		s := &Server{
+			storage:        mockStore,
+			utilities:      mockUtilities,
+			nowFunc:        func() time.Time { return nowTime },
+			featsEvaluator: feats.NewEvaluator(feats.Config{}),
+			featsFetchedAt: nowTime,
+			oidcAudiences:  map[string]string{"google": "test-audience"},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		mockStore.On("GetUser", mock.Anything, "google:user-empty").Return(types.User{
+			ID:    "google:user-empty",
+			Email: "user@example.com",
+			Sites: nil,
+		}, nil).Once()
+
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+		rr := httptest.NewRecorder()
+		s.authMiddleware(http.HandlerFunc(s.handleHistoryActionsAndSavings)).ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+		var resp struct {
+			Actions []types.Action     `json:"actions"`
+			Savings types.SavingsStats `json:"savings"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		assert.Equal(t, 0.0, resp.Savings.Cost)
+		assert.Equal(t, 0.0, resp.Savings.HomeUsed)
+		mockStore.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+		mockStore.AssertExpectations(t)
 	})
 
 	t.Run("SavingsPeriods Validation Errors", func(t *testing.T) {

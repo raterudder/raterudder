@@ -184,6 +184,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		var activeAppName string
 		// user might be a mock/fake user if this is bypassAuth
 		var user types.User
+		var allUserSites []types.UserSite
 		var authSuccess bool
 		var authViaUpdateSpecific bool
 		// handle authentication
@@ -193,6 +194,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				Sites: []types.UserSite{{ID: types.SiteIDNone}},
 				Admin: true,
 			}
+			allUserSites = user.Sites
 			authSuccess = true
 			ctx = context.WithValue(ctx, userContextKey, user)
 		} else {
@@ -437,6 +439,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						return
 					}
 
+					allUserSites = user.Sites
 					isAdmin := s.isMultiSiteAdmin(user)
 					if siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
 						site, err := s.storage.GetSite(ctx, siteID)
@@ -460,6 +463,39 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							return
 						}
 						ctx = context.WithValue(ctx, siteContextKey, site)
+					} else if siteID == SiteIDAll && !ignoreSiteID && !optionalSiteID && !authViaUpdateSpecific {
+						if !isAdmin && len(user.Sites) > 0 {
+							authorizedSites := make([]types.UserSite, 0, len(user.Sites))
+							for _, us := range user.Sites {
+								site, err := s.storage.GetSite(ctx, us.ID)
+								if err != nil {
+									if errors.Is(err, storage.ErrSiteNotFound) {
+										log.Ctx(ctx).WarnContext(ctx, "site not found", slog.String("userID", userID), slog.String("siteID", us.ID), slog.Any("error", err))
+										continue
+									}
+									log.Ctx(ctx).ErrorContext(ctx, "site lookup failed due to storage error", slog.String("userID", userID), slog.String("siteID", us.ID), slog.Any("error", err))
+									writeJSONError(w, "internal server error", http.StatusInternalServerError)
+									return
+								}
+								permFound := false
+								for _, p := range site.Permissions {
+									if p.UserID == user.ID {
+										permFound = true
+										break
+									}
+								}
+								if !permFound {
+									log.Ctx(ctx).WarnContext(ctx, "user does not have permission for site", slog.String("userID", userID), slog.String("email", email), slog.String("siteID", us.ID))
+									continue
+								}
+								authorizedSites = append(authorizedSites, us)
+							}
+							if len(authorizedSites) == 0 {
+								writeJSONError(w, "site access denied", http.StatusForbidden)
+								return
+							}
+							allUserSites = authorizedSites
+						}
 					}
 					ctx = context.WithValue(ctx, userContextKey, user)
 				}
@@ -498,7 +534,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			ctx = s.initFeats(ctx, siteID)
 		}
 
-		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
+		ctx = context.WithValue(ctx, allUserSitesContextKey, allUserSites)
 		ctx = context.WithValue(ctx, siteIDContextKey, siteID)
 		ctx = context.WithValue(ctx, updateSpecificAuthContextKey, authViaUpdateSpecific)
 		if activeSession != nil {
