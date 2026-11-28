@@ -57,7 +57,7 @@ func Configured(db storage.Database) *Map {
 
 // Map manages utility providers.
 type Map struct {
-	mu                sync.Mutex
+	mu                sync.RWMutex
 	db                storage.Database
 	baseComEdHourly   *baseComEdHourly
 	baseAmerenSmart   *baseAmerenSmart
@@ -81,13 +81,16 @@ type settingsMatcher interface {
 
 // Site returns the utility provider for the given site based on settings.
 func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) (Utility, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	p, ok := m.utilities[siteID]
+	m.mu.RUnlock()
 
-	if p, ok := m.utilities[siteID]; ok {
-		match := settings.UtilityRate == "" || p.Name() == settings.UtilityRate
-		if sm, ok := p.(settingsMatcher); ok {
+	if ok {
+		var match bool
+		if sm, isMatcher := p.(settingsMatcher); isMatcher {
 			match = sm.settingsMatch(settings)
+		} else {
+			match = settings.UtilityRate == "" || p.Name() == settings.UtilityRate
 		}
 		if match {
 			if err := p.ApplySettings(ctx, settings); err != nil {
@@ -95,30 +98,65 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 			return p, nil
 		}
-		log.Ctx(ctx).Warn("site changed utility rate", slog.String("expected", settings.UtilityRate), slog.String("actual", p.Name()))
+		log.Ctx(ctx).InfoContext(ctx, "site changed utility rate", slog.String("expected", settings.UtilityRate), slog.String("actual", p.Name()))
 	}
 
 	u, err := m.buildUtility(ctx, siteID, settings)
 	if err != nil {
 		return nil, err
 	}
+
+	m.mu.Lock()
+	if existing, exists := m.utilities[siteID]; exists && existing != p {
+		var existingMatch bool
+		if sm, isMatcher := existing.(settingsMatcher); isMatcher {
+			existingMatch = sm.settingsMatch(settings)
+		} else {
+			existingMatch = settings.UtilityRate == "" || existing.Name() == settings.UtilityRate
+		}
+		if existingMatch {
+			m.mu.Unlock()
+			if err := existing.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+			return existing, nil
+		}
+	}
 	m.utilities[siteID] = u
+	m.mu.Unlock()
 	return u, nil
 }
 
 // PreviewSite builds a temporary utility provider for settings previews without reading or mutating cached site providers.
 func (m *Map) PreviewSite(ctx context.Context, settings types.Settings) (Utility, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	return m.buildUtility(ctx, "", settings)
+}
+
+// ValidateSite validates candidate utility settings without mutating cached site providers.
+func (m *Map) ValidateSite(ctx context.Context, siteID string, settings types.Settings) (Utility, error) {
+	m.mu.RLock()
+	p, ok := m.utilities[siteID]
+	m.mu.RUnlock()
+
+	if ok {
+		if _, isMatcher := p.(settingsMatcher); !isMatcher {
+			if settings.UtilityRate == "" || p.Name() == settings.UtilityRate {
+				if err := p.ApplySettings(ctx, settings); err != nil {
+					return nil, err
+				}
+				return p, nil
+			}
+		}
+	}
+
+	return m.buildUtility(ctx, siteID, settings)
 }
 
 func (m *Map) buildUtility(ctx context.Context, siteID string, settings types.Settings) (Utility, error) {
 	var u Utility
 	switch settings.UtilityProvider {
 	case "comed":
-		if settings.UtilityRate == "" && settings.UtilityFeesPeriods == nil {
+		if settings.UtilityRate == "" {
 			return nil, fmt.Errorf("utility rate is required for provider: %s", settings.UtilityProvider)
 		}
 		if settings.UtilityRate == "comed_bes" || settings.UtilityRate == "comed_best" {
@@ -141,10 +179,10 @@ func (m *Map) buildUtility(ctx context.Context, siteID string, settings types.Se
 			}
 		}
 	case "ameren":
-		if settings.UtilityRate == "" && settings.UtilityFeesPeriods == nil {
+		if settings.UtilityRate == "" {
 			return nil, fmt.Errorf("utility rate is required for provider: %s", settings.UtilityProvider)
 		}
-		if settings.UtilityRate == "ameren_psp" || settings.UtilityRate == "" {
+		if settings.UtilityRate == "ameren_psp" {
 			if m.baseAmerenSmart == nil {
 				return nil, fmt.Errorf("ameren provider not configured")
 			}

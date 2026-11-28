@@ -46,7 +46,6 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 			effectiveSettings.UtilityProvider = qProvider
 			effectiveSettings.UtilityRate = ""
 			effectiveSettings.UtilityRateOptions = types.UtilityRateOptions{}
-			effectiveSettings.UtilityFeesPeriods = nil
 		}
 	}
 	if query.Has("utilityRate") {
@@ -54,7 +53,6 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 		if qRate != effectiveSettings.UtilityRate {
 			effectiveSettings.UtilityRate = qRate
 			effectiveSettings.UtilityRateOptions = types.UtilityRateOptions{}
-			effectiveSettings.UtilityFeesPeriods = nil
 		}
 	}
 	if query.Has("utilityRateOptions") {
@@ -69,7 +67,7 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 		effectiveSettings.UtilityRateOptions = opts
 	}
 
-	if effectiveSettings.UtilityProvider == "" || (effectiveSettings.UtilityRate == "" && effectiveSettings.UtilityFeesPeriods == nil) {
+	if effectiveSettings.UtilityProvider == "" || effectiveSettings.UtilityRate == "" {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(nil); err != nil {
 			panic(http.ErrAbortHandler)

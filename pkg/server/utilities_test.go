@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -285,6 +286,21 @@ func TestHandleListUtilities(t *testing.T) {
 	})
 }
 
+type blockingApplyUtility struct {
+	mockUtility
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingApplyUtility) ApplySettings(ctx context.Context, settings types.Settings) error {
+	b.once.Do(func() {
+		close(b.entered)
+	})
+	<-b.release
+	return nil
+}
+
 func TestHandleGetPeriods(t *testing.T) {
 	mockUMap := utility.NewMap(&mockStorage{})
 	mockE := ess.NewMap()
@@ -385,17 +401,11 @@ func TestHandleGetPeriods(t *testing.T) {
 		}
 	})
 
-	t.Run("Does not mutate cached site provider or log rate change warning during preview", func(t *testing.T) {
+	t.Run("Does not mutate cached site provider or log rate change during preview", func(t *testing.T) {
 		mockStorage := &mockStorage{}
 		savedSettings := types.Settings{
-			UtilityProvider: "comed",
-			UtilityRate:     "comed_besh",
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{
-					TimePeriod:    types.TimePeriod{Name: "Saved Custom Peak"},
-					DollarsPerKWH: 0.12,
-				},
-			},
+			UtilityProvider: "sdge",
+			UtilityRate:     "sdge_ev_tou_5",
 		}
 		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(savedSettings, types.CurrentSettingsVersion, time.Time{}, nil)
 
@@ -428,26 +438,90 @@ func TestHandleGetPeriods(t *testing.T) {
 		after, err := uMap.Site(ctx, "test-site", savedSettings)
 		require.NoError(t, err)
 		assert.Same(t, cached, after)
-		cachedPeriods, err := after.GetPeriods(ctx)
-		require.NoError(t, err)
-		if assert.Len(t, cachedPeriods, 1) {
-			assert.Equal(t, "Saved Custom Peak", cachedPeriods[0].Name)
-		}
+		assert.Equal(t, "sdge_ev_tou_5", after.Name())
 	})
 
-	t.Run("Changing utilityProvider clears inherited rate, options, and custom periods", func(t *testing.T) {
+	t.Run("Executes PreviewSite concurrently while Map.Site is blocked in ApplySettings", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		savedSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+		}
+		mockStorage.On("GetSettings", mock.Anything, "preview-site").Return(savedSettings, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		uMap := utility.Configured(mockStorage)
+		cachedSiteSettings := types.Settings{
+			UtilityProvider: "sdge",
+			UtilityRate:     "sdge_ev_tou_5",
+		}
+		cachedSDGE, err := uMap.Site(context.Background(), "cached-site", cachedSiteSettings)
+		require.NoError(t, err)
+
+		blockingU := &blockingApplyUtility{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		uMap.SetProvider("slow-poll-site", blockingU)
+
+		srv := &Server{
+			utilities:  uMap,
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		siteDone := make(chan error, 1)
+		go func() {
+			_, err := uMap.Site(context.Background(), "slow-poll-site", types.Settings{
+				UtilityProvider: "mock",
+				UtilityRate:     "mock",
+			})
+			siteDone <- err
+		}()
+
+		<-blockingU.entered
+
+		previewDone := make(chan struct{})
+		var previewStatus int
+		var previewPeriods []types.TimePeriod
+		var cachedLookup utility.Utility
+		var cachedLookupErr error
+		go func() {
+			defer close(previewDone)
+			cachedLookup, cachedLookupErr = uMap.Site(context.Background(), "cached-site", cachedSiteSettings)
+
+			req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=sdge&utilityRate=sdge_ev_tou_5", nil)
+			req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "preview-site"))
+			w := httptest.NewRecorder()
+			srv.handleGetPeriods(w, req)
+			previewStatus = w.Result().StatusCode
+			_ = json.NewDecoder(w.Body).Decode(&previewPeriods)
+		}()
+
+		select {
+		case <-previewDone:
+		case <-time.After(5 * time.Second):
+			close(blockingU.release)
+			t.Fatal("handleGetPeriods or cached Map.Site blocked on concurrent slow-poll-site ApplySettings")
+		}
+
+		require.NoError(t, cachedLookupErr)
+		assert.Same(t, cachedSDGE, cachedLookup)
+		assert.Equal(t, http.StatusOK, previewStatus)
+		assert.NotEmpty(t, previewPeriods)
+
+		close(blockingU.release)
+		require.NoError(t, <-siteDone)
+	})
+
+	t.Run("Changing utilityProvider clears inherited rate and options", func(t *testing.T) {
 		mockStorage := &mockStorage{}
 		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
 			UtilityProvider: "tesla_electric_tx",
 			UtilityRate:     "tesla_dynamic",
 			UtilityRateOptions: types.UtilityRateOptions{
 				Location: "oncor",
-			},
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{
-					TimePeriod:    types.TimePeriod{Name: "Saved Custom Period"},
-					DollarsPerKWH: 0.15,
-				},
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
@@ -459,7 +533,7 @@ func TestHandleGetPeriods(t *testing.T) {
 			bypassAuth: true,
 		}
 
-		// Provider selected without rate returns 200 null rather than inheriting old rate or custom periods
+		// Provider selected without rate returns 200 null rather than inheriting old rate
 		req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=comed", nil)
 		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
 		w := httptest.NewRecorder()
@@ -479,19 +553,13 @@ func TestHandleGetPeriods(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w2.Result().StatusCode)
 	})
 
-	t.Run("Changing utilityRate clears inherited options and custom periods", func(t *testing.T) {
+	t.Run("Changing utilityRate clears inherited options", func(t *testing.T) {
 		mockStorage := &mockStorage{}
 		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
 			UtilityProvider: "tesla_electric_tx",
 			UtilityRate:     "tesla_fixed",
 			UtilityRateOptions: types.UtilityRateOptions{
 				Location: "oncor",
-			},
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{
-					TimePeriod:    types.TimePeriod{Name: "Saved Custom Period"},
-					DollarsPerKWH: 0.15,
-				},
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 

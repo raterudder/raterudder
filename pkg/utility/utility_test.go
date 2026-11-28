@@ -238,6 +238,55 @@ func (m *mockUtility) GetPeriods(context.Context) ([]types.TimePeriod, error) {
 	return nil, nil
 }
 
+func defaultUtilityRateOptions(options []types.UtilityRateOption) types.UtilityRateOptions {
+	var out types.UtilityRateOptions
+	for _, opt := range options {
+		switch opt.Field {
+		case "rateClass":
+			if v, ok := opt.Default.(string); ok {
+				out.RateClass = v
+			}
+		case "variableDeliveryRate":
+			if v, ok := opt.Default.(bool); ok {
+				out.VariableDeliveryRate = v
+			}
+		case "netMeteringCredits":
+			if v, ok := opt.Default.(bool); ok {
+				out.NetMeteringCredits = v
+			}
+		case "netMeteringScheme":
+			if v, ok := opt.Default.(string); ok {
+				out.NetMeteringScheme = v
+			}
+		case "peakPeriodOption":
+			if v, ok := opt.Default.(string); ok {
+				out.PeakPeriodOption = v
+			}
+		case "generationRate":
+			if v, ok := opt.Default.(string); ok {
+				out.GenerationRate = v
+			}
+		case "location":
+			if v, ok := opt.Default.(string); ok {
+				out.Location = v
+			}
+		case "evCredit":
+			if v, ok := opt.Default.(bool); ok {
+				out.EVCredit = v
+			}
+		case "vppProgram":
+			if v, ok := opt.Default.(string); ok {
+				out.VPPProgram = v
+			}
+		case "applicationYear":
+			if v, ok := opt.Default.(string); ok {
+				out.ApplicationYear = v
+			}
+		}
+	}
+	return out
+}
+
 func TestMap(t *testing.T) {
 	ctx := context.Background()
 
@@ -530,7 +579,7 @@ func TestMap(t *testing.T) {
 		assert.Same(t, cached, cachedAgain)
 	})
 
-	t.Run("Site and PreviewSite reject empty UtilityRate on comed and ameren unless custom periods are set", func(t *testing.T) {
+	t.Run("Site and PreviewSite reject empty UtilityRate on comed and ameren", func(t *testing.T) {
 		m := Configured(nil)
 
 		_, err := m.Site(ctx, "site-comed", types.Settings{UtilityProvider: "comed"})
@@ -540,24 +589,6 @@ func TestMap(t *testing.T) {
 		_, err = m.PreviewSite(ctx, types.Settings{UtilityProvider: "ameren"})
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "utility rate is required for provider: ameren")
-
-		uComedCustom, err := m.Site(ctx, "site-comed-custom", types.Settings{
-			UtilityProvider: "comed",
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{DollarsPerKWH: 0.05},
-			},
-		})
-		require.NoError(t, err)
-		assert.NotNil(t, uComedCustom)
-
-		uAmerenCustom, err := m.PreviewSite(ctx, types.Settings{
-			UtilityProvider: "ameren",
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{DollarsPerKWH: 0.05},
-			},
-		})
-		require.NoError(t, err)
-		assert.NotNil(t, uAmerenCustom)
 	})
 
 	t.Run("Site rebuilds SiteFees when ComEd rate options change", func(t *testing.T) {
@@ -582,6 +613,121 @@ func TestMap(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotSame(t, u1, u2)
+	})
+
+	t.Run("Unchanged Site lookups allocate zero bytes across all catalog rates", func(t *testing.T) {
+		m := Configured(nil)
+		utilities := m.ListUtilities()
+
+		rateCount := 0
+		for _, provider := range utilities {
+			for _, rate := range provider.Rates {
+				rateCount++
+				siteID := "site-alloc-" + provider.ID + "-" + rate.ID
+				settings := types.Settings{
+					UtilityProvider:    provider.ID,
+					UtilityRate:        rate.ID,
+					UtilityRateOptions: defaultUtilityRateOptions(rate.Options),
+				}
+
+				u1, err := m.Site(ctx, siteID, settings)
+				require.NoError(t, err, "initial Map.Site failed for %s/%s", provider.ID, rate.ID)
+				require.NotNil(t, u1)
+
+				allocs := testing.AllocsPerRun(10, func() {
+					u2, err := m.Site(ctx, siteID, settings)
+					if err != nil {
+						t.Fatalf("unchanged Map.Site failed for %s/%s: %v", provider.ID, rate.ID, err)
+					}
+					if u2 != u1 {
+						t.Fatalf("unchanged Map.Site returned different instance for %s/%s", provider.ID, rate.ID)
+					}
+				})
+				assert.Zero(t, allocs, "unchanged Map.Site should allocate 0 times for %s/%s", provider.ID, rate.ID)
+			}
+		}
+		assert.GreaterOrEqual(t, rateCount, 187, "expected all catalog rates to be covered")
+	})
+
+	t.Run("Site switches wrappers cleanly and logs rate change at Info level", func(t *testing.T) {
+		m := Configured(nil)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logCtx := log.With(ctx, logger)
+
+		uComed, err := m.Site(logCtx, "site-wrap", types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+		})
+		require.NoError(t, err)
+		sfComed, ok := uComed.(*SiteFees)
+		require.True(t, ok)
+		assert.Same(t, m.baseComEdHourly, sfComed.base)
+
+		// Switching provider from comed_besh to ameren_psp rebuilds SiteFees and logs at INFO
+		buf.Reset()
+		uAmerenPSP, err := m.Site(logCtx, "site-wrap", types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_psp",
+		})
+		require.NoError(t, err)
+		assert.NotSame(t, uComed, uAmerenPSP)
+		sfAmeren, ok := uAmerenPSP.(*SiteFees)
+		require.True(t, ok)
+		assert.Same(t, m.baseAmerenSmart, sfAmeren.base)
+		assert.Contains(t, buf.String(), `"msg":"site changed utility rate"`)
+		assert.Contains(t, buf.String(), `"level":"INFO"`)
+		assert.NotContains(t, buf.String(), `"level":"WARN"`)
+
+		// Switching ameren from SiteFees ameren_psp to TOU ameren_bgs builds genericTOU
+		uAmerenTOU, err := m.Site(logCtx, "site-wrap", types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_bgs",
+		})
+		require.NoError(t, err)
+		_, isTOU := uAmerenTOU.(*genericTOU)
+		assert.True(t, isTOU)
+	})
+
+	t.Run("ValidateSite validates candidate settings without mutating cached provider", func(t *testing.T) {
+		m := Configured(nil)
+		initialSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+			},
+		}
+		cached, err := m.Site(ctx, "site-validate", initialSettings)
+		require.NoError(t, err)
+
+		// Invalid candidate settings fail without mutating m.utilities
+		_, err = m.ValidateSite(ctx, "site-validate", types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "invalid_rate",
+		})
+		require.Error(t, err)
+		assert.Same(t, cached, m.utilities["site-validate"])
+
+		// Valid changed candidate settings build new instance without mutating m.utilities
+		nextSettings := types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_ev2",
+		}
+		candidate, err := m.ValidateSite(ctx, "site-validate", nextSettings)
+		require.NoError(t, err)
+		assert.NotSame(t, cached, candidate)
+		assert.Same(t, cached, m.utilities["site-validate"])
+
+		// Custom mock provider set via SetProvider is validated directly
+		mockP := &mockUtility{}
+		m.SetProvider("site-mock-validate", mockP)
+		validatedMock, err := m.ValidateSite(ctx, "site-mock-validate", types.Settings{
+			UtilityProvider: "mock",
+			UtilityRate:     "mock",
+		})
+		require.NoError(t, err)
+		assert.Same(t, mockP, validatedMock)
 	})
 }
 
@@ -843,5 +989,40 @@ func TestRatesCoverAllTime(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func BenchmarkMapSiteUnchanged(b *testing.B) {
+	ctx := context.Background()
+	rates := []struct {
+		provider string
+		rate     string
+	}{
+		{provider: "sdge", rate: "sdge_ev_tou_5"},
+		{provider: "sce", rate: "sce_tou_d_prime"},
+		{provider: "pg_e", rate: "pg_e_ev2"},
+		{provider: "duke_indiana", rate: "duke_indiana_rs_tou"},
+	}
+
+	for _, tc := range rates {
+		b.Run(tc.rate, func(b *testing.B) {
+			m := Configured(nil)
+			settings := types.Settings{
+				UtilityProvider: tc.provider,
+				UtilityRate:     tc.rate,
+			}
+			siteID := "bench-" + tc.rate
+			if _, err := m.Site(ctx, siteID, settings); err != nil {
+				b.Fatalf("initial Map.Site(%s) failed: %v", tc.rate, err)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := m.Site(ctx, siteID, settings); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

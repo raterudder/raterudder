@@ -71,45 +71,6 @@ func TestSiteFees(t *testing.T) {
 		})
 	})
 
-	t.Run("ApplySettings custom periods", func(t *testing.T) {
-		s := &SiteFees{}
-		periods := []types.UtilityFeesPeriod{
-			{
-				TimePeriod: types.TimePeriod{
-					Name:          "Custom Peak",
-					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-					DaysOfTheWeek: []time.Weekday{time.Monday},
-					SpecificDates: []string{"2026-07-04"},
-				},
-				Description:   "Custom Fee",
-				DollarsPerKWH: 0.05,
-			},
-		}
-		settings := types.Settings{
-			UtilityProvider: "comed",
-			UtilityRate:     "comed_besh",
-			UtilityRateOptions: types.UtilityRateOptions{
-				RateClass: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
-			},
-			UtilityFeesPeriods: periods,
-		}
-		err := s.ApplySettings(ctx, settings)
-		require.NoError(t, err)
-		assert.Equal(t, periods, s.periods)
-		assert.Equal(t, "comed_besh", s.Name())
-		assert.Equal(t, settings.UtilityRateOptions, s.options)
-
-		// Mutating caller slice or nested slices must not mutate SiteFees periods
-		periods[0].DollarsPerKWH = 0.99
-		periods[0].Hours[0].HourStart = 10
-		periods[0].DaysOfTheWeek[0] = time.Friday
-		periods[0].SpecificDates[0] = "2026-12-25"
-		assert.Equal(t, 0.05, s.periods[0].DollarsPerKWH)
-		assert.Equal(t, 16, s.periods[0].Hours[0].HourStart)
-		assert.Equal(t, time.Monday, s.periods[0].DaysOfTheWeek[0])
-		assert.Equal(t, "2026-07-04", s.periods[0].SpecificDates[0])
-	})
-
 	t.Run("settingsMatch compares rate name and options", func(t *testing.T) {
 		s := &SiteFees{}
 		baseSettings := types.Settings{
@@ -120,8 +81,14 @@ func TestSiteFees(t *testing.T) {
 				VariableDeliveryRate: false,
 			},
 		}
+		assert.False(t, s.settingsMatch(baseSettings), "unapplied SiteFees must not match")
+
 		require.NoError(t, s.ApplySettings(ctx, baseSettings))
 		assert.True(t, s.settingsMatch(baseSettings))
+
+		diffProvider := baseSettings
+		diffProvider.UtilityProvider = "ameren"
+		assert.False(t, s.settingsMatch(diffProvider))
 
 		diffOptions := baseSettings
 		diffOptions.UtilityRateOptions.VariableDeliveryRate = true
@@ -130,6 +97,16 @@ func TestSiteFees(t *testing.T) {
 		diffRate := baseSettings
 		diffRate.UtilityRate = "comed_bes"
 		assert.False(t, s.settingsMatch(diffRate))
+
+		allocs := testing.AllocsPerRun(10, func() {
+			if !s.settingsMatch(baseSettings) {
+				t.Fatal("expected settingsMatch to return true")
+			}
+			if err := s.ApplySettings(ctx, baseSettings); err != nil {
+				t.Fatalf("unexpected ApplySettings error: %v", err)
+			}
+		})
+		assert.Zero(t, allocs, "unchanged SiteFees settingsMatch and ApplySettings should allocate 0 times")
 	})
 
 	t.Run("GetPeriods excludes unnamed and separate generation or grid additional periods", func(t *testing.T) {

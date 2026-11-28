@@ -9,7 +9,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -314,15 +313,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(newSettings.MinBatterySOCPeriods) > 0 {
-		minSOC, err := s.validateAndCalculateMinBatterySOCPeriods(ctx, siteID, newSettings)
-		if err != nil {
-			writeJSONError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		newSettings.MinBatterySOC = minSOC
-	}
-
 	if newSettings.SolarBellCurveMultiplier < 0 {
 		writeJSONError(w, "solar bell curve multiplier cannot be negative", http.StatusBadRequest)
 		return
@@ -363,14 +353,23 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// do this early in case the utility options are invalid
 	var u utility.Utility
-	if newSettings.UtilityProvider != "" {
+	if newSettings.UtilityProvider != "" && s.utilities != nil {
 		var err error
-		u, err = s.utilities.Site(ctx, siteID, newSettings)
+		u, err = s.utilities.ValidateSite(ctx, siteID, newSettings)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get utility provider", slog.String("utilityProvider", newSettings.UtilityProvider), slog.Any("error", err))
 			writeJSONError(w, fmt.Sprintf("invalid utility provider settings: %v", err), http.StatusBadRequest)
 			return
 		}
+	}
+
+	if len(newSettings.MinBatterySOCPeriods) > 0 {
+		minSOC, err := s.validateAndCalculateMinBatterySOCPeriods(ctx, siteID, newSettings, u)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		newSettings.MinBatterySOC = minSOC
 	}
 
 	// Get existing credentials with migration to preserve other fields
@@ -599,8 +598,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// errors will happen earlier
 	if newSettings.UtilityProvider != "" && (existing.UtilityProvider != newSettings.UtilityProvider ||
 		existing.UtilityRate != newSettings.UtilityRate ||
-		existing.UtilityRateOptions != newSettings.UtilityRateOptions ||
-		!reflect.DeepEqual(existing.UtilityFeesPeriods, newSettings.UtilityFeesPeriods)) {
+		existing.UtilityRateOptions != newSettings.UtilityRateOptions) {
 		wg.Go(func() {
 			log.Ctx(ctx).InfoContext(
 				ctx,
@@ -1067,7 +1065,7 @@ func mergeUpdatedProviderCredentials(base, updated types.Credentials, essName st
 	return saved
 }
 
-func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, siteID string, newSettings types.Settings) (float64, error) {
+func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, siteID string, newSettings types.Settings, u utility.Utility) (float64, error) {
 	if len(newSettings.MinBatterySOCPeriods) == 0 {
 		return newSettings.MinBatterySOC, nil
 	}
@@ -1093,9 +1091,12 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 			}
 		}
 		if newSettings.UtilityProvider != "" && s.utilities != nil {
-			u, err := s.utilities.PreviewSite(ctx, newSettings)
-			if err != nil || u == nil {
-				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
+			if u == nil {
+				var err error
+				u, err = s.utilities.ValidateSite(ctx, siteID, newSettings)
+				if err != nil || u == nil {
+					return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
+				}
 			}
 			periods, err := u.GetPeriods(ctx)
 			if err != nil || len(periods) == 0 {

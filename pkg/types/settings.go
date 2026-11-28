@@ -26,10 +26,9 @@ type Settings struct {
 	Release string `json:"release"`
 
 	// Utility Provider
-	UtilityProvider    string              `json:"utilityProvider"`
-	UtilityRate        string              `json:"utilityRate"`
-	UtilityRateOptions UtilityRateOptions  `json:"utilityRateOptions"`
-	UtilityFeesPeriods []UtilityFeesPeriod `json:"utilityFeesPeriods,omitempty"`
+	UtilityProvider    string             `json:"utilityProvider"`
+	UtilityRate        string             `json:"utilityRate"`
+	UtilityRateOptions UtilityRateOptions `json:"utilityRateOptions"`
 
 	// ESS Provider
 	ESS string `json:"ess"`

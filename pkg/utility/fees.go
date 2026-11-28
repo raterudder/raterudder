@@ -2,7 +2,6 @@ package utility
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -11,29 +10,33 @@ import (
 
 // SiteComEd wraps BaseComEd to apply site-specific settings and fees.
 type SiteFees struct {
-	base    UtilityPrices
-	mu      sync.Mutex
-	siteID  string
-	periods []types.UtilityFeesPeriod
-	name    string
-	options types.UtilityRateOptions
-	vppInfo types.UtilityVPPInfo
+	base     UtilityPrices
+	mu       sync.RWMutex
+	siteID   string
+	provider string
+	applied  bool
+	periods  []types.UtilityFeesPeriod
+	name     string
+	options  types.UtilityRateOptions
+	vppInfo  types.UtilityVPPInfo
 }
 
 // Name returns the name of the utility rate
 func (s *SiteFees) Name() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.name
 }
 
 func (s *SiteFees) settingsMatch(settings types.Settings) bool {
-	s.mu.Lock()
+	s.mu.RLock()
+	applied := s.applied
+	provider := s.provider
 	name := s.name
 	options := s.options
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
-	if settings.UtilityRate != "" && name != settings.UtilityRate {
+	if !applied || provider != settings.UtilityProvider || name != settings.UtilityRate {
 		return false
 	}
 	if sm, ok := s.base.(settingsMatcher); ok {
@@ -42,60 +45,54 @@ func (s *SiteFees) settingsMatch(settings types.Settings) bool {
 	return options == settings.UtilityRateOptions
 }
 
-func cloneUtilityFeesPeriods(in []types.UtilityFeesPeriod) []types.UtilityFeesPeriod {
-	out := slices.Clone(in)
-	for i := range out {
-		out[i].Hours = slices.Clone(out[i].Hours)
-		out[i].DaysOfTheWeek = slices.Clone(out[i].DaysOfTheWeek)
-		out[i].SpecificDates = slices.Clone(out[i].SpecificDates)
-	}
-	return out
-}
-
 // ApplySettings implements the Utility interface
 func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	unchanged := s.applied &&
+		s.provider == settings.UtilityProvider &&
+		s.name == settings.UtilityRate &&
+		s.options == settings.UtilityRateOptions
+	s.mu.RUnlock()
+	if unchanged {
+		return nil
+	}
 
+	fees, err := getUtilityRateFees(settings.UtilityRate, settings.UtilityRateOptions)
+	if err != nil {
+		return err
+	}
 	vppInfo, err := getUtilityVPPInfo(settings.UtilityRate, settings.UtilityRateOptions)
 	if err != nil {
 		return err
 	}
 
-	var periods []types.UtilityFeesPeriod
-	if settings.UtilityFeesPeriods != nil {
-		periods = cloneUtilityFeesPeriods(settings.UtilityFeesPeriods)
-	} else {
-		// if they don't have any additional fees periods, we will need to find the
-		// default for their utility provider
-		fees, err := getUtilityRateFees(settings.UtilityRate, settings.UtilityRateOptions)
-		if err != nil {
-			return err
-		}
-		periods = fees
-	}
-	s.periods = periods
+	s.mu.Lock()
+	s.periods = fees
+	s.provider = settings.UtilityProvider
 	s.name = settings.UtilityRate
 	s.options = settings.UtilityRateOptions
 	s.vppInfo = vppInfo
+	s.applied = true
+	s.mu.Unlock()
 
 	return nil
 }
 
 // GetVPPInfo implements the Utility interface.
 func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.vppInfo, nil
 }
 
 // GetPeriods implements the Utility interface, returning named import TOU periods when they cover all 24 hours of the day.
 func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	periods := s.periods
+	s.mu.RUnlock()
 
 	var res []types.TimePeriod
-	for _, p := range s.periods {
+	for _, p := range periods {
 		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional && p.Name != "" {
 			res = append(res, p.TimePeriod)
 		}
@@ -161,14 +158,15 @@ func namedPeriodsCoverDay(periods []types.TimePeriod, now time.Time) bool {
 }
 
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	periods := s.periods
+	s.mu.RUnlock()
 	// TODO: we might need to split out the price into multiple prices if the price
 	// spans multiple different periods but for now we ignore that
 	// we don't end up checking the price's end time since we assume that as long
 	// as the periods start is after the price's start then it applies to that price
 	// see the TODO above to understand when we might need to care about end times
-	return types.ApplyUtilityFeesPeriods(p, s.periods)
+	return types.ApplyUtilityFeesPeriods(p, periods)
 }
 
 func (s *SiteFees) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {

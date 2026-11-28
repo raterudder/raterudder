@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -4468,6 +4469,193 @@ func TestHandleUpdateSettings(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("Failed POST Settings Preserves Cached Site Utility Provider", func(t *testing.T) {
+		mockS := &mockStorage{}
+		initialSettings := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass: utility.ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+			},
+			MinBatterySOC:            20,
+			SolarTrendRatioMax:       3,
+			SolarBellCurveMultiplier: 1,
+		}
+
+		uMap := utility.Configured(mockS)
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logCtx := log.With(context.Background(), logger)
+
+		cached, err := uMap.Site(logCtx, "site-preserve-cache", initialSettings)
+		require.NoError(t, err)
+
+		srv := &Server{
+			storage:    mockS,
+			utilities:  uMap,
+			bypassAuth: true,
+		}
+
+		postSettings := func(candidate types.Settings) int {
+			bodyBytes, err := json.Marshal(candidate)
+			require.NoError(t, err)
+			reqCtx := context.WithValue(logCtx, siteIDContextKey, "site-preserve-cache")
+			reqCtx = context.WithValue(reqCtx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(reqCtx)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSettings(w, req)
+			return w.Result().StatusCode
+		}
+
+		// 1. Invalid candidate utility rate fails with 400 and preserves cached provider
+		invalidRate := initialSettings
+		invalidRate.UtilityProvider = "pg_e"
+		invalidRate.UtilityRate = "unknown_rate"
+		assert.Equal(t, http.StatusBadRequest, postSettings(invalidRate))
+
+		// 2. Valid candidate utility rate but incomplete named MinBatterySOCPeriods fails with 400 and preserves cached provider
+		missingPeriod := initialSettings
+		missingPeriod.UtilityProvider = "pg_e"
+		missingPeriod.UtilityRate = "pg_e_e_tou_c"
+		missingPeriod.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50},
+		}
+		assert.Equal(t, http.StatusBadRequest, postSettings(missingPeriod))
+
+		// 3. Valid candidate utility rate where SetSettings fails with 500 preserves cached provider
+		mockS.On("GetSettings", mock.Anything, "site-preserve-cache").Return(initialSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-preserve-cache").Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Maybe()
+		mockS.On("UpsertPrices", mock.Anything, "site-preserve-cache", mock.Anything, types.CurrentPriceHistoryVersion).Return(nil).Maybe()
+		mockS.On("SetSettings", mock.Anything, "site-preserve-cache", mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, errors.New("firestore unavailable")).Once()
+
+		saveFail := initialSettings
+		saveFail.UtilityProvider = "pg_e"
+		saveFail.UtilityRate = "pg_e_ev2"
+		assert.Equal(t, http.StatusInternalServerError, postSettings(saveFail))
+
+		logBuf.Reset()
+		after, err := uMap.Site(logCtx, "site-preserve-cache", initialSettings)
+		require.NoError(t, err)
+		assert.Same(t, cached, after)
+		assert.NotContains(t, logBuf.String(), "site changed utility rate")
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Named MinBatterySOCPeriods Update Validates Tariffs Once", func(t *testing.T) {
+		t.Run("CustomMockProviderValidatedOnce", func(t *testing.T) {
+			mockS := &mockStorage{}
+			existing := types.Settings{
+				UtilityProvider:          "mock",
+				UtilityRate:              "mock",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+			}
+			mockS.On("GetSettings", mock.Anything, "site-named-once").Return(existing, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			mockS.On("SetSettings", mock.Anything, "site-named-once", mock.MatchedBy(func(saved types.Settings) bool {
+				return saved.MinBatterySOC == 15 && len(saved.MinBatterySOCPeriods) == 2
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			mockU := &mockUtility{}
+			mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
+			mockU.On("GetPeriods", mock.Anything).Return([]types.TimePeriod{
+				{Name: "On-Peak", Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}}},
+				{Name: "Off-Peak", Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 16}, {HourStart: 21, HourEnd: 24}}},
+			}, nil).Once()
+
+			uMap := utility.NewMap(mockS)
+			uMap.SetProvider("site-named-once", mockU)
+
+			srv := &Server{
+				storage:    mockS,
+				utilities:  uMap,
+				bypassAuth: true,
+			}
+
+			updated := existing
+			updated.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 40},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 15},
+			}
+			bodyBytes, err := json.Marshal(updated)
+			require.NoError(t, err)
+
+			reqCtx := context.WithValue(context.Background(), siteIDContextKey, "site-named-once")
+			reqCtx = context.WithValue(reqCtx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(reqCtx)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSettings(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode, w.Body.String())
+			mockS.AssertExpectations(t)
+			mockU.AssertExpectations(t)
+		})
+
+		t.Run("ConfiguredUtilityRebuiltOnNextSiteLookup", func(t *testing.T) {
+			mockS := &mockStorage{}
+			existing := types.Settings{
+				UtilityProvider:          "comed",
+				UtilityRate:              "comed_besh",
+				MinBatterySOC:            20,
+				SolarTrendRatioMax:       3,
+				SolarBellCurveMultiplier: 1,
+			}
+			var savedSettings types.Settings
+			mockS.On("GetSettings", mock.Anything, "site-rebuild-tou").Return(existing, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+			mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-rebuild-tou").Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+			mockS.On("UpsertPrices", mock.Anything, "site-rebuild-tou", mock.Anything, types.CurrentPriceHistoryVersion).Return(nil).Maybe()
+			mockS.On("SetSettings", mock.Anything, "site-rebuild-tou", mock.Anything, types.CurrentSettingsVersion, mock.Anything).Run(func(args mock.Arguments) {
+				savedSettings = args.Get(2).(types.Settings)
+			}).Return(time.Time{}, nil).Once()
+
+			uMap := utility.Configured(mockS)
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			logCtx := log.With(context.Background(), logger)
+
+			prevU, err := uMap.Site(logCtx, "site-rebuild-tou", existing)
+			require.NoError(t, err)
+
+			srv := &Server{
+				storage:    mockS,
+				utilities:  uMap,
+				bypassAuth: true,
+			}
+
+			candidate := existing
+			candidate.UtilityProvider = "ameren"
+			candidate.UtilityRate = "ameren_mo_overnight"
+			candidate.UtilityRateOptions = types.UtilityRateOptions{PeakPeriodOption: "option_b"}
+			candidate.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 35},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20},
+				{UtilityPeriodName: "Anytime", MinBatterySOC: 15},
+			}
+			bodyBytes, err := json.Marshal(candidate)
+			require.NoError(t, err)
+
+			logBuf.Reset()
+			reqCtx := context.WithValue(logCtx, siteIDContextKey, "site-rebuild-tou")
+			reqCtx = context.WithValue(reqCtx, userContextKey, types.User{ID: "admin", Email: "admin@example.com", Admin: true})
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bodyBytes)).WithContext(reqCtx)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSettings(w, req)
+
+			require.Equal(t, http.StatusOK, w.Result().StatusCode, w.Body.String())
+			assert.Equal(t, 15.0, savedSettings.MinBatterySOC)
+			assert.NotContains(t, logBuf.String(), "site changed utility rate")
+
+			logBuf.Reset()
+			nextU, err := uMap.Site(logCtx, "site-rebuild-tou", savedSettings)
+			require.NoError(t, err)
+			assert.NotSame(t, prevU, nextU)
+			assert.Contains(t, logBuf.String(), `"msg":"site changed utility rate"`)
+			assert.Contains(t, logBuf.String(), `"level":"INFO"`)
+			assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
+			mockS.AssertExpectations(t)
+		})
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {
@@ -5102,7 +5290,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 
 	t.Run("EmptyPeriodsReturnsDefaultSOC", func(t *testing.T) {
 		s := types.Settings{MinBatterySOC: 25.0}
-		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 25.0, minSOC)
 	})
@@ -5121,7 +5309,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 20.0, minSOC)
 	})
@@ -5135,7 +5323,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "minimum battery SOC period value must be between 0 and 100")
 	})
 
@@ -5148,7 +5336,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "minimum battery SOC period value must be between 0 and 100")
 	})
 
@@ -5161,7 +5349,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "reserve SOC period start and end minutes must be 0")
 	})
 
@@ -5174,7 +5362,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "reserve SOC period start and end minutes must be 0")
 	})
 
@@ -5187,7 +5375,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "reserve SOC period must specify hours")
 	})
 
@@ -5200,7 +5388,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "reserve SOC periods must cover all 24 hours of the day (hour 12 is not covered)")
 	})
 
@@ -5217,7 +5405,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "reserve SOC periods cannot overlap (hour 12 has multiple periods defined)")
 	})
 
@@ -5231,7 +5419,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
 			},
 		}
-		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "configured utility has no TOU rate periods for rate-based minimum SOC")
 	})
 
@@ -5245,30 +5433,21 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
 			},
 		}
-		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "missing minimum battery SOC for utility period name:")
 	})
 
-	t.Run("RateBasedMinSOC_PartialDaySiteFees_ReturnsError", func(t *testing.T) {
+	t.Run("RateBasedMinSOC_SiteFeesNoPeriods_ReturnsError", func(t *testing.T) {
 		mockUMap := utility.Configured(nil)
 		sTest := &Server{utilities: mockUMap}
 		s := types.Settings{
 			UtilityProvider: "comed",
 			UtilityRate:     "comed_besh",
-			UtilityFeesPeriods: []types.UtilityFeesPeriod{
-				{
-					TimePeriod: types.TimePeriod{
-						Name:  "Peak",
-						Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-					},
-					DollarsPerKWH: 0.15,
-				},
-			},
 			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
 				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
 			},
 		}
-		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "configured utility has no TOU rate periods for rate-based minimum SOC")
 	})
 
@@ -5283,7 +5462,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}}, MinBatterySOC: 20.0},
 			},
 		}
-		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		assert.ErrorContains(t, err, "all reserve SOC periods must specify a utility period name")
 	})
 
@@ -5305,7 +5484,7 @@ func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
 				{UtilityPeriodName: "Anytime", MinBatterySOC: 20.0},
 			},
 		}
-		minSOC, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		minSOC, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 15.0, minSOC)
 	})

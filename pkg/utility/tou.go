@@ -25,13 +25,15 @@ import (
 
 // genericTOU implements a generic Time-Of-Use utility provider using hardcoded rates.
 type genericTOU struct {
-	mu      sync.Mutex
-	siteID  string
-	periods []types.UtilityFeesPeriod
-	name    string
-	options types.UtilityRateOptions
-	vppInfo types.UtilityVPPInfo
-	nowFunc func() time.Time
+	mu       sync.RWMutex
+	siteID   string
+	provider string
+	applied  bool
+	periods  []types.UtilityFeesPeriod
+	name     string
+	options  types.UtilityRateOptions
+	vppInfo  types.UtilityVPPInfo
+	nowFunc  func() time.Time
 }
 
 func (t *genericTOU) now() time.Time {
@@ -42,21 +44,25 @@ func (t *genericTOU) now() time.Time {
 }
 
 func (t *genericTOU) Name() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.name
 }
 
 func (t *genericTOU) settingsMatch(settings types.Settings) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if settings.UtilityRate != "" && t.name != settings.UtilityRate {
-		return false
-	}
-	return t.options == settings.UtilityRateOptions
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.applied &&
+		t.provider == settings.UtilityProvider &&
+		t.name == settings.UtilityRate &&
+		t.options == settings.UtilityRateOptions
 }
 
 func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if t.settingsMatch(settings) {
+		return nil
+	}
+
 	fees, err := getUtilityRateFees(settings.UtilityRate, settings.UtilityRateOptions)
 	if err != nil {
 		return err
@@ -65,25 +71,31 @@ func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings)
 	if err != nil {
 		return err
 	}
+
+	t.mu.Lock()
 	t.periods = fees
+	t.provider = settings.UtilityProvider
 	t.name = settings.UtilityRate
 	t.options = settings.UtilityRateOptions
 	t.vppInfo = vppInfo
+	t.applied = true
+	t.mu.Unlock()
 	return nil
 }
 
 func (t *genericTOU) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.vppInfo, nil
 }
 
 func (t *genericTOU) GetPeriods(ctx context.Context) ([]types.TimePeriod, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
+	periods := t.periods
+	t.mu.RUnlock()
 
 	var res []types.TimePeriod
-	for _, p := range t.periods {
+	for _, p := range periods {
 		if !p.SeparateGenerationCredit && !p.SeparateBatteryGenerationCredit && !p.GridAdditional && p.Name != "" {
 			res = append(res, p.TimePeriod)
 		}
@@ -92,9 +104,9 @@ func (t *genericTOU) GetPeriods(ctx context.Context) ([]types.TimePeriod, error)
 }
 
 func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
-	t.mu.Lock()
+	t.mu.RLock()
 	periods := t.periods
-	t.mu.Unlock()
+	t.mu.RUnlock()
 
 	// check if all of the periods have the same timezone and if they do then
 	// apply that timezone to the type timestamps
