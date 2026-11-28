@@ -237,12 +237,12 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 	ctx, cancel := withDefaultTimeout(ctx)
 	defer cancel()
 
-	const maxRetries = 8
-	backoff := 100 * time.Millisecond
-	const maxBackoff = time.Second
+	const maxAttempts = 15
+	backoff := 50 * time.Millisecond
+	const maxBackoff = 500 * time.Millisecond
 
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		doc, err := f.getDocWithRetry(ctx, docRef)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
@@ -274,7 +274,7 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 		}
 
 		lastErr = err
-		if (isOptimisticRetryableErr(err) || writeTimedOut) && attempt < maxRetries-1 {
+		if (isOptimisticRetryableErr(err) || writeTimedOut) && attempt < maxAttempts-1 {
 			log.Ctx(ctx).WarnContext(ctx, "firestore optimistic write conflict or transient error, retrying",
 				slog.String("path", docRef.Path),
 				slog.Int("attempt", attempt+1),
