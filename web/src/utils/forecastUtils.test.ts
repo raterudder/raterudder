@@ -91,7 +91,7 @@ describe('classifyPlanPeriod', () => {
         const result = classifyPlanPeriod(period);
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
-        expect(result.color).toBe('#38bdf8');
+        expect(result.color).toBe('#3b82f6');
     });
 
     it('classifies rising SOC during self-consumption as Solar Charge', () => {
@@ -104,7 +104,7 @@ describe('classifyPlanPeriod', () => {
         const result = classifyPlanPeriod(period);
         expect(result.key).toBe('solarCharge');
         expect(result.label).toBe('Solar Charge');
-        expect(result.color).toBe('#10b981');
+        expect(result.color).toBe('#22c55e');
     });
 
     it('classifies falling SOC outside of peak as Powering Home', () => {
@@ -117,7 +117,7 @@ describe('classifyPlanPeriod', () => {
         const result = classifyPlanPeriod(period);
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
-        expect(result.color).toBe('#38bdf8');
+        expect(result.color).toBe('#3b82f6');
     });
 
     it('classifies period at reserve limit as Standby', () => {
@@ -170,7 +170,7 @@ describe('classifyPlanPeriod', () => {
         const result = classifyPlanPeriod(period);
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
-        expect(result.color).toBe('#38bdf8');
+        expect(result.color).toBe('#3b82f6');
     });
 
     it('keeps Standby period with falling SOC (e.g. battery heater warmup) as Standby', () => {

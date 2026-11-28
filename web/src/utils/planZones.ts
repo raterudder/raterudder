@@ -5,8 +5,8 @@ export interface ZoneConfig {
 }
 
 export const ALL_ZONES: ZoneConfig[] = [
-    { key: 'solarCharge', label: 'Solar Charge', color: '#10b981' },
-    { key: 'poweringHome', label: 'Powering Home', color: '#38bdf8' },
+    { key: 'solarCharge', label: 'Solar Charge', color: '#22c55e' },
+    { key: 'poweringHome', label: 'Powering Home', color: '#3b82f6' },
     { key: 'solarExport', label: 'Solar Export', color: '#f97316' },
     { key: 'standby', label: 'Standby', color: '#64748b' },
     { key: 'gridCharge', label: 'Grid Charge', color: '#8b5cf6' },

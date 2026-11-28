@@ -48,7 +48,7 @@ const planCharts: ChartConfig[] = [
     {
         title: 'Battery Schedule & SOC (%)',
         dataKey: 'plannedSOC',
-        color: '#38bdf8',
+        color: '#94a3b8',
         gradientId: 'plannedBatteryGrad',
         unit: '%',
         height: 200,

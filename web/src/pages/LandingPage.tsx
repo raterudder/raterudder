@@ -75,7 +75,7 @@ const phases = [
         priceColor: "#d97706",
         socChange: "30% → 95% (Free Solar)",
         manualSocChange: "Forced $0.15/kWh Grid Buy",
-        color: chartZoneColor('solarCharge', '#10b981'),
+        color: chartZoneColor('solarCharge', '#22c55e'),
         x1: "8 AM",
         x2: "12 PM",
         icon: "☀️"
@@ -107,7 +107,7 @@ const phases = [
         priceColor: "#dc2626",
         socChange: "60% → 20% (Zero Grid Buy)",
         manualSocChange: "Caps Out Early at 20% Floor",
-        color: chartZoneColor('poweringHome', '#38bdf8'),
+        color: chartZoneColor('poweringHome', '#3b82f6'),
         x1: "4 PM",
         x2: "9 PM",
         icon: "🌙"

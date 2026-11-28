@@ -62,35 +62,35 @@
 }
 
 .legend-item.leg-solarCharge .legend-dot {
-    background: #10b981;
+    background: var(--mode-solar-charge);
 }
 
 .legend-item.leg-load .legend-dot {
-    background: #38bdf8;
+    background: var(--mode-powering-home);
 }
 
 .legend-item.leg-solarExport .legend-dot {
-    background: #f97316;
+    background: var(--mode-solar-export);
 }
 
 .legend-item.leg-export .legend-dot {
-    background: #f59e0b;
+    background: var(--mode-grid-export);
 }
 
 .legend-item.leg-charge .legend-dot {
-    background: #8b5cf6;
+    background: var(--mode-grid-charge);
 }
 
 .legend-item.leg-standby .legend-dot {
-    background: #64748b;
+    background: var(--mode-standby);
 }
 
 .legend-item.leg-vpp .legend-dot {
-    background: #3b82f6;
+    background: var(--mode-vpp);
 }
 
 .legend-item.leg-fault .legend-dot {
-    background: #ef4444;
+    background: var(--mode-fault);
 }
 
 .day-summary-strip-container {
@@ -128,35 +128,35 @@
 }
 
 .day-summary-segment.seg-standby {
-    background: #64748b;
+    background: var(--mode-standby);
 }
 
 .day-summary-segment.seg-charge {
-    background: #8b5cf6;
+    background: var(--mode-grid-charge);
 }
 
 .day-summary-segment.seg-solarCharge {
-    background: #10b981;
+    background: var(--mode-solar-charge);
 }
 
 .day-summary-segment.seg-load {
-    background: #38bdf8;
+    background: var(--mode-powering-home);
 }
 
 .day-summary-segment.seg-solarExport {
-    background: #f97316;
+    background: var(--mode-solar-export);
 }
 
 .day-summary-segment.seg-export {
-    background: #f59e0b;
+    background: var(--mode-grid-export);
 }
 
 .day-summary-segment.seg-vpp {
-    background: #3b82f6;
+    background: var(--mode-vpp);
 }
 
 .day-summary-segment.seg-fault {
-    background: #ef4444;
+    background: var(--mode-fault);
 }
 
 .day-summary-axis {
@@ -193,42 +193,42 @@
 }
 
 .day-summary-beat.beat-charge .beat-dot {
-    background: #8b5cf6;
-    box-shadow: 0 0 8px rgba(139, 92, 246, 0.7);
+    background: var(--mode-grid-charge);
+    box-shadow: 0 0 8px rgba(var(--mode-grid-charge-rgb), 0.7);
 }
 
 .day-summary-beat.beat-solarCharge .beat-dot {
-    background: #10b981;
-    box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+    background: var(--mode-solar-charge);
+    box-shadow: 0 0 8px rgba(var(--mode-solar-charge-rgb), 0.7);
 }
 
 .day-summary-beat.beat-load .beat-dot {
-    background: #38bdf8;
-    box-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+    background: var(--mode-powering-home);
+    box-shadow: 0 0 8px rgba(var(--mode-powering-home-rgb), 0.7);
 }
 
 .day-summary-beat.beat-solarExport .beat-dot {
-    background: #f97316;
-    box-shadow: 0 0 8px rgba(249, 115, 22, 0.7);
+    background: var(--mode-solar-export);
+    box-shadow: 0 0 8px rgba(var(--mode-solar-export-rgb), 0.7);
 }
 
 .day-summary-beat.beat-export .beat-dot {
-    background: #f59e0b;
-    box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+    background: var(--mode-grid-export);
+    box-shadow: 0 0 8px rgba(var(--mode-grid-export-rgb), 0.7);
 }
 
 .day-summary-beat.beat-vpp .beat-dot {
-    background: #3b82f6;
-    box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+    background: var(--mode-vpp);
+    box-shadow: 0 0 8px rgba(var(--mode-vpp-rgb), 0.7);
 }
 
 .day-summary-beat.beat-fault .beat-dot {
-    background: #ef4444;
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+    background: var(--mode-fault);
+    box-shadow: 0 0 8px rgba(var(--mode-fault-rgb), 0.7);
 }
 
 .day-summary-beat.beat-standby .beat-dot {
-    background: #64748b;
+    background: var(--mode-standby);
 }
 
 .beat-body {
@@ -380,43 +380,43 @@
 
 /* Subtle top-edge ambient illumination instead of cliché left border */
 .timeline-item.mode-charge_any .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(139, 92, 246, 0.14), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(139, 92, 246, 0.48);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-grid-charge-rgb), 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-grid-charge-rgb), 0.48);
 }
 
 .timeline-item.mode-charge_solar .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(16, 185, 129, 0.13), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(16, 185, 129, 0.45);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-solar-charge-rgb), 0.13), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-solar-charge-rgb), 0.45);
 }
 
 .timeline-item.mode-load .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(56, 189, 248, 0.13), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(56, 189, 248, 0.45);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-powering-home-rgb), 0.13), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-powering-home-rgb), 0.45);
 }
 
 .timeline-item.mode-standby .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(100, 116, 139, 0.12), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(100, 116, 139, 0.38);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-standby-rgb), 0.12), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-standby-rgb), 0.38);
 }
 
 .timeline-item.mode-export .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(245, 158, 11, 0.14), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(245, 158, 11, 0.48);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-grid-export-rgb), 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-grid-export-rgb), 0.48);
 }
 
 .timeline-item.mode-solar_export .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(249, 115, 22, 0.14), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(249, 115, 22, 0.48);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-solar-export-rgb), 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-solar-export-rgb), 0.48);
 }
 
 .timeline-item.mode-vpp .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(59, 130, 246, 0.14), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(59, 130, 246, 0.48);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-vpp-rgb), 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-vpp-rgb), 0.48);
 }
 
 .timeline-item.mode-fault .timeline-content {
-    background: radial-gradient(120% 70px at 12% 0%, rgba(239, 68, 68, 0.14), transparent 70%), var(--surface-container-low);
-    border-top-color: rgba(239, 68, 68, 0.48);
+    background: radial-gradient(120% 70px at 12% 0%, rgba(var(--mode-fault-rgb), 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(var(--mode-fault-rgb), 0.48);
 }
 
 .timeline-item:hover .timeline-content {
@@ -447,41 +447,41 @@
 }
 
 .timeline-item.mode-charge_any .timeline-status-dot {
-    background: #8b5cf6;
-    box-shadow: 0 0 8px rgba(139, 92, 246, 0.7);
+    background: var(--mode-grid-charge);
+    box-shadow: 0 0 8px rgba(var(--mode-grid-charge-rgb), 0.7);
 }
 
 .timeline-item.mode-charge_solar .timeline-status-dot {
-    background: #10b981;
-    box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+    background: var(--mode-solar-charge);
+    box-shadow: 0 0 8px rgba(var(--mode-solar-charge-rgb), 0.7);
 }
 
 .timeline-item.mode-load .timeline-status-dot {
-    background: #38bdf8;
-    box-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+    background: var(--mode-powering-home);
+    box-shadow: 0 0 8px rgba(var(--mode-powering-home-rgb), 0.7);
 }
 
 .timeline-item.mode-standby .timeline-status-dot {
-    background: #64748b;
+    background: var(--mode-standby);
 }
 
 .timeline-item.mode-export .timeline-status-dot {
-    background: #f59e0b;
-    box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+    background: var(--mode-grid-export);
+    box-shadow: 0 0 8px rgba(var(--mode-grid-export-rgb), 0.7);
 }
 
 .timeline-item.mode-solar_export .timeline-status-dot {
-    background: #f97316;
-    box-shadow: 0 0 8px rgba(249, 115, 22, 0.7);
+    background: var(--mode-solar-export);
+    box-shadow: 0 0 8px rgba(var(--mode-solar-export-rgb), 0.7);
 }
 
 .timeline-item.mode-vpp .timeline-status-dot {
-    background: #3b82f6;
-    box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+    background: var(--mode-vpp);
+    box-shadow: 0 0 8px rgba(var(--mode-vpp-rgb), 0.7);
 }
 
 .timeline-item.mode-fault .timeline-status-dot {
-    background: #ef4444;
+    background: var(--mode-fault);
     box-shadow: 0 0 8px var(--danger);
 }
 
