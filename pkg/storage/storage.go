@@ -11,13 +11,18 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
+const (
+	MaxUserPushSubscriptions = 25
+)
+
 var (
-	ErrUserNotFound          = errors.New("user not found")
-	ErrSiteNotFound          = errors.New("site not found")
-	ErrAppNotFound           = errors.New("app not found")
-	ErrAppConflict           = errors.New("app conflict: cannot overwrite")
-	ErrSettingsConflict      = errors.New("settings conflict: cannot overwrite")
-	ErrFeatureConfigConflict = errors.New("feature config conflict: cannot overwrite")
+	ErrUserNotFound                 = errors.New("user not found")
+	ErrSiteNotFound                 = errors.New("site not found")
+	ErrAppNotFound                  = errors.New("app not found")
+	ErrAppConflict                  = errors.New("app conflict: cannot overwrite")
+	ErrSettingsConflict             = errors.New("settings conflict: cannot overwrite")
+	ErrFeatureConfigConflict        = errors.New("feature config conflict: cannot overwrite")
+	ErrMaxPushSubscriptionsExceeded = errors.New("maximum number of push subscriptions exceeded")
 )
 
 // Database defines the interface for persisting data and retrieving settings.

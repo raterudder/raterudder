@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +20,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -1033,6 +1037,181 @@ func TestHandleSubscribe(t *testing.T) {
 
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("OverwritesClientIDTruncatesUserAgentAndValidatesMetadata", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		victimEndpoint := "https://fcm.googleapis.com/fcm/send/victim-sub"
+		victimHash := sha256.Sum256([]byte(victimEndpoint))
+		victimPrevID := hex.EncodeToString(victimHash[:])
+
+		attackerEndpoint := "https://fcm.googleapis.com/fcm/send/attacker-sub"
+		attackerHash := sha256.Sum256([]byte(attackerEndpoint))
+		expectedServerID := hex.EncodeToString(attackerHash[:])
+
+		// 510 ASCII bytes + 3-byte '€' split across 512-byte boundary -> truncated cleanly to 510 valid UTF-8 bytes
+		oversizedUA := strings.Repeat("a", 510) + "€" + strings.Repeat("b", 100)
+
+		var storedSub types.PushSubscription
+		mockS.On("AddUserPushSubscription", mock.Anything, "fake", mock.MatchedBy(func(sub types.PushSubscription) bool {
+			storedSub = sub
+			return true
+		})).Return(nil).Once()
+
+		subReq := subscribeRequest{
+			Subscription: types.PushSubscription{
+				ID:        victimPrevID,
+				Endpoint:  attackerEndpoint,
+				Keys:      types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: "fake-auth"},
+				UserAgent: oversizedUA,
+				AppType:   types.PushSubscriptionAppTypeBrowser,
+			},
+		}
+		body, err := json.Marshal(subReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, expectedServerID, storedSub.ID)
+		assert.NotEqual(t, victimPrevID, storedSub.ID)
+		assert.LessOrEqual(t, len(storedSub.UserAgent), maxPushUserAgentBytes)
+		assert.Equal(t, 510, len(storedSub.UserAgent))
+		assert.True(t, utf8.ValidString(storedSub.UserAgent))
+
+		assertInvalidMeta := func(sub types.PushSubscription) {
+			t.Helper()
+			raw, mErr := json.Marshal(subscribeRequest{Subscription: sub})
+			require.NoError(t, mErr)
+			badReq := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(raw))
+			badRec := httptest.NewRecorder()
+			handler.ServeHTTP(badRec, badReq)
+			assert.Equal(t, http.StatusBadRequest, badRec.Code)
+		}
+
+		assertInvalidMeta(types.PushSubscription{
+			Endpoint: attackerEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: "fake-auth"},
+			AppType:  "desktop-electron",
+		})
+		assertInvalidMeta(types.PushSubscription{
+			Endpoint: attackerEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: strings.Repeat("a", maxPushP256DHLength+1), Auth: "fake-auth"},
+		})
+		assertInvalidMeta(types.PushSubscription{
+			Endpoint: attackerEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "bad key with spaces!", Auth: "fake-auth"},
+		})
+		assertInvalidMeta(types.PushSubscription{
+			Endpoint: attackerEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: strings.Repeat("a", maxPushAuthLength+1)},
+		})
+		assertInvalidMeta(types.PushSubscription{
+			Endpoint: attackerEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: "bad\nauth"},
+		})
+
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("EnforcesMaxUserPushSubscriptionsAndAllowsResubscribe", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
+
+		privB64, _ := generateTestVAPIDKeys(t)
+		privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
+		require.NoError(t, err)
+
+		now := time.Date(2026, 9, 4, 7, 10, 0, 0, time.UTC)
+		srv := &Server{
+			storage:              mockS,
+			vapidKey:             privKey,
+			vapidPublicKey:       pubKey,
+			vapidSubject:         "mailto:support@raterudder.com",
+			sessionEncryptionKey: "FAKE_SESSION_KEY_0123456789ABCDE",
+			generalRateLimit:     rate.Every(time.Minute / 30),
+			generalBurst:         30,
+			sensitiveRateLimit:   rate.Every(time.Minute / 10),
+			sensitiveBurst:       10,
+			nowFunc:              func() time.Time { return now },
+		}
+		handler := srv.setupHandler()
+
+		sessionToken, err := srv.createSessionToken("user-cap", "usercap@example.com", "fake-sec-cap", time.Hour)
+		require.NoError(t, err)
+
+		maxedSubs := make([]types.PushSubscription, maxUserPushSubscriptions)
+		for i := range maxedSubs {
+			ep := fmt.Sprintf("https://fcm.googleapis.com/fcm/send/existing-%d", i)
+			h := sha256.Sum256([]byte(ep))
+			maxedSubs[i] = types.PushSubscription{
+				ID:       hex.EncodeToString(h[:]),
+				Endpoint: ep,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: "fake-auth"},
+			}
+		}
+
+		mockS.On("GetUser", mock.Anything, "user-cap").Return(types.User{
+			ID:            "user-cap",
+			Email:         "usercap@example.com",
+			SessionSecret: "fake-sec-cap",
+			Subscriptions: maxedSubs,
+		}, nil).Twice()
+
+		// 1. Distinct endpoint past cap -> HTTP 400 without hitting AddUserPushSubscription
+		newSubBody, err := json.Marshal(subscribeRequest{
+			Subscription: types.PushSubscription{
+				Endpoint: "https://fcm.googleapis.com/fcm/send/distinct-overflow",
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh", Auth: "fake-auth"},
+			},
+		})
+		require.NoError(t, err)
+		reqOverflow := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(newSubBody))
+		reqOverflow.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		recOverflow := httptest.NewRecorder()
+		handler.ServeHTTP(recOverflow, reqOverflow)
+		assert.Equal(t, http.StatusBadRequest, recOverflow.Code)
+		assert.Contains(t, recOverflow.Body.String(), "maximum number of push subscriptions reached")
+
+		// 2. Re-subscribing an existing endpoint at cap -> HTTP 200
+		mockS.On("AddUserPushSubscription", mock.Anything, "user-cap", mock.MatchedBy(func(sub types.PushSubscription) bool {
+			return sub.Endpoint == maxedSubs[0].Endpoint
+		})).Return(nil).Once()
+
+		resubBody, err := json.Marshal(subscribeRequest{
+			Subscription: types.PushSubscription{
+				Endpoint: maxedSubs[0].Endpoint,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-p256dh-updated", Auth: "fake-auth-updated"},
+			},
+		})
+		require.NoError(t, err)
+		reqResub := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(resubBody))
+		reqResub.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		recResub := httptest.NewRecorder()
+		handler.ServeHTTP(recResub, reqResub)
+		assert.Equal(t, http.StatusOK, recResub.Code)
+
+		// 3. Concurrent race returning storage.ErrMaxPushSubscriptionsExceeded -> HTTP 400
+		mockS.On("GetUser", mock.Anything, "user-cap").Return(types.User{
+			ID:            "user-cap",
+			Email:         "usercap@example.com",
+			SessionSecret: "fake-sec-cap",
+			Subscriptions: maxedSubs[:maxUserPushSubscriptions-1],
+		}, nil).Once()
+		mockS.On("AddUserPushSubscription", mock.Anything, "user-cap", mock.Anything).Return(storage.ErrMaxPushSubscriptionsExceeded).Once()
+
+		reqRace := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(newSubBody))
+		reqRace.AddCookie(&http.Cookie{Name: sessionTokenCookie, Value: sessionToken})
+		recRace := httptest.NewRecorder()
+		handler.ServeHTTP(recRace, reqRace)
+		assert.Equal(t, http.StatusBadRequest, recRace.Code)
+		assert.Contains(t, recRace.Body.String(), "maximum number of push subscriptions reached")
+
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleUnsubscribe(t *testing.T) {
@@ -1324,6 +1503,136 @@ func TestHandleReplaceSubscription(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("OverwritesClientIDTruncatesUserAgentAndValidatesMetadata", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		prevEndpoint := "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint"
+		prevAuth := "fake-prev-auth"
+		newEndpoint := "https://updates.push.services.mozilla.com/wpush/v2/new-endpoint"
+		newHash := sha256.Sum256([]byte(newEndpoint))
+		expectedNewID := hex.EncodeToString(newHash[:])
+
+		var captured *types.PushSubscription
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, prevEndpoint, prevAuth, mock.MatchedBy(func(sub *types.PushSubscription) bool {
+			captured = sub
+			return sub != nil
+		})).Return(nil).Once()
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: prevEndpoint,
+			PrevAuth:     prevAuth,
+			Subscription: &types.PushSubscription{
+				ID:        "client-supplied-shadow-id",
+				Endpoint:  newEndpoint,
+				Keys:      types.PushSubscriptionKeys{P256DH: "fake-new-p256dh", Auth: "fake-new-auth"},
+				UserAgent: strings.Repeat("u", 700),
+				AppType:   types.PushSubscriptionAppTypeWebAPK,
+			},
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		if assert.NotNil(t, captured) {
+			assert.Equal(t, expectedNewID, captured.ID)
+			assert.Len(t, captured.UserAgent, maxPushUserAgentBytes)
+			assert.Equal(t, types.PushSubscriptionAppTypeWebAPK, captured.AppType)
+		}
+
+		assertReplaceBadMeta := func(sub *types.PushSubscription) {
+			t.Helper()
+			raw, mErr := json.Marshal(replaceSubscriptionRequest{
+				PrevEndpoint: prevEndpoint,
+				PrevAuth:     prevAuth,
+				Subscription: sub,
+			})
+			require.NoError(t, mErr)
+			badReq := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(raw))
+			badRec := httptest.NewRecorder()
+			handler.ServeHTTP(badRec, badReq)
+			assert.Equal(t, http.StatusBadRequest, badRec.Code)
+		}
+
+		assertReplaceBadMeta(&types.PushSubscription{
+			Endpoint: newEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "fake-new-p256dh", Auth: "fake-new-auth"},
+			AppType:  "invalid-container",
+		})
+		assertReplaceBadMeta(&types.PushSubscription{
+			Endpoint: newEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: strings.Repeat("p", maxPushP256DHLength+1), Auth: "fake-new-auth"},
+		})
+		assertReplaceBadMeta(&types.PushSubscription{
+			Endpoint: newEndpoint,
+			Keys:     types.PushSubscriptionKeys{P256DH: "fake-new-p256dh", Auth: "invalid auth!"},
+		})
+
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("ShadowedSubscriptionIDsReturnsHTTP200", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		victimPrevEndpoint := "https://fcm.googleapis.com/fcm/send/victim-prev"
+		victimPrevAuth := "fake-victim-prev-auth"
+		victimHash := sha256.Sum256([]byte(victimPrevEndpoint))
+		victimPrevID := hex.EncodeToString(victimHash[:])
+
+		attackerEndpoint := "https://fcm.googleapis.com/fcm/send/attacker-ep"
+		attackerHash := sha256.Sum256([]byte(attackerEndpoint))
+		expectedAttackerID := hex.EncodeToString(attackerHash[:])
+
+		// 1. Attacker attempts to poison subscriptionIDs by passing victimPrevID as client "id"
+		mockS.On("AddUserPushSubscription", mock.Anything, "fake", mock.MatchedBy(func(sub types.PushSubscription) bool {
+			return sub.ID == expectedAttackerID && sub.ID != victimPrevID
+		})).Return(nil).Once()
+
+		subBody, err := json.Marshal(subscribeRequest{
+			Subscription: types.PushSubscription{
+				ID:       victimPrevID,
+				Endpoint: attackerEndpoint,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-att-p256dh", Auth: "fake-att-auth"},
+			},
+		})
+		require.NoError(t, err)
+		subReq := httptest.NewRequest(http.MethodPost, "/api/notifications/subscribe", bytes.NewReader(subBody))
+		subRec := httptest.NewRecorder()
+		handler.ServeHTTP(subRec, subReq)
+		require.Equal(t, http.StatusOK, subRec.Code)
+
+		// 2. Victim rotates subscription via POST /api/notifications/replace -> HTTP 200 (not 403)
+		rotatedEndpoint := "https://fcm.googleapis.com/fcm/send/victim-rotated"
+		rotatedHash := sha256.Sum256([]byte(rotatedEndpoint))
+		expectedRotatedID := hex.EncodeToString(rotatedHash[:])
+
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, victimPrevEndpoint, victimPrevAuth, mock.MatchedBy(func(sub *types.PushSubscription) bool {
+			return sub != nil && sub.Endpoint == rotatedEndpoint && sub.ID == expectedRotatedID
+		})).Return(nil).Once()
+
+		repBody, err := json.Marshal(replaceSubscriptionRequest{
+			PrevEndpoint: victimPrevEndpoint,
+			PrevAuth:     victimPrevAuth,
+			Subscription: &types.PushSubscription{
+				ID:       "ignored-client-id",
+				Endpoint: rotatedEndpoint,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-rot-p256dh", Auth: "fake-rot-auth"},
+			},
+		})
+		require.NoError(t, err)
+		repReq := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(repBody))
+		repRec := httptest.NewRecorder()
+		handler.ServeHTTP(repRec, repReq)
+		assert.Equal(t, http.StatusOK, repRec.Code)
+
 		mockS.AssertExpectations(t)
 	})
 }
@@ -1948,6 +2257,90 @@ func TestHandleNotificationClick(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+}
+
+func TestDispatchPushToUser(t *testing.T) {
+	t.Run("BoundedConcurrencyAndPerUserDeadline", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		now := time.Date(2026, 9, 4, 7, 5, 0, 0, time.UTC)
+		srv := createTestNotificationServer(t, mockS, now)
+		srv.pushDispatchTimeout = 150 * time.Millisecond
+
+		clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		clientPubB64 := base64.RawURLEncoding.EncodeToString(clientPriv.PublicKey().Bytes())
+		clientAuthB64 := base64.RawURLEncoding.EncodeToString([]byte("1234567812345678"))
+
+		const subCount = 12
+		subs := make([]types.PushSubscription, subCount)
+		for i := range subs {
+			ep := fmt.Sprintf("https://fcm.googleapis.com/fcm/send/slow-sub-%d", i)
+			h := sha256.Sum256([]byte(ep))
+			subs[i] = types.PushSubscription{
+				ID:       hex.EncodeToString(h[:]),
+				Endpoint: ep,
+				Keys:     types.PushSubscriptionKeys{P256DH: clientPubB64, Auth: clientAuthB64},
+			}
+		}
+
+		user := types.User{
+			ID:            "user-slow",
+			Email:         "userslow@example.com",
+			Subscriptions: subs,
+		}
+
+		var inFlight atomic.Int32
+		var maxInFlight atomic.Int32
+		var started atomic.Int32
+
+		srv.pushHTTPClient = newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			cur := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			started.Add(1)
+			for {
+				prev := maxInFlight.Load()
+				if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+
+			select {
+			case <-time.After(5 * time.Second):
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       http.NoBody,
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+		})
+
+		mockS.On("AppendNotificationLog", mock.Anything, "site-slow", mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.UserID == "user-slow" && !l.Success
+		})).Return(nil)
+
+		startWall := time.Now()
+		srv.dispatchPushToUser(
+			context.Background(),
+			"site-slow",
+			"user-slow",
+			types.NotificationTypeMorningSummary,
+			"home_planner",
+			"Morning Summary",
+			"Body",
+			"/forecast",
+			map[string]string{"currentSOC": "80.0"},
+			mockUserGetter(user),
+		)
+		elapsed := time.Since(startWall)
+
+		assert.Less(t, elapsed, time.Second, "per-user push dispatch must respect pushDispatchTimeout instead of stalling sequentially")
+		assert.LessOrEqual(t, maxInFlight.Load(), int32(maxConcurrentUserPushes))
+		assert.GreaterOrEqual(t, maxInFlight.Load(), int32(2))
+		assert.Equal(t, int32(maxConcurrentUserPushes), started.Load())
 	})
 }
 

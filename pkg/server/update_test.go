@@ -3274,6 +3274,157 @@ func TestHandleUpdateSites(t *testing.T) {
 		assert.NotContains(t, logBuf.String(), "site_update_heartbeat")
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("SlowPushEndpointsBoundedWithinPerUserDeadline", func(t *testing.T) {
+		now := time.Date(2026, 9, 4, 7, 5, 0, 0, time.UTC)
+		hourStart := now.Truncate(time.Hour)
+		futurePrices := make([]types.Price, 8)
+		for i := range futurePrices {
+			ts := hourStart.Add(time.Duration(i+1) * time.Hour)
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.15,
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+			}
+		}
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.15,
+			TSStart:       hourStart,
+			TSEnd:         hourStart.Add(time.Hour),
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		templateUser := createTestPushUser(t, "user-slow", "https://fcm.googleapis.com/fcm/send/sub-0")
+		subs := make([]types.PushSubscription, 12)
+		for i := range subs {
+			subs[i] = types.PushSubscription{
+				ID:       fmt.Sprintf("sub-%d", i),
+				Endpoint: fmt.Sprintf("https://fcm.googleapis.com/fcm/send/slow-endpoint-%d", i),
+				Keys:     templateUser.Subscriptions[0].Keys,
+			}
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{
+			Features: map[string][]feats.Criteria{
+				"notifications": {{SitePercent: 100, Value: true}},
+			},
+		}, now, nil).Maybe()
+		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
+			"site1": {
+				ESS:             "mock",
+				UtilityProvider: "test",
+				Release:         "production",
+				Notifications: map[string]types.UserNotificationSettings{
+					"user-slow": {
+						EveningSummaryEnabled: true,
+						EveningSummaryHour:    7,
+						EveningSummaryFlavor:  "home_planner",
+					},
+				},
+			},
+		}, map[string]int{
+			"site1": types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(now.Add(-time.Hour), types.CurrentPriceHistoryVersion, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, "site1", mock.Anything).Return(nil)
+		mockS.On("GetNotificationLogs", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil)
+		mockS.On("GetUser", mock.Anything, "user-slow").Return(types.User{
+			ID:            "user-slow",
+			Email:         "userslow@example.com",
+			Subscriptions: subs,
+		}, nil)
+		mockS.On("AppendNotificationLog", mock.Anything, "site1", mock.Anything).Return(nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         80,
+			BatteryCapacityKWH: 13.5,
+		}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site1", mockES)
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site1", mockU)
+
+		privB64, _ := generateTestVAPIDKeys(t)
+		privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
+		require.NoError(t, err)
+
+		var inFlight atomic.Int32
+		var maxInFlight atomic.Int32
+		pushClient := newMockPushHTTPClient(func(r *http.Request) (*http.Response, error) {
+			cur := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			for {
+				prev := maxInFlight.Load()
+				if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			select {
+			case <-time.After(5 * time.Second):
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       http.NoBody,
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+		})
+
+		srvSlow := &Server{
+			utilities:           mockUMap,
+			ess:                 mockP,
+			storage:             mockS,
+			controller:          controller.NewController(),
+			bypassAuth:          true,
+			release:             "production",
+			vapidKey:            privKey,
+			vapidPublicKey:      pubKey,
+			vapidSubject:        "mailto:support@raterudder.com",
+			pushHTTPClient:      pushClient,
+			pushDispatchTimeout: 150 * time.Millisecond,
+			nowFunc:             func() time.Time { return now },
+		}
+
+		start := time.Now()
+		reqSlow := httptest.NewRequest(http.MethodPost, "/api/updateSites", nil)
+		wSlow := httptest.NewRecorder()
+		srvSlow.handleUpdateSites(wSlow, reqSlow)
+		elapsed := time.Since(start)
+
+		require.Equal(t, http.StatusOK, wSlow.Result().StatusCode)
+		var slowResults map[string]string
+		require.NoError(t, json.NewDecoder(wSlow.Body).Decode(&slowResults))
+		assert.Equal(t, "success", slowResults["site1"])
+		assert.Less(t, elapsed, 2*time.Second)
+		assert.LessOrEqual(t, maxInFlight.Load(), int32(maxConcurrentUserPushes))
+		assert.GreaterOrEqual(t, maxInFlight.Load(), int32(2))
+	})
 }
 
 // Helpers for Recording Mocks

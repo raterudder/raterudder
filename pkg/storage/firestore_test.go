@@ -1949,6 +1949,157 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotContains(t, gotSettingsAfter.Notifications, userID)
 		})
+
+		t.Run("EnforcesMaxSubscriptionsAndAllowsResubscribeAtCap", func(t *testing.T) {
+			capUserID := "push-cap-user@test.com"
+			require.NoError(t, f.CreateUser(ctx, types.User{
+				ID:    capUserID,
+				Email: capUserID,
+				Sites: []types.UserSite{{ID: siteID, Name: "My Site"}},
+			}))
+
+			for i := 0; i < maxUserPushSubscriptions; i++ {
+				ep := fmt.Sprintf("https://fcm.googleapis.com/fcm/send/cap-sub-%d", i)
+				require.NoError(t, f.AddUserPushSubscription(ctx, capUserID, types.PushSubscription{
+					Endpoint:  ep,
+					Keys:      types.PushSubscriptionKeys{P256DH: fmt.Sprintf("fake-p256dh-%d", i), Auth: fmt.Sprintf("fake-auth-%d", i)},
+					UserAgent: "Chrome Mac",
+					TSCreated: time.Now().UTC(),
+				}))
+			}
+
+			// New distinct endpoint past maxUserPushSubscriptions must fail with ErrMaxPushSubscriptionsExceeded
+			err := f.AddUserPushSubscription(ctx, capUserID, types.PushSubscription{
+				Endpoint:  "https://fcm.googleapis.com/fcm/send/cap-sub-overflow",
+				Keys:      types.PushSubscriptionKeys{P256DH: "fake-p256dh-over", Auth: "fake-auth-over"},
+				UserAgent: "Chrome Mac",
+				TSCreated: time.Now().UTC(),
+			})
+			assert.ErrorIs(t, err, ErrMaxPushSubscriptionsExceeded)
+
+			// Re-subscribing an existing endpoint while at maxUserPushSubscriptions must succeed in place
+			existingEndpoint := "https://fcm.googleapis.com/fcm/send/cap-sub-0"
+			require.NoError(t, f.AddUserPushSubscription(ctx, capUserID, types.PushSubscription{
+				Endpoint:  existingEndpoint,
+				Keys:      types.PushSubscriptionKeys{P256DH: "fake-p256dh-refreshed", Auth: "fake-auth-refreshed"},
+				UserAgent: "Firefox Linux",
+				TSCreated: time.Now().UTC(),
+			}))
+
+			gotCapUser, err := f.GetUser(ctx, capUserID)
+			require.NoError(t, err)
+			if assert.Len(t, gotCapUser.Subscriptions, maxUserPushSubscriptions) {
+				assert.Equal(t, existingEndpoint, gotCapUser.Subscriptions[0].Endpoint)
+				assert.Equal(t, "fake-auth-refreshed", gotCapUser.Subscriptions[0].Keys.Auth)
+				assert.Equal(t, "Firefox Linux", gotCapUser.Subscriptions[0].UserAgent)
+			}
+		})
+
+		t.Run("ReplaceScansMultipleCandidateUsersSharingSubscriptionIDs", func(t *testing.T) {
+			victimPrevEndpoint := "https://fcm.googleapis.com/fcm/send/victim-shared-sub"
+			victimPrevAuth := "fake-victim-auth"
+			victimHash := sha256.Sum256([]byte(victimPrevEndpoint))
+			victimPrevID := hex.EncodeToString(victimHash[:])
+
+			// Earlier user doc 1: legacy client-supplied ID matching victimPrevID on a different endpoint
+			shadowUserID := "000-shadow-user@test.com"
+			require.NoError(t, f.CreateUser(ctx, types.User{
+				ID:    shadowUserID,
+				Email: shadowUserID,
+			}))
+			require.NoError(t, f.UpdateUser(ctx, types.User{
+				ID:    shadowUserID,
+				Email: shadowUserID,
+				Subscriptions: []types.PushSubscription{
+					{
+						ID:       victimPrevID,
+						Endpoint: "https://fcm.googleapis.com/fcm/send/attacker-other-endpoint",
+						Keys:     types.PushSubscriptionKeys{P256DH: "fake-shadow-p256dh", Auth: "fake-shadow-auth"},
+					},
+				},
+			}))
+
+			// Earlier user doc 2: stale auth on the same endpoint
+			staleSharedUserID := "111-stale-shared@test.com"
+			require.NoError(t, f.CreateUser(ctx, types.User{
+				ID:    staleSharedUserID,
+				Email: staleSharedUserID,
+			}))
+			require.NoError(t, f.AddUserPushSubscription(ctx, staleSharedUserID, types.PushSubscription{
+				Endpoint: victimPrevEndpoint,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-stale-p256dh", Auth: "fake-stale-auth"},
+			}))
+
+			// Victim user doc (lexicographically after both earlier docs)
+			victimUserID := "zzz-victim-user@test.com"
+			require.NoError(t, f.CreateUser(ctx, types.User{
+				ID:    victimUserID,
+				Email: victimUserID,
+				Sites: []types.UserSite{{ID: siteID, Name: "My Site"}},
+			}))
+			require.NoError(t, f.AddUserPushSubscription(ctx, victimUserID, types.PushSubscription{
+				Endpoint: victimPrevEndpoint,
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-victim-p256dh", Auth: victimPrevAuth},
+			}))
+
+			rotatedSub := types.PushSubscription{
+				Endpoint: "https://fcm.googleapis.com/fcm/send/victim-rotated-sub",
+				Keys:     types.PushSubscriptionKeys{P256DH: "fake-rot-p256dh", Auth: "fake-rot-auth"},
+			}
+			require.NoError(t, f.ReplaceUserPushSubscription(ctx, victimPrevEndpoint, victimPrevAuth, &rotatedSub))
+
+			gotVictim, err := f.GetUser(ctx, victimUserID)
+			require.NoError(t, err)
+			if assert.Len(t, gotVictim.Subscriptions, 1) {
+				assert.Equal(t, rotatedSub.Endpoint, gotVictim.Subscriptions[0].Endpoint)
+				assert.Equal(t, "fake-rot-auth", gotVictim.Subscriptions[0].Keys.Auth)
+			}
+
+			gotShadow, err := f.GetUser(ctx, shadowUserID)
+			require.NoError(t, err)
+			if assert.Len(t, gotShadow.Subscriptions, 1) {
+				assert.Equal(t, "https://fcm.googleapis.com/fcm/send/attacker-other-endpoint", gotShadow.Subscriptions[0].Endpoint)
+			}
+
+			gotStale, err := f.GetUser(ctx, staleSharedUserID)
+			require.NoError(t, err)
+			if assert.Len(t, gotStale.Subscriptions, 1) {
+				assert.Equal(t, "fake-stale-auth", gotStale.Subscriptions[0].Keys.Auth)
+			}
+
+			// Shared browser profile: two accounts subscribed with the same endpoint + auth
+			sharedBrowserEndpoint := "https://web.push.apple.com/shared-browser-profile"
+			sharedBrowserAuth := "fake-shared-browser-auth"
+			sharedUserA := "shared-profile-a@test.com"
+			sharedUserB := "shared-profile-b@test.com"
+			for _, uID := range []string{sharedUserA, sharedUserB} {
+				require.NoError(t, f.CreateUser(ctx, types.User{
+					ID:    uID,
+					Email: uID,
+					Sites: []types.UserSite{{ID: siteID, Name: "My Site"}},
+				}))
+				require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, uID, types.UserNotificationSettings{
+					MorningSummaryEnabled: true,
+					MorningSummaryHour:    7,
+					MorningSummaryFlavor:  "home_planner",
+				}))
+				require.NoError(t, f.AddUserPushSubscription(ctx, uID, types.PushSubscription{
+					Endpoint: sharedBrowserEndpoint,
+					Keys:     types.PushSubscriptionKeys{P256DH: "fake-shared-p256dh", Auth: sharedBrowserAuth},
+				}))
+			}
+
+			require.NoError(t, f.ReplaceUserPushSubscription(ctx, sharedBrowserEndpoint, sharedBrowserAuth, nil))
+			for _, uID := range []string{sharedUserA, sharedUserB} {
+				uAfter, getErr := f.GetUser(ctx, uID)
+				require.NoError(t, getErr)
+				assert.Empty(t, uAfter.Subscriptions)
+			}
+			gotSettingsShared, _, _, err := f.GetSettings(ctx, siteID)
+			require.NoError(t, err)
+			assert.NotContains(t, gotSettingsShared.Notifications, sharedUserA)
+			assert.NotContains(t, gotSettingsShared.Notifications, sharedUserB)
+		})
 	})
 
 	t.Run("UserApps", func(t *testing.T) {

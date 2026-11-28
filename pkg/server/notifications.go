@@ -31,14 +31,17 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/crypto/hkdf"
+	"golang.org/x/sync/errgroup"
 )
 
 var ffNotifications = feats.Bool("notifications", false)
@@ -671,9 +674,15 @@ func webPushTopic(tag string) string {
 }
 
 const (
-	webPushTimeout        = 10 * time.Second
-	maxPushEndpointLength = 2048
-	maxDNSNameLength      = 253
+	webPushTimeout                 = 10 * time.Second
+	defaultUserPushDispatchTimeout = 15 * time.Second
+	maxConcurrentUserPushes        = 5
+	maxUserPushSubscriptions       = storage.MaxUserPushSubscriptions
+	maxPushEndpointLength          = 2048
+	maxPushUserAgentBytes          = 512
+	maxPushP256DHLength            = 128
+	maxPushAuthLength              = 64
+	maxDNSNameLength               = 253
 )
 
 var (
@@ -1168,75 +1177,101 @@ func (s *Server) dispatchPushToUser(
 		return
 	}
 
+	subs := user.Subscriptions
+	if len(subs) > maxUserPushSubscriptions {
+		subs = subs[:maxUserPushSubscriptions]
+	}
+
+	dispatchTimeout := s.pushDispatchTimeout
+	if dispatchTimeout <= 0 {
+		dispatchTimeout = defaultUserPushDispatchTimeout
+	}
+	dispatchCtx, cancel := context.WithTimeout(ctx, dispatchTimeout)
+	defer cancel()
+
 	nowUTC := s.now().UTC()
-	for _, sub := range user.Subscriptions {
-		logID := generateNotificationLogID(siteID, user.ID, sub.Endpoint, nowUTC)
-		payload := pushPayload{
-			Title: title,
-			Body:  body,
-			Tag:   notificationTag(notifType, siteID),
-			Icon:  pushPayloadIcon(sub),
-			Badge: "/badge_96.png",
-			Data: map[string]any{
-				"url":      urlPath,
-				"id":       logID,
-				"logID":    logID,
-				"metadata": metadata,
-			},
+	g, gCtx := errgroup.WithContext(dispatchCtx)
+	g.SetLimit(maxConcurrentUserPushes)
+
+	for _, sub := range subs {
+		if gCtx.Err() != nil {
+			break
 		}
+		g.Go(func() error {
+			if gCtx.Err() != nil {
+				return nil
+			}
 
-		statusCode, err := s.sendWebPush(ctx, sub, payload, 14400, "normal")
-		success := err == nil && (statusCode >= 200 && statusCode < 300)
+			logID := generateNotificationLogID(siteID, user.ID, sub.Endpoint, nowUTC)
+			payload := pushPayload{
+				Title: title,
+				Body:  body,
+				Tag:   notificationTag(notifType, siteID),
+				Icon:  pushPayloadIcon(sub),
+				Badge: "/badge_96.png",
+				Data: map[string]any{
+					"url":      urlPath,
+					"id":       logID,
+					"logID":    logID,
+					"metadata": metadata,
+				},
+			}
 
-		var errStr string
-		if err != nil {
-			errStr = err.Error()
-		}
+			statusCode, err := s.sendWebPush(gCtx, sub, payload, 14400, "normal")
+			success := err == nil && (statusCode >= 200 && statusCode < 300)
 
-		// Prune dead subscriptions on 404 or 410
-		if statusCode == http.StatusNotFound || statusCode == http.StatusGone {
-			log.Ctx(ctx).InfoContext(ctx, "pruning dead push subscription",
+			var errStr string
+			if err != nil {
+				errStr = err.Error()
+			}
+
+			// Prune dead subscriptions on 404 or 410
+			if statusCode == http.StatusNotFound || statusCode == http.StatusGone {
+				log.Ctx(ctx).InfoContext(ctx, "pruning dead push subscription",
+					slog.String("userID", user.ID),
+					slog.String("endpoint", sub.Endpoint),
+					slog.Int("statusCode", statusCode),
+				)
+				if rmErr := s.storage.RemoveUserPushSubscription(ctx, user.ID, sub.Endpoint); rmErr != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to remove dead push subscription", slog.Any("error", rmErr))
+				}
+			}
+
+			log.Ctx(ctx).InfoContext(ctx, "sent push notification",
 				slog.String("userID", user.ID),
-				slog.String("endpoint", sub.Endpoint),
+				slog.String("logID", logID),
+				slog.String("type", notifType),
+				slog.String("flavor", flavor),
+				slog.String("title", title),
 				slog.Int("statusCode", statusCode),
 			)
-			if rmErr := s.storage.RemoveUserPushSubscription(ctx, user.ID, sub.Endpoint); rmErr != nil {
-				log.Ctx(ctx).WarnContext(ctx, "failed to remove dead push subscription", slog.Any("error", rmErr))
+
+			// Append log to monthly document
+			logEntry := types.NotificationLog{
+				ID:         logID,
+				TSCreated:  nowUTC,
+				UserID:     user.ID,
+				Type:       notifType,
+				Flavor:     flavor,
+				Title:      title,
+				Body:       body,
+				Success:    success,
+				StatusCode: statusCode,
+				Error:      errStr,
+				Metadata:   metadata,
 			}
-		}
 
-		log.Ctx(ctx).InfoContext(ctx, "sent push notification",
-			slog.String("userID", user.ID),
-			slog.String("logID", logID),
-			slog.String("type", notifType),
-			slog.String("flavor", flavor),
-			slog.String("title", title),
-			slog.Int("statusCode", statusCode),
-		)
-
-		// Append log to monthly document
-		logEntry := types.NotificationLog{
-			ID:         logID,
-			TSCreated:  nowUTC,
-			UserID:     user.ID,
-			Type:       notifType,
-			Flavor:     flavor,
-			Title:      title,
-			Body:       body,
-			Success:    success,
-			StatusCode: statusCode,
-			Error:      errStr,
-			Metadata:   metadata,
-		}
-
-		if appendErr := s.storage.AppendNotificationLog(ctx, siteID, logEntry); appendErr != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to append notification log",
-				slog.String("userID", user.ID),
-				slog.String("type", notifType),
-				slog.Any("error", appendErr),
-			)
-		}
+			if appendErr := s.storage.AppendNotificationLog(ctx, siteID, logEntry); appendErr != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to append notification log",
+					slog.String("userID", user.ID),
+					slog.String("type", notifType),
+					slog.Any("error", appendErr),
+				)
+			}
+			return nil
+		})
 	}
+	_ = g.Wait()
 }
 
 // logMutedNotification records an audit log entry with Muted: true when an alert condition
@@ -3499,6 +3534,69 @@ func (s *Server) handleGetVAPIDPublicKey(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && cut > maxBytes-utf8.UTFMax && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	if cut > 0 && !utf8.ValidString(s[cut:maxBytes]) {
+		if r, _ := utf8.DecodeRuneInString(s[cut:]); r != utf8.RuneError {
+			return s[:cut]
+		}
+	}
+	return s[:maxBytes]
+}
+
+func validatePushSubscriptionKey(val string, maxLen int, name string) error {
+	if val == "" {
+		return fmt.Errorf("subscription %s key is required", name)
+	}
+	if len(val) > maxLen {
+		return fmt.Errorf("subscription %s key must be %d characters or fewer", name, maxLen)
+	}
+	trimmed := strings.TrimRight(val, "=")
+	if trimmed == "" || len(val)-len(trimmed) > 2 {
+		return fmt.Errorf("invalid subscription %s key", name)
+	}
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		isBase64URL := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+		if !isBase64URL {
+			return fmt.Errorf("invalid subscription %s key", name)
+		}
+	}
+	return nil
+}
+
+func normalizeAndValidatePushSubscription(sub *types.PushSubscription, nowUTC time.Time) error {
+	if sub.Endpoint == "" || sub.Keys.P256DH == "" || sub.Keys.Auth == "" {
+		return errors.New("subscription endpoint and keys are required")
+	}
+	if _, err := validatePushSubscriptionEndpoint(sub.Endpoint); err != nil {
+		return fmt.Errorf("invalid subscription endpoint: %w", err)
+	}
+	if err := validatePushSubscriptionKey(sub.Keys.P256DH, maxPushP256DHLength, "p256dh"); err != nil {
+		return err
+	}
+	if err := validatePushSubscriptionKey(sub.Keys.Auth, maxPushAuthLength, "auth"); err != nil {
+		return err
+	}
+	switch sub.AppType {
+	case "", types.PushSubscriptionAppTypeBrowser, types.PushSubscriptionAppTypeStandalone, types.PushSubscriptionAppTypeWebAPK:
+	default:
+		return errors.New("invalid subscription appType")
+	}
+
+	sub.UserAgent = truncateUTF8Bytes(sub.UserAgent, maxPushUserAgentBytes)
+	h := sha256.Sum256([]byte(sub.Endpoint))
+	sub.ID = hex.EncodeToString(h[:])
+	sub.TSCreated = nowUTC
+	return nil
+}
+
 // subscribeRequest payload for registering a push subscription.
 type subscribeRequest struct {
 	Subscription types.PushSubscription `json:"subscription"`
@@ -3525,21 +3623,10 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Subscription.Endpoint == "" || req.Subscription.Keys.P256DH == "" || req.Subscription.Keys.Auth == "" {
-		writeJSONError(w, "subscription endpoint and keys are required", http.StatusBadRequest)
+	if err := normalizeAndValidatePushSubscription(&req.Subscription, s.now().UTC()); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := validatePushSubscriptionEndpoint(req.Subscription.Endpoint); err != nil {
-		writeJSONError(w, fmt.Sprintf("invalid subscription endpoint: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Generate SHA256 ID from endpoint if empty
-	if req.Subscription.ID == "" {
-		h := sha256.Sum256([]byte(req.Subscription.Endpoint))
-		req.Subscription.ID = hex.EncodeToString(h[:])
-	}
-	req.Subscription.TSCreated = s.now().UTC()
 
 	isNewDevice := true
 	for _, existing := range user.Subscriptions {
@@ -3550,7 +3637,18 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if isNewDevice && len(user.Subscriptions) >= maxUserPushSubscriptions {
+		log.Ctx(ctx).WarnContext(ctx, "push subscription rejected: maximum number of subscriptions reached", slog.String("userID", userID))
+		writeJSONError(w, "maximum number of push subscriptions reached", http.StatusBadRequest)
+		return
+	}
+
 	if err := s.storage.AddUserPushSubscription(ctx, userID, req.Subscription); err != nil {
+		if errors.Is(err, storage.ErrMaxPushSubscriptionsExceeded) {
+			log.Ctx(ctx).WarnContext(ctx, "push subscription rejected: maximum number of subscriptions reached", slog.String("userID", userID))
+			writeJSONError(w, "maximum number of push subscriptions reached", http.StatusBadRequest)
+			return
+		}
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save push subscription", slog.Any("error", err))
 		writeJSONError(w, "failed to save subscription", http.StatusInternalServerError)
 		return
@@ -3666,20 +3764,14 @@ func (s *Server) handleReplaceSubscription(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.Subscription != nil && req.Subscription.Endpoint != "" {
-		if _, err := validatePushSubscriptionEndpoint(req.Subscription.Endpoint); err != nil {
-			writeJSONError(w, fmt.Sprintf("invalid subscription endpoint: %v", err), http.StatusBadRequest)
+	if req.Subscription != nil && req.Subscription.Endpoint == "" {
+		req.Subscription = nil
+	}
+	if req.Subscription != nil {
+		if err := normalizeAndValidatePushSubscription(req.Subscription, s.now().UTC()); err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Subscription.Keys.P256DH == "" || req.Subscription.Keys.Auth == "" {
-			writeJSONError(w, "subscription keys are required for replacement", http.StatusBadRequest)
-			return
-		}
-		if req.Subscription.ID == "" {
-			h := sha256.Sum256([]byte(req.Subscription.Endpoint))
-			req.Subscription.ID = hex.EncodeToString(h[:])
-		}
-		req.Subscription.TSCreated = s.now().UTC()
 	}
 
 	ctx := r.Context()
