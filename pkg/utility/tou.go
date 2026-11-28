@@ -1,15 +1,16 @@
 package utility
 
 // Tariff Audit Metadata
-// - Provider(s): ladwp (Los Angeles Department of Water & Power (LADWP)), mvea (Mountain View Electric Association (MVEA)), centerpoint_indiana (CenterPoint Energy Indiana South (Indiana))
+// - Provider(s): ladwp (Los Angeles Department of Water & Power (LADWP)), mvea (Mountain View Electric Association (MVEA)), novec (Northern Virginia Electric Cooperative (NOVEC)), centerpoint_indiana (CenterPoint Energy Indiana South (Indiana))
 // - Official Sources:
 //   - LADWP: https://www.ladwp.com/account/customer-service/electric-rates/residential-rates & https://www.ladwp.com/account/customer-service/electric-rates/residential-adjustment-billing-factors (Electric Rate Ordinance No. 184133 + Q4 2026 Adjustment Billing Factors eff. Oct 1, 2026)
 //   - MVEA: https://mvea.coop/rates/ (Schedules 16.01, 16.02, 16.05, 16.06, 16.08, eff. October 1, 2026)
+//   - NOVEC: https://www.novec.com/About_NOVEC/Regulated-Rates.cfm, https://www.novec.com/About_NOVEC/PCA-Power-Cost-Adjustment.cfm, & https://www.novec.com/About_NOVEC/November-2026-Rate-Changes.cfm (Schedules R-1, R-1-EV, PCA-1, & NEM-10; Nov 1, 2026 PCA-1 & 5% distribution revision)
 //   - CenterPoint Energy Indiana South: https://assets.centerpointenergy.com/api/public/content/centerpoint-energy-indiana-south-electric-tariff.pdf (I.U.R.C. No. E-14: Sheet No. 10 Rate RS & Sheet No. 53 Rider EDG)
 // - Effective Window: 2026-01-01 through 2027-12-31 (see provider-level Tariff Audit Metadata blocks below for schedule-specific details)
-// - Revision Cadence: Quarterly (LADWP Adjustment Billing Factors) / Annual (MVEA General Rules & Regulations, CenterPoint Indiana Rider EDG)
+// - Revision Cadence: Quarterly (LADWP Adjustment Billing Factors) / Annual & Periodic (MVEA General Rules & Regulations, NOVEC VA SCC / Schedule PCA-1, CenterPoint Indiana Rider EDG)
 // - Next Audit Due: 2027-01-05 (LADWP Q1 2027 Residential Adjustment Billing Factors effective Jan 1, 2027)
-// - Last Verified: 2026-11-20
+// - Last Verified: 2026-11-26
 // - Modeling Notes: Preserves all historical 2026 inline periods intact and appends verified 2027 volumetric schedules; fixed monthly/daily customer charges excluded; see individual inline provider blocks below for detailed modeling notes.
 
 import (
@@ -1158,6 +1159,21 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 			},
 		},
+		// Tariff Audit Metadata
+		// - Provider(s): novec (Northern Virginia Electric Cooperative (NOVEC))
+		// - Official Sources:
+		//   - https://www.novec.com/About_NOVEC/Regulated-Rates.cfm
+		//   - https://www.novec.com/About_NOVEC/PCA-Power-Cost-Adjustment.cfm
+		//   - https://www.novec.com/About_NOVEC/November-2026-Rate-Changes.cfm
+		//   - https://www.novec.com/About_NOVEC/upload/NOVEC_RateRebal-010124.pdf
+		//   - https://www.novec.com/About_NOVEC/upload/NOVEC_Schedule-R-1-EV-tariff-011524.pdf
+		//   - https://www.novec.com/About_NOVEC/upload/NEM-10-Net-Energy-Metering-Rider-Effective-5-1-2020.pdf
+		//   - NOVEC Regulated Rate Schedules R-1 (eff. Jan 1, 2024), R-1-EV (eff. Jan 15, 2024), Schedule PCA-1 Power Cost Adjustment & 5% distribution adjustment (eff. Nov 1, 2026), and Schedule NEM-10 Net Energy Metering Rider (eff. May 1, 2020)
+		// - Effective Window: 2026-01-01 through 2027-12-31 (Jan-Oct 2026 baseline with $0.01320/kWh Schedule PCA-1 preserved; Nov 1, 2026 $0.02482/kWh Schedule PCA-1 & 5% distribution step modeled through 2027-12-31 until superseded)
+		// - Revision Cadence: Periodic / Annual (VA SCC / Schedule PCA-1 & distribution rate adjustments)
+		// - Next Audit Due: 2027-10-15 (Check NOVEC Regulated Rates and VA SCC filings for annual November Schedule PCA-1 or distribution rate updates)
+		// - Last Verified: 2026-11-26
+		// - Modeling Notes: Schedule R-1 models Jan-Oct 2026 ($0.01348 delivery + $0.09731 supply + $0.01320 PCA-1 = $0.12399/kWh) and Nov 1, 2026+ ($0.01415 delivery after 5% step + $0.09731 supply + $0.02482 PCA-1 = $0.13628/kWh); Schedule R-1-EV models daily 06:00-23:00 On-Peak (all days including weekends and holidays) and 23:00-06:00 Off-Peak for Jan-Oct 2026 ($0.01689 delivery + $0.11005/$0.05631 supply + $0.01320 PCA-1 = $0.14014/$0.08640/kWh) and Nov 1, 2026+ ($0.01773 delivery after 5% step + $0.11005/$0.05631 supply + $0.02482 PCA-1 = $0.15260/$0.09886/kWh); 1:1 kWh net metering per Schedule NEM-10; excludes fixed monthly customer charges and <1% Virginia Electric Utility Consumption Tax ($0.001565/kWh) per materiality rules.
 		{
 			ID:   "novec",
 			Name: "Northern Virginia Electric Cooperative (NOVEC)",
@@ -1171,8 +1187,25 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 							etLocation,
 							[]touSimplifiedPeriod{
 								{
-									OtherDollarsPerKWH: 0.11079,
-									OtherDescription:   "NOVEC Schedule R-1 Residential Service",
+									Year:               2026,
+									MonthStart:         time.January,
+									MonthEnd:           time.October,
+									OtherDollarsPerKWH: 0.12399,
+									OtherDescription:   "NOVEC Schedule R-1 Residential Service (Jan-Oct 2026 incl. PCA-1)",
+								},
+								{
+									Year:               2026,
+									MonthStart:         time.November,
+									MonthEnd:           time.December,
+									OtherDollarsPerKWH: 0.13628,
+									OtherDescription:   "NOVEC Schedule R-1 Residential Service (Nov-Dec 2026 incl. PCA-1)",
+								},
+								{
+									Year:               2027,
+									MonthStart:         time.January,
+									MonthEnd:           time.December,
+									OtherDollarsPerKWH: 0.13628,
+									OtherDescription:   "NOVEC Schedule R-1 Residential Service (2027 incl. PCA-1)",
 								},
 							},
 						),
@@ -1187,17 +1220,52 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 							etLocation,
 							[]touSimplifiedPeriod{
 								{
+									Year:       2026,
+									MonthStart: time.January,
+									MonthEnd:   time.October,
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
 											Name:          "On-Peak",
 											Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 23}},
-											DollarsPerKWH: 0.12694,
-											Description:   "NOVEC Schedule R-1-EV On-Peak",
+											DollarsPerKWH: 0.14014,
+											Description:   "NOVEC Schedule R-1-EV On-Peak (Jan-Oct 2026 incl. PCA-1)",
 										},
 									},
 									OtherName:          "Off-Peak",
-									OtherDollarsPerKWH: 0.07320,
-									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak",
+									OtherDollarsPerKWH: 0.08640,
+									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak (Jan-Oct 2026 incl. PCA-1)",
+								},
+								{
+									Year:       2026,
+									MonthStart: time.November,
+									MonthEnd:   time.December,
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Name:          "On-Peak",
+											Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 23}},
+											DollarsPerKWH: 0.15260,
+											Description:   "NOVEC Schedule R-1-EV On-Peak (Nov-Dec 2026 incl. PCA-1)",
+										},
+									},
+									OtherName:          "Off-Peak",
+									OtherDollarsPerKWH: 0.09886,
+									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak (Nov-Dec 2026 incl. PCA-1)",
+								},
+								{
+									Year:       2027,
+									MonthStart: time.January,
+									MonthEnd:   time.December,
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Name:          "On-Peak",
+											Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 23}},
+											DollarsPerKWH: 0.15260,
+											Description:   "NOVEC Schedule R-1-EV On-Peak (2027 incl. PCA-1)",
+										},
+									},
+									OtherName:          "Off-Peak",
+									OtherDollarsPerKWH: 0.09886,
+									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak (2027 incl. PCA-1)",
 								},
 							},
 						),

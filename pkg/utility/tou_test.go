@@ -480,63 +480,198 @@ func TestTOUUtility(t *testing.T) {
 	t.Run("NOVEC", func(t *testing.T) {
 		u := &genericTOU{}
 
+		// Verify NOVEC provider metadata & 1:1 net metering default option (Schedule NEM-10)
+		var novecInfo *types.UtilityProviderInfo
+		for i := range allUtilities {
+			if allUtilities[i].ID == "novec" {
+				novecInfo = &allUtilities[i]
+				break
+			}
+		}
+		require.NotNil(t, novecInfo)
+		if assert.Len(t, novecInfo.Rates, 2) {
+			for _, rate := range novecInfo.Rates {
+				if assert.Len(t, rate.Options, 1) {
+					assert.Equal(t, "netMeteringCredits", rate.Options[0].Field)
+					assert.Equal(t, true, rate.Options[0].Default)
+				}
+			}
+		}
+
 		// 1. Test Schedule R-1 (Residential Service) flat rate
-		err := u.ApplySettings(context.Background(), types.Settings{
+		r1Settings := types.Settings{
 			UtilityProvider: "novec",
 			UtilityRate:     "novec_r1",
-		})
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		err := u.ApplySettings(context.Background(), r1Settings)
 		require.NoError(t, err)
 		assert.Equal(t, "novec_r1", u.Name())
 		assert.NotEmpty(t, u.periods)
 
-		// R-1 rate should be flat $0.11079 all day, all year
+		// Pre-November 2026 (Jan-Oct 2026): $0.01348 delivery + $0.09731 supply + $0.01320 PCA-1 = $0.12399/kWh
 		for _, hour := range []int{2, 7, 12, 18, 23} {
 			p, err := u.priceForTime(time.Date(2026, time.June, 15, hour, 0, 0, 0, etLocation))
 			if assert.NoError(t, err) {
-				assert.InDelta(t, 0.11079, p.DollarsPerKWH, 1e-6)
+				assert.InDelta(t, 0.12399, p.DollarsPerKWH, 1e-6)
+				assert.False(t, p.SeparateGenerationCredit)
+				assert.False(t, p.SeparateBatteryGenerationCredit)
+				assert.InDelta(t, 0.0, p.GridUseDollarsPerKWH, 1e-6)
+				assert.InDelta(t, 0.12399, p.ExportRateDollars(r1Settings, nil), 1e-6)
 			}
 		}
 
+		// Boundary check across Nov 1, 2026 (America/New_York fall-back DST day):
+		// Oct 31, 2026 23:00 EDT -> $0.12399/kWh
+		p, err := u.priceForTime(time.Date(2026, time.October, 31, 23, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12399, p.DollarsPerKWH, 1e-6)
+		}
+		// Nov 1, 2026 00:00 EDT -> $0.01415 delivery + $0.09731 supply + $0.02482 PCA-1 = $0.13628/kWh
+		nov1Midnight := time.Date(2026, time.November, 1, 0, 0, 0, 0, etLocation)
+		p, err = u.priceForTime(nov1Midnight)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.13628, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.13628, p.ExportRateDollars(r1Settings, nil), 1e-6)
+		}
+		// Both repeated 01:00 EDT and 01:00 EST hours on Nov 1, 2026
+		for _, offsetHours := range []time.Duration{time.Hour, 2 * time.Hour} {
+			p, err = u.priceForTime(nov1Midnight.Add(offsetHours))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, 0.13628, p.DollarsPerKWH, 1e-6)
+			}
+		}
+		// 2027 continuity check -> $0.13628/kWh
+		p, err = u.priceForTime(time.Date(2027, time.June, 15, 14, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.13628, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+		}
+
 		// 2. Test Schedule R-1-EV (Residential EV Service) TOU rate
-		err = u.ApplySettings(context.Background(), types.Settings{
+		r1EVSettings := types.Settings{
 			UtilityProvider: "novec",
 			UtilityRate:     "novec_r1_ev",
-		})
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		err = u.ApplySettings(context.Background(), r1EVSettings)
 		require.NoError(t, err)
 		assert.Equal(t, "novec_r1_ev", u.Name())
 
-		// Test On-Peak: 6:00 a.m. to 11:00 p.m. daily ($0.12694)
-		// 6:00 a.m.
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 6, 0, 0, 0, etLocation))
+		// Pre-November 2026 (Jan-Oct 2026):
+		// On-Peak 6:00 a.m. to 11:00 p.m. daily ($0.01689 + $0.11005 + $0.01320 = $0.14014/kWh)
+		// Off-Peak 11:00 p.m. to 6:00 a.m. daily ($0.01689 + $0.05631 + $0.01320 = $0.08640/kWh)
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 6, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.14014, p.ExportRateDollars(r1EVSettings, nil), 1e-6)
 		}
-		// 12:00 p.m.
 		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
 		}
-		// 10:59 p.m. (22:59)
 		p, err = u.priceForTime(time.Date(2026, time.June, 15, 22, 59, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
+		}
+		// Weekend & holiday pre-November On-Peak (Schedule R-1-EV applies daily 06:00-23:00)
+		p, err = u.priceForTime(time.Date(2026, time.June, 20, 14, 0, 0, 0, etLocation)) // Saturday
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.July, 4, 14, 0, 0, 0, etLocation)) // Independence Day (Saturday)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.September, 7, 14, 0, 0, 0, etLocation)) // Labor Day (Monday holiday)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.14014, p.DollarsPerKWH, 1e-6)
 		}
 
-		// Test Off-Peak: 11:00 p.m. to 6:00 a.m. daily ($0.07320)
-		// 11:00 p.m.
+		// Pre-November Off-Peak: 23:00 to 06:00 daily ($0.08640/kWh)
 		p, err = u.priceForTime(time.Date(2026, time.June, 15, 23, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.08640, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.08640, p.ExportRateDollars(r1EVSettings, nil), 1e-6)
 		}
-		// 2:00 a.m.
 		p, err = u.priceForTime(time.Date(2026, time.June, 15, 2, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.08640, p.DollarsPerKWH, 1e-6)
 		}
-		// 5:59 a.m.
 		p, err = u.priceForTime(time.Date(2026, time.June, 15, 5, 59, 0, 0, etLocation))
 		if assert.NoError(t, err) {
-			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.08640, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2026, time.October, 31, 23, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08640, p.DollarsPerKWH, 1e-6)
+		}
+
+		// Post-November 1, 2026 (Nov-Dec 2026 & 2027):
+		// On-Peak 6:00 a.m. to 11:00 p.m. daily ($0.01773 + $0.11005 + $0.02482 = $0.15260/kWh)
+		// Off-Peak 11:00 p.m. to 6:00 a.m. daily ($0.01773 + $0.05631 + $0.02482 = $0.09886/kWh)
+		// Sunday Nov 1, 2026 fall-back DST transition: 00:00 EDT, 01:00 EDT, and 01:00 EST are Off-Peak ($0.09886)
+		for _, offsetHours := range []time.Duration{0, time.Hour, 2 * time.Hour} {
+			p, err = u.priceForTime(nov1Midnight.Add(offsetHours))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, 0.09886, p.DollarsPerKWH, 1e-6)
+				assert.False(t, p.SeparateGenerationCredit)
+			}
+		}
+		// Sunday Nov 1, 2026 06:00 EST -> On-Peak ($0.15260/kWh even on Sunday)
+		p, err = u.priceForTime(time.Date(2026, time.November, 1, 6, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.15260, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.15260, p.ExportRateDollars(r1EVSettings, nil), 1e-6)
+		}
+		// Thanksgiving Day 2026 (Thursday Nov 26, 2026) 12:00 EST -> On-Peak ($0.15260/kWh even on holiday)
+		p, err = u.priceForTime(time.Date(2026, time.November, 26, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.15260, p.DollarsPerKWH, 1e-6)
+		}
+		// Confirmed prices across Oct 31, 2026 22:00 EDT -> Nov 1, 2026 08:00 EST (11 elapsed hours due to DST fallback)
+		confirmed, err := u.GetConfirmedPrices(
+			context.Background(),
+			time.Date(2026, time.October, 31, 22, 0, 0, 0, etLocation),
+			time.Date(2026, time.November, 1, 8, 0, 0, 0, etLocation),
+		)
+		if assert.NoError(t, err) && assert.Len(t, confirmed, 11) {
+			assert.InDelta(t, 0.14014, confirmed[0].DollarsPerKWH, 1e-6)  // Oct 31 22:00-23:00 EDT On-Peak
+			assert.InDelta(t, 0.08640, confirmed[1].DollarsPerKWH, 1e-6)  // Oct 31 23:00-00:00 EDT Off-Peak
+			assert.InDelta(t, 0.09886, confirmed[2].DollarsPerKWH, 1e-6)  // Nov 1 00:00-01:00 EDT Off-Peak
+			assert.InDelta(t, 0.09886, confirmed[3].DollarsPerKWH, 1e-6)  // Nov 1 01:00 EDT-01:00 EST Off-Peak
+			assert.InDelta(t, 0.09886, confirmed[4].DollarsPerKWH, 1e-6)  // Nov 1 01:00-02:00 EST Off-Peak
+			assert.InDelta(t, 0.09886, confirmed[8].DollarsPerKWH, 1e-6)  // Nov 1 05:00-06:00 EST Off-Peak
+			assert.InDelta(t, 0.15260, confirmed[9].DollarsPerKWH, 1e-6)  // Nov 1 06:00-07:00 EST On-Peak
+			assert.InDelta(t, 0.15260, confirmed[10].DollarsPerKWH, 1e-6) // Nov 1 07:00-08:00 EST On-Peak
+		}
+
+		// 2027 weekday, weekend, holiday, and overnight Off-Peak checks
+		p, err = u.priceForTime(time.Date(2027, time.January, 1, 10, 0, 0, 0, etLocation)) // New Year's Day (Friday holiday)
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.15260, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.June, 15, 18, 0, 0, 0, etLocation)) // Tuesday On-Peak
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.15260, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.June, 19, 18, 0, 0, 0, etLocation)) // Saturday On-Peak
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.15260, p.DollarsPerKWH, 1e-6)
+		}
+		p, err = u.priceForTime(time.Date(2027, time.June, 15, 23, 0, 0, 0, etLocation)) // Tuesday Off-Peak
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.09886, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.09886, p.ExportRateDollars(r1EVSettings, nil), 1e-6)
 		}
 	})
 
