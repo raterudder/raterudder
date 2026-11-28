@@ -138,7 +138,7 @@ describe('api client contracts', () => {
         const settings = await fetchSettings('site-1');
         expect(settings.updateGroup).toBe(1);
 
-        const forecast = await fetchModeling('site-1', 'conservative', true);
+        const forecast = await fetchModeling('site-1', true);
         expect(forecast.updated).toBe('2026-01-01T00:00:00Z');
         expect('weather' in forecast).toBe(false);
     });

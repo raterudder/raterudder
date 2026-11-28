@@ -180,7 +180,7 @@ describe('Forecast Page', () => {
 
         expect(fetchSettings).not.toHaveBeenCalled();
         expect(fetchModeling).toHaveBeenCalledTimes(1);
-        expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
+        expect(fetchModeling).toHaveBeenLastCalledWith(undefined);
     });
 
     it('opens help dialog when help button on a forecast chart is clicked', async () => {
@@ -837,47 +837,6 @@ describe('Forecast Page', () => {
         dateSpy.mockRestore();
     });
 
-    it('preserves conservative load prediction strategy when refreshing', async () => {
-        let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
-        const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
-
-        (fetchModeling as any).mockResolvedValue({
-            plan: makeTestPlan(),
-            energyHistory: [],
-            priceHistory: [],
-            weather: [],
-        });
-
-        renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
-
-        await waitFor(() => {
-            expect(fetchModeling).toHaveBeenCalledTimes(1);
-            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
-        });
-
-        // User switches away
-        act(() => {
-            Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-            document.dispatchEvent(new Event('visibilitychange'));
-        });
-
-        // More than 10 minutes pass
-        mockTime += STALE_FORECAST_TIMEOUT_MS + 60 * 1000;
-
-        // User returns
-        act(() => {
-            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-            document.dispatchEvent(new Event('visibilitychange'));
-        });
-
-        await waitFor(() => {
-            expect(fetchModeling).toHaveBeenCalledTimes(2);
-            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
-        });
-
-        dateSpy.mockRestore();
-    });
-
     it('hides Regenerate Plan button when not on staging site', async () => {
         (fetchModeling as any).mockResolvedValue({
             plan: makeTestPlan(),
@@ -940,7 +899,7 @@ describe('Forecast Page', () => {
             await user.click(regenerateBtn);
 
             await waitFor(() => {
-                expect(fetchModeling).toHaveBeenLastCalledWith('site-1', 'default', true);
+                expect(fetchModeling).toHaveBeenLastCalledWith('site-1', true);
                 expect(screen.getByText('$1.23')).toBeInTheDocument();
                 expect(screen.getByText('$4.56')).toBeInTheDocument();
             });

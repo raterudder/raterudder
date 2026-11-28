@@ -3946,6 +3946,77 @@ describe('App & Settings', () => {
                 }), expect.any(String), undefined);
             });
         });
+
+        it('replaces legacy APS netMeteringScheme "rcp" with default "rcp_2026" on display and save via ?tariff=1', async () => {
+            (api.fetchUtilities as any).mockResolvedValue([
+                {
+                    id: 'aps',
+                    name: 'Arizona Public Service (APS)',
+                    rates: [
+                        {
+                            id: 'aps_tou_e',
+                            name: 'Schedule TOU-E (Time-of-Use 4pm-7pm Weekdays)',
+                            options: [
+                                {
+                                    field: 'netMeteringScheme',
+                                    name: 'Net Metering / Export Scheme',
+                                    type: 'select',
+                                    choices: [
+                                        { value: 'rcp_2026', name: 'Rate Rider RCP Tranche 2026: Sep 2026 - Aug 2027 ($0.05554/kWh)' },
+                                        { value: 'rcp_2025', name: 'Rate Rider RCP Tranche 2025: Sep 2025 - Aug 2026 ($0.06171/kWh)' },
+                                        { value: 'net', name: 'Net Energy Metering (Legacy EPR-6 1:1 Retail Credits)' },
+                                    ],
+                                    default: 'rcp_2026',
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ] as any);
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                utilityProvider: 'aps',
+                utilityRate: 'aps_tou_e',
+                utilityRateOptions: {
+                    netMeteringScheme: 'rcp',
+                },
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                release: 'production',
+            });
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+            (updateSettings as any).mockResolvedValue(undefined);
+
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            window.history.pushState(null, '', '/settings?tariff=1');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /^Settings$/i });
+
+            const schemeTrigger = await waitFor(() => {
+                const el = document.getElementById('opt-netMeteringScheme');
+                expect(el).toBeInTheDocument();
+                return el!;
+            });
+
+            expect(screen.getByTestId('utility-section')).toHaveClass('highlighted-section');
+            expect(schemeTrigger).toHaveTextContent('Rate Rider RCP Tranche 2026: Sep 2026 - Aug 2027 ($0.05554/kWh)');
+
+            fireEvent.click(screen.getByText('Save Settings'));
+
+            await waitFor(() => {
+                expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+                expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                    utilityProvider: 'aps',
+                    utilityRate: 'aps_tou_e',
+                    utilityRateOptions: expect.objectContaining({
+                        netMeteringScheme: 'rcp_2026',
+                    }),
+                }), expect.any(String), undefined);
+            });
+        });
     });
 
     describe('Unsaved Changes Confirmation', () => {

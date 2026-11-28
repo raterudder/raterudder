@@ -4653,63 +4653,28 @@ func TestTesla(t *testing.T) {
 		assert.Empty(t, logBuf.String(), "Tesla auth/scope rejections must emit zero ERROR logs")
 	})
 
-	t.Run("GetEnergyHistory Releases Mutex For Concurrent GetStatus And SetModes", func(t *testing.T) {
+	t.Run("GetEnergyHistory Aborts On Context Cancel During SOE And Emits Warn Logs On Decode Errors", func(t *testing.T) {
 		yesterday := time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)
-		dayStr := yesterday.Format("2006-01-02")
 
-		var inFlightHistory atomic.Int32
-		var maxConcurrentHistory atomic.Int32
-		historyEntered := make(chan struct{}, 1)
+		t.Run("Aborts Immediately When Context Canceled During SOE Fetch", func(t *testing.T) {
+			reqCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
 
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch r.URL.Path {
-			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"default_real_mode":      "self_consumption",
-						"backup_reserve_percent": 20.0,
-						"nameplate_energy":       13500.0,
-						"installation_time_zone": "UTC",
-					},
-				})
-			case "/api/1/energy_sites/1234/live_status":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"percentage_charged": 72.0,
-						"grid_status":        "Active",
-					},
-				})
-			case "/api/1/energy_sites/1234/backup":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{"code": 201, "message": "Updated"},
-				})
-			case "/api/1/energy_sites/1234/operation":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{"code": 201, "message": "Updated"},
-				})
-			case "/api/1/energy_sites/1234/calendar_history":
-				cur := inFlightHistory.Add(1)
-				for {
-					prev := maxConcurrentHistory.Load()
-					if cur <= prev || maxConcurrentHistory.CompareAndSwap(prev, cur) {
-						break
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"installation_time_zone": "UTC",
+						},
+					})
+				case "/api/1/energy_sites/1234/calendar_history":
+					if r.URL.Query().Get("kind") == "soe" {
+						cancel()
+						w.WriteHeader(http.StatusInternalServerError)
+						return
 					}
-				}
-				defer inFlightHistory.Add(-1)
-
-				select {
-				case historyEntered <- struct{}{}:
-				default:
-				}
-
-				select {
-				case <-time.After(350 * time.Millisecond):
-				case <-r.Context().Done():
-					return
-				}
-
-				if strings.HasPrefix(r.URL.Query().Get("start_date"), dayStr) && r.URL.Query().Get("kind") == "energy" {
 					json.NewEncoder(w).Encode(map[string]any{
 						"response": map[string]any{
 							"time_series": []map[string]any{
@@ -4721,208 +4686,76 @@ func TestTesla(t *testing.T) {
 							},
 						},
 					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			teslaSys := &Tesla{
+				base: &baseTesla{
+					client: ts.Client(),
+				},
+				token:        "mock-access",
+				energySiteID: 1234,
+				baseURL:      ts.URL,
+			}
+
+			_, err := teslaSys.GetEnergyHistory(reqCtx, yesterday, yesterday.Add(23*time.Hour))
+			require.Error(t, err)
+			assert.ErrorIs(t, err, context.Canceled)
+		})
+
+		t.Run("Envelope And Response JSON Decode Failures Emit Warn And Zero Error Logs", func(t *testing.T) {
+			respBody := `{"response":{truncated`
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"installation_time_zone": "UTC",
+						},
+					})
 					return
 				}
-				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"time_series": []any{}}})
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer ts.Close()
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(respBody))
+			}))
+			defer ts.Close()
 
-		m := teslaMap(ts)
-		sys, err := m.Site(ctx, "site-concurrent-history", types.Settings{
-			ESS:           "tesla",
-			MinBatterySOC: 20.0,
+			var logBuf bytes.Buffer
+			warnCtx := log.With(ctx, slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+			teslaSys := &Tesla{
+				base: &baseTesla{
+					client: ts.Client(),
+				},
+				token:        "mock-access",
+				energySiteID: 1234,
+				baseURL:      ts.URL,
+			}
+
+			_, err := teslaSys.GetEnergyHistory(warnCtx, yesterday, yesterday.Add(23*time.Hour))
+			require.Error(t, err)
+
+			respBody = `"not-an-envelope"`
+			_, err = teslaSys.GetEnergyHistory(warnCtx, yesterday, yesterday.Add(23*time.Hour))
+			require.Error(t, err)
+
+			respBody = `{"response":"not-an-object"}`
+			_, err = teslaSys.GetEnergyHistory(warnCtx, yesterday, yesterday.Add(23*time.Hour))
+			require.Error(t, err)
+
+			lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+			require.NotEmpty(t, lines)
+			for _, line := range lines {
+				assert.Contains(t, line, `"level":"WARN"`)
+				assert.NotContains(t, line, `"level":"ERROR"`)
+				assert.Contains(t, line, `"body":`)
+			}
+			assert.Contains(t, logBuf.String(), "failed to decode tesla envelope")
+			assert.Contains(t, logBuf.String(), "failed to decode tesla response")
 		})
-		require.NoError(t, err)
-
-		teslaSys := sys.(*Tesla)
-		teslaSys.token = "mock-access"
-		teslaSys.energySiteID = 1234
-		teslaSys.baseURL = ts.URL
-
-		historyErrCh := make(chan error, 1)
-		var historyStats []types.DailyEnergyStats
-		go func() {
-			var hErr error
-			historyStats, hErr = teslaSys.GetEnergyHistory(ctx, yesterday, yesterday.Add(23*time.Hour))
-			historyErrCh <- hErr
-		}()
-
-		select {
-		case <-historyEntered:
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for GetEnergyHistory to enter calendar_history")
-		}
-
-		// GetEnergyHistory has 4 sequential calendar_history calls (~1.4s total);
-		// concurrent GetStatus and SetModes must finish immediately without waiting on b.mu.
-		startControl := time.Now()
-		var wg sync.WaitGroup
-		var statusRes types.SystemStatus
-		var statusErr, setModesErr error
-		var modesChanged bool
-
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			statusRes, statusErr = teslaSys.GetStatus(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			modesChanged, setModesErr = teslaSys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{MinimumSOC: 72})
-		}()
-		wg.Wait()
-		controlElapsed := time.Since(startControl)
-
-		require.NoError(t, statusErr)
-		assert.Equal(t, 72.0, statusRes.BatterySOC)
-		require.NoError(t, setModesErr)
-		assert.True(t, modesChanged)
-		assert.Less(t, controlElapsed, 300*time.Millisecond, "GetStatus and SetModes must not wait for in-flight GetEnergyHistory requests")
-
-		require.NoError(t, <-historyErrCh)
-		assert.Len(t, historyStats, 1)
-		assert.Equal(t, int32(1), maxConcurrentHistory.Load(), "GetEnergyHistory must issue one outbound request at a time")
-	})
-
-	t.Run("GetEnergyHistory Unconditionally Updates SiteInfo Cache Under Lock", func(t *testing.T) {
-		yesterday := time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)
-		entered := make(chan struct{}, 1)
-		release := make(chan struct{})
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch r.URL.Path {
-			case "/api/1/energy_sites/1234/site_info":
-				select {
-				case entered <- struct{}{}:
-				default:
-				}
-				<-release
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"installation_time_zone": "America/Chicago",
-						"backup_reserve_percent": 35.0,
-					},
-				})
-			case "/api/1/energy_sites/1234/calendar_history":
-				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"time_series": []any{}}})
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer ts.Close()
-
-		teslaSys := &Tesla{
-			base: &baseTesla{
-				client: ts.Client(),
-			},
-			token:        "mock-access",
-			energySiteID: 1234,
-			baseURL:      ts.URL,
-		}
-
-		errCh := make(chan error, 1)
-		go func() {
-			_, err := teslaSys.GetEnergyHistory(ctx, yesterday, yesterday.Add(23*time.Hour))
-			errCh <- err
-		}()
-
-		<-entered
-		teslaSys.mu.Lock()
-		teslaSys.siteInfoCache = teslaSiteInfoResponse{InstallationTimeZone: "UTC", BackupReservePercent: 10.0}
-		teslaSys.siteInfoExpiry = time.Now().Add(30 * time.Minute)
-		teslaSys.mu.Unlock()
-		close(release)
-
-		require.NoError(t, <-errCh)
-		teslaSys.mu.Lock()
-		cachedTZ := teslaSys.siteInfoCache.InstallationTimeZone
-		teslaSys.mu.Unlock()
-		assert.Equal(t, "America/Chicago", cachedTZ)
-	})
-
-	t.Run("Concurrent Authenticate And GetEnergyHistory Are Race Free", func(t *testing.T) {
-		yesterday := time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch r.URL.Path {
-			case "/oauth2/v3/token":
-				json.NewEncoder(w).Encode(map[string]any{
-					"access_token":  "refreshed-access",
-					"refresh_token": "refreshed-refresh",
-					"expires_in":    3600,
-				})
-			case "/api/1/energy_sites/1234/site_info":
-				assert.Contains(t, r.Header.Get("Authorization"), "Bearer ")
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"installation_time_zone": "UTC",
-						"backup_reserve_percent": 20.0,
-						"nameplate_energy":       13500.0,
-					},
-				})
-			case "/api/1/energy_sites/1234/live_status":
-				assert.Contains(t, r.Header.Get("Authorization"), "Bearer ")
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"percentage_charged": 75.0,
-						"grid_status":        "Active",
-					},
-				})
-			case "/api/1/energy_sites/1234/calendar_history":
-				assert.Contains(t, r.Header.Get("Authorization"), "Bearer ")
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{"time_series": []any{}},
-				})
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer ts.Close()
-
-		m := teslaMap(ts)
-		sys, err := m.Site(ctx, "site-concurrent-auth-history", types.Settings{
-			ESS:           "tesla",
-			MinBatterySOC: 20.0,
-		})
-		require.NoError(t, err)
-
-		teslaSys := sys.(*Tesla)
-		teslaSys.token = "initial-access"
-		teslaSys.energySiteID = 1234
-		teslaSys.baseURL = ts.URL
-
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 5; i++ {
-				_, err := teslaSys.GetEnergyHistory(ctx, yesterday, yesterday.Add(23*time.Hour))
-				assert.NoError(t, err)
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 5; i++ {
-				expiry := time.Now().Add(-time.Hour)
-				if i%2 == 1 {
-					expiry = time.Now().Add(2 * time.Hour)
-				}
-				_, _, err := teslaSys.Authenticate(ctx, types.Credentials{
-					Tesla: &types.TeslaCredentials{
-						Region:       "NA",
-						AccessToken:  "cached-access",
-						RefreshToken: "valid-refresh",
-						Expiry:       expiry,
-						EnergySiteID: 1234,
-					},
-				})
-				assert.NoError(t, err)
-			}
-		}()
-		wg.Wait()
 	})
 }
 

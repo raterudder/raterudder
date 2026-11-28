@@ -78,6 +78,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [showGridWarning, setShowGridWarning] = useState(false);
     const [showLocationWarning, setShowLocationWarning] = useState(false);
     const [showSBPApplicationYearWarning, setShowSBPApplicationYearWarning] = useState(false);
+    const [showAPSRCPCohortWarning, setShowAPSRCPCohortWarning] = useState(false);
     const enphaseExportSchedules = useFeatureFlag('enphaseExportSchedules');
 
     const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -154,11 +155,19 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 settings.utilityRateOptions?.netMeteringScheme === 'sbp' &&
                 !settings.utilityRateOptions?.applicationYear;
             setShowSBPApplicationYearWarning(missingSDGESBPYear && !isSBPYearDismissed);
+
+            const apsRCPKey = siteID ? `aps_rcp_cohort_warning_dismissed_${siteID}` : 'aps_rcp_cohort_warning_dismissed';
+            const isAPSRCPDismissed = localStorage.getItem(apsRCPKey) === 'true';
+            const apsNetMeteringScheme = settings.utilityRateOptions?.netMeteringScheme;
+            const missingAPSRCPCohort = settings.utilityProvider === 'aps' &&
+                (apsNetMeteringScheme === 'rcp' || (!apsNetMeteringScheme && Boolean(settings.utilityRate)));
+            setShowAPSRCPCohortWarning(missingAPSRCPCohort && !isAPSRCPDismissed);
         } else {
             setShowGridWarning(false);
             setShowLocationWarning(false);
             setShowTOUNotice(false);
             setShowSBPApplicationYearWarning(false);
+            setShowAPSRCPCohortWarning(false);
         }
     }, [settings, siteID, enphaseExportSchedules]);
 
@@ -166,6 +175,12 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
         const key = siteID ? `sbp_application_year_warning_dismissed_${siteID}` : 'sbp_application_year_warning_dismissed';
         localStorage.setItem(key, 'true');
         setShowSBPApplicationYearWarning(false);
+    };
+
+    const dismissAPSRCPCohortWarning = () => {
+        const key = siteID ? `aps_rcp_cohort_warning_dismissed_${siteID}` : 'aps_rcp_cohort_warning_dismissed';
+        localStorage.setItem(key, 'true');
+        setShowAPSRCPCohortWarning(false);
     };
 
     const dismissTOUNotice = () => {
@@ -421,10 +436,14 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     prevSOC
                 );
 
+                const isEVCharging = action.reason === ActionReason.EVChargingStandby;
+                const prevIsEVCharging = currentSummary?.reason === ActionReason.EVChargingStandby;
+
                 if (
                     currentSummary &&
                     currentSummary.type === 'grouped' &&
                     (currentSummary.loadSubType ?? 'load') === actionLoadSubType &&
+                    prevIsEVCharging === isEVCharging &&
                     (
                         (currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === effectiveBatteryMode) ||
                         (action.batteryMode === BatteryMode.NoChange)
@@ -615,6 +634,19 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                                 </span>
                             </p>
                             <button onClick={dismissSBPApplicationYearWarning} className="banner-dismiss-btn" aria-label="Dismiss SDG&E application year warning">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    )}
+                    {showAPSRCPCohortWarning && (
+                        <div className="banner warning-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="aps-rcp-cohort-warning-banner">
+                            <p>
+                                <span>
+                                    <strong>Warning:</strong> APS Rate Rider RCP export credits vary significantly by interconnection year (e.g., 2017–2026 tranches).{' '}
+                                    <Link href="/settings?tariff=1">Select your RCP cohort in Settings</Link> for accurate export pricing.
+                                </span>
+                            </p>
+                            <button onClick={dismissAPSRCPCohortWarning} className="banner-dismiss-btn" aria-label="Dismiss APS RCP cohort warning">
                                 <span aria-hidden="true">&times;</span>
                             </button>
                         </div>

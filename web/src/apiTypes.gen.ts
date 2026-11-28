@@ -519,8 +519,6 @@ export interface AuthStatus {
 
 export interface AdminSite {
     id: string;
-    inviteCode: string;
-    permissions: SitePermissions[];
     lastAction?: Action;
     alias?: string;
     features?: Record<string, boolean>;

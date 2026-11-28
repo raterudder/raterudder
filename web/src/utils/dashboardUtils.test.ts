@@ -1080,6 +1080,80 @@ describe('dashboardUtils', () => {
             expect(summary.beats[0].socText).toBe('100%');
         });
 
+        it('keeps EV charging standby in standby timeline category while denoting EV charging in summary beats', () => {
+            const evChargingSummary: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.EVChargingStandby,
+                startTime: '2026-11-26T00:07:00-06:00',
+                endTime: '2026-11-26T02:47:00-06:00',
+                latestAction: {
+                    description: 'EV Charging Active. Standby to protect battery.',
+                    timestamp: '2026-11-26T02:47:00-06:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.EVChargingStandby,
+                    systemStatus: { ...baseSystemStatus, batterySOC: 61.9 }
+                },
+                count: 9,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.071,
+                min: 0.067,
+                max: 0.075,
+                hasSOC: true,
+                avgSOC: 62.1,
+                minSOC: 61.9,
+                maxSOC: 62.4,
+                startSOC: 62.4,
+                endSOC: 61.9
+            };
+
+            const currentOnly = buildDaySummary([evChargingSummary], '$');
+            expect(currentOnly.legend).toEqual([{ category: 'standby', label: 'Standby' }]);
+            expect(currentOnly.segments.every(s => s.category === 'standby')).toBe(true);
+            expect(currentOnly.beats).toHaveLength(1);
+            expect(currentOnly.beats[0].category).toBe('standby');
+            expect(currentOnly.beats[0].headline).toBe('Holding battery for EV charging');
+
+            const laterLoad: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                startTime: '2026-11-26T08:00:00-06:00',
+                endTime: '2026-11-26T10:00:00-06:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-26T10:00:00-06:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { ...baseSystemStatus, batterySOC: 48.0 }
+                },
+                count: 6,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.12,
+                min: 0.12,
+                max: 0.12,
+                hasSOC: true,
+                avgSOC: 55.0,
+                minSOC: 48.0,
+                maxSOC: 61.9,
+                startSOC: 61.9,
+                endSOC: 48.0
+            };
+
+            const fullDay = buildDaySummary([laterLoad, evChargingSummary], '$');
+            expect(fullDay.legend.map(l => l.category)).toEqual(['load', 'standby']);
+            expect(fullDay.beats).toHaveLength(2);
+            expect(fullDay.beats[0].headline).toBe('Running on solar & battery');
+            expect(fullDay.beats[1].category).toBe('standby');
+            expect(fullDay.beats[1].headline).toBe('Held battery for EV charging');
+        });
+
         it('classifies standby SOC increase without solar as grid charge instead of solar charge', () => {
             const daytimeSolarCharge: ActionSummary = {
                 isSummary: true,

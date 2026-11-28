@@ -154,16 +154,6 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configuredStrategy := settings.HomeLoadPredictionStrategy
-	if configuredStrategy == "" {
-		configuredStrategy = "default"
-	}
-	overrideStrategy := r.URL.Query().Get("overrideHomeLoadPredictionStrategy")
-	isStrategyOverridden := overrideStrategy != "" && overrideStrategy != configuredStrategy
-	if overrideStrategy != "" {
-		settings.HomeLoadPredictionStrategy = overrideStrategy
-	}
-
 	if settings.ESS == "" {
 		writeJSONError(w, "no ESS configured", http.StatusBadRequest)
 		return
@@ -195,7 +185,6 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	// FAST-PATH: If we have a fresh plan generated within the last hour,
 	// bypass the 35-day historical query, ESS status fetch, and controller simulation.
 	isFreshPlan := !regeneratePlan &&
-		!isStrategyOverridden &&
 		latestAction != nil &&
 		latestAction.Plan != nil &&
 		len(latestAction.Plan.Periods) > 0 &&

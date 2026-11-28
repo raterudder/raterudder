@@ -25,6 +25,24 @@
   --warning: #ffb800;
   --danger: #ff4b4b;
 
+  /* Plan & Activity Mode Colors */
+  --mode-solar-charge: #22c55e;
+  --mode-solar-charge-rgb: 34, 197, 94;
+  --mode-powering-home: #3b82f6;
+  --mode-powering-home-rgb: 59, 130, 246;
+  --mode-solar-export: #f97316;
+  --mode-solar-export-rgb: 249, 115, 22;
+  --mode-grid-export: #f59e0b;
+  --mode-grid-export-rgb: 245, 158, 11;
+  --mode-grid-charge: #8b5cf6;
+  --mode-grid-charge-rgb: 139, 92, 246;
+  --mode-standby: #64748b;
+  --mode-standby-rgb: 100, 116, 139;
+  --mode-vpp: #ec4899;
+  --mode-vpp-rgb: 236, 72, 153;
+  --mode-fault: #ef4444;
+  --mode-fault-rgb: 239, 68, 68;
+
   /* Surfaces & Text */
   --bg-app: var(--surface);
   --on-surface: #f1f5f9;
@@ -758,28 +776,33 @@ button {
 }
 
 .current-status-card.discharging .status-icon {
-  background: rgba(56, 189, 248, 0.14);
-  color: #38bdf8;
+  background: rgba(var(--mode-powering-home-rgb), 0.14);
+  color: var(--mode-powering-home);
 }
 
 .current-status-card.charging .status-icon {
-  background: rgba(139, 92, 246, 0.14);
-  color: #8b5cf6;
+  background: rgba(var(--mode-grid-charge-rgb), 0.14);
+  color: var(--mode-grid-charge);
 }
 
 .current-status-card.solar-charging .status-icon {
-  background: rgba(16, 185, 129, 0.14);
-  color: #10b981;
+  background: rgba(var(--mode-solar-charge-rgb), 0.14);
+  color: var(--mode-solar-charge);
 }
 
 .current-status-card.standby .status-icon {
-  background: rgba(100, 116, 139, 0.16);
+  background: rgba(var(--mode-standby-rgb), 0.16);
   color: #94a3b8;
 }
 
+.current-status-card.ev-charging .status-icon {
+  background: rgba(20, 184, 166, 0.14);
+  color: #14b8a6;
+}
+
 .current-status-card.vpp .status-icon {
-  background: rgba(59, 130, 246, 0.14);
-  color: #3b82f6;
+  background: rgba(var(--mode-vpp-rgb), 0.14);
+  color: var(--mode-vpp);
 }
 
 .status-info {
@@ -1068,39 +1091,39 @@ button {
 
 /* Tag Variants (Scoped to tags to avoid leaking to containers) */
 .tag.mode-charge_any {
-  background: rgba(139, 92, 246, 0.14);
+  background: rgba(var(--mode-grid-charge-rgb), 0.14);
   color: #a78bfa;
-  border: 1px solid rgba(139, 92, 246, 0.28);
+  border: 1px solid rgba(var(--mode-grid-charge-rgb), 0.28);
 }
 
 .tag.mode-charge_solar {
-  background: rgba(16, 185, 129, 0.14);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.28);
+  background: rgba(var(--mode-solar-charge-rgb), 0.14);
+  color: #4ade80;
+  border: 1px solid rgba(var(--mode-solar-charge-rgb), 0.28);
 }
 
 .tag.mode-load {
-  background: rgba(56, 189, 248, 0.14);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(var(--mode-powering-home-rgb), 0.14);
+  color: #60a5fa;
+  border: 1px solid rgba(var(--mode-powering-home-rgb), 0.28);
 }
 
 .tag.mode-standby {
-  background: rgba(100, 116, 139, 0.16);
+  background: rgba(var(--mode-standby-rgb), 0.16);
   color: var(--on-surface-variant);
-  border: 1px solid rgba(100, 116, 139, 0.3);
+  border: 1px solid rgba(var(--mode-standby-rgb), 0.3);
 }
 
 .tag.mode-vpp {
-  background: rgba(59, 130, 246, 0.14);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.28);
+  background: rgba(var(--mode-vpp-rgb), 0.14);
+  color: #f472b6;
+  border: 1px solid rgba(var(--mode-vpp-rgb), 0.28);
 }
 
 .tag.mode-export {
-  background: rgba(245, 158, 11, 0.14);
+  background: rgba(var(--mode-grid-export-rgb), 0.14);
   color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.28);
+  border: 1px solid rgba(var(--mode-grid-export-rgb), 0.28);
 }
 
 .tag.mode-no_change {

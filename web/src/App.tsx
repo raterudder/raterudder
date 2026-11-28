@@ -7,12 +7,12 @@ import Footer from './components/Footer';
 import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
-import LandingPage from './pages/LandingPage';
 import { routeImporters } from './utils/routePreload';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
 import { FeaturesProvider } from './utils/features';
 import './utils/pwaUtils';
 
+const LandingPage = React.lazy(routeImporters['/']);
 const Dashboard = React.lazy(routeImporters['/dashboard']);
 const Settings = React.lazy(routeImporters['/settings']);
 const Forecast = React.lazy(routeImporters['/forecast']);
@@ -392,6 +392,15 @@ function AppContent() {
         ? [...sites, { id: viewSiteOverride, name: "" }]
         : sites;
 
+    const isDirectSiteMember = sites.some(site => site.id === effectiveSiteID);
+    const canConfigureNotifications = effectiveSiteID === 'ALL' ? sites.length > 0 : isDirectSiteMember;
+
+    useEffect(() => {
+        if (!canConfigureNotifications && isNotificationModalOpen) {
+            setIsNotificationModalOpen(false);
+        }
+    }, [canConfigureNotifications, isNotificationModalOpen]);
+
     useEffect(() => {
         if (selectedSiteID === 'ALL' && effectiveSites.length <= 1) {
             setSelectedSiteID(sites[0]?.id || "");
@@ -399,6 +408,9 @@ function AppContent() {
     }, [selectedSiteID, effectiveSites.length, sites]);
 
     const handleSiteChange = (id: string) => {
+        if (!id) {
+            return;
+        }
         if (id === effectiveSiteID && !viewSiteOverride) {
             return;
         }
@@ -431,7 +443,7 @@ function AppContent() {
                     selectedSiteID={effectiveSiteID}
                     onSiteChange={handleSiteChange}
                     onLogout={handleLogout}
-                    onOpenNotifications={() => setIsNotificationModalOpen(true)}
+                    onOpenNotifications={canConfigureNotifications ? () => setIsNotificationModalOpen(true) : undefined}
                 />
 
                 <main className="main-content">
@@ -455,7 +467,9 @@ function AppContent() {
                             }
                         >
                             <Switch>
-                                <Route path="/" component={LandingPage} />
+                                <Route path="/">
+                                    <LandingPage />
+                                </Route>
                                 <Route path="/how-it-works">
                                     <HowItWorksPage />
                                 </Route>
@@ -586,7 +600,7 @@ function AppContent() {
                     </Suspense>
                 )}
 
-                {loggedIn && isNotificationModalOpen && (
+                {loggedIn && canConfigureNotifications && isNotificationModalOpen && (
                     <Suspense fallback={null}>
                         <NotificationModal
                             open={isNotificationModalOpen}

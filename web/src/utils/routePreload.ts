@@ -22,6 +22,7 @@ function decrementBackgroundPreload(path: string): void {
 }
 
 export const routeImporters = {
+    '/': () => import('../pages/LandingPage'),
     '/dashboard': () => import('../pages/Dashboard'),
     '/settings': () => import('../pages/Settings'),
     '/forecast': () => import('../pages/Forecast'),

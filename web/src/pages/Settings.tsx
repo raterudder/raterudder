@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useState, useRef, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type UtilityRateOptions, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
@@ -11,11 +11,14 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
-import { ConnectAIDialog } from '../components/ConnectAIDialog';
 import { isESSEnabled } from '../utils/enabledProviders';
 import { useFeatureFlag } from '../utils/features';
 import { areSettingsEqual } from '../utils/settingsUtils';
 import './Settings.css';
+
+const ConnectAIDialog = lazy(() =>
+    import('../components/ConnectAIDialog').then((m) => ({ default: m.ConnectAIDialog }))
+);
 
 const countries = [
     { label: 'United States', value: 'US' },
@@ -134,12 +137,25 @@ const setRateOptionField = (
     (opts as Record<string, string | number | boolean>)[field] = value;
 };
 
+const isValidUtilityOptionValue = (
+    opt: UtilityRateOption,
+    val: string | number | boolean | null | undefined
+): boolean => {
+    if (val === undefined || val === null || val === '') {
+        return false;
+    }
+    if (opt.type === 'select' && opt.choices && opt.choices.length > 0) {
+        return opt.choices.some(c => c.value === val);
+    }
+    return true;
+};
+
 const getEffectiveOptionValue = (
     opt: UtilityRateOption,
     rateOptions: UtilityRateOptions | undefined
 ) => {
     const val = getRateOptionField(rateOptions, opt.field);
-    if (val !== undefined && val !== null && val !== '') {
+    if (isValidUtilityOptionValue(opt, val)) {
         return val;
     }
     if (opt.type === 'switch') {
@@ -176,7 +192,7 @@ const applyVisibleUtilityOptionDefaults = (
             return;
         }
         const existing = getRateOptionField(finalOpts, opt.field);
-        if (existing === undefined || existing === null || existing === "") {
+        if (!isValidUtilityOptionValue(opt, existing)) {
             if (opt.default !== undefined) {
                 setRateOptionField(finalOpts, opt.field, opt.default);
             }
@@ -357,7 +373,7 @@ const UtilityForm = ({
                                     <>
                                         <Field.Label htmlFor={`opt-${opt.field}`}>{opt.name}</Field.Label>
                                         <Select.Root
-                                            value={String(getRateOptionField(settings.utilityRateOptions, opt.field) || opt.default || "")}
+                                            value={String(getEffectiveOptionValue(opt, settings.utilityRateOptions) ?? "")}
                                             onValueChange={(value) => {
                                                 const newOpts: UtilityRateOptions = {
                                                     ...settings.utilityRateOptions,
@@ -370,7 +386,7 @@ const UtilityForm = ({
                                             <Select.Trigger className="select-trigger" id={`opt-${opt.field}`}>
                                                 <Select.Value>
                                                     {(() => {
-                                                        const selVal = String(getRateOptionField(settings.utilityRateOptions, opt.field) || opt.default || "");
+                                                        const selVal = String(getEffectiveOptionValue(opt, settings.utilityRateOptions) ?? "");
                                                         return opt.choices?.find(c => c.value === selVal)?.name || selVal;
                                                     })()}
                                                 </Select.Value>
@@ -4098,12 +4114,16 @@ const Settings = ({
                         </Collapsible.Panel>
                     </Collapsible.Root>
 
-                    <ConnectAIDialog
-                        open={isConnectAIDialogOpen}
-                        onOpenChange={setIsConnectAIDialogOpen}
-                        apps={apps}
-                        onCreateApp={handleCreateAppWithName}
-                    />
+                    {isConnectAIDialogOpen && (
+                        <Suspense fallback={null}>
+                            <ConnectAIDialog
+                                open={isConnectAIDialogOpen}
+                                onOpenChange={setIsConnectAIDialogOpen}
+                                apps={apps}
+                                onCreateApp={handleCreateAppWithName}
+                            />
+                        </Suspense>
+                    )}
                 </div>
             )}
 

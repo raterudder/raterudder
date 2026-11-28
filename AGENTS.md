@@ -86,6 +86,11 @@
     `go build -tags timetzdata ./cmd/...`
   - Build static production `raterudder` binary with embedded `web/dist` (run frontend build first):
     `CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o /tmp/raterudder ./cmd/raterudder`
+- **Container Build & Smoke Checks**:
+  - Build the production multi-stage Docker image locally (matches CI `smoke-container` job):
+    `docker build -t raterudder:smoke .`
+  - Run live container startup, `/healthz` (`200` and `503`), embedded SPA/SEO asset, API, and CSP smoke checks against the Firestore emulator container:
+    `./scripts/smoke-container.sh raterudder:smoke`
 - **Fixture Privacy Checks**:
   - Verify synthetic `^site[0-9]+$` IDs, redacted PII/credentials, and 2-decimal weather coordinates across `pkg/controller/testdata/`:
     `go test ./pkg/controller -run "^TestFixturePrivacy$"`

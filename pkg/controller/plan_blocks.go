@@ -943,8 +943,9 @@ func expandBlockAction(
 				// tiedPositions is ordered by timeline so is the 1st index is the cheapest
 				// and cheaper than 0th index than it should be the first element in the slice
 				if !isContinuingCharge && block.startIdx == 0 && tiedPositions[0] == 1 {
-					waiting := timeline[0].endTime.Sub(timeline[0].startTime) + computeInitialDeficitWait(startState, timeline, lastAction)
-					if waiting <= chargeCompletionBufferDuration+time.Minute {
+					initialWait := computeInitialDeficitWait(startState, timeline, lastAction)
+					waiting := timeline[0].endTime.Sub(timeline[0].startTime) + initialWait
+					if initialWait < chargeCompletionBufferDuration && waiting <= chargeCompletionBufferDuration+time.Minute {
 						bestStart = 1
 					}
 				}
@@ -1594,6 +1595,8 @@ func validateCandidateTrajectory(
 	var preChargeSOC float64
 	for i := 0; i < len(timeline); i++ {
 		if actions[i].batteryMode == types.BatteryModeExport &&
+			actions[i].reason != types.ActionReasonVPPActive &&
+			actions[i].reason != types.ActionReasonVPPPrep &&
 			metrics[i].batExportKWH > minSignificantBatteryPowerKW*timeline[i].durationHours &&
 			hasPriorCharge {
 			if timeline[i].batteryExportRate-maxPriorChargeRate < wear.exportGatePerKWH-priceEpsilonForEquality {
@@ -1601,6 +1604,8 @@ func validateCandidateTrajectory(
 			}
 		}
 		if actions[i].batteryMode == types.BatteryModeChargeAny &&
+			actions[i].reason != types.ActionReasonVPPPrep &&
+			actions[i].reason != types.ActionReasonVPPActive &&
 			metrics[i].gridChargeKWH > minSignificantBatteryPowerKW*timeline[i].durationHours {
 			if !hasPriorCharge {
 				hasPriorCharge = true
@@ -1615,14 +1620,16 @@ func validateCandidateTrajectory(
 				}
 			}
 		} else if hasPriorCharge &&
-			actions[i].batteryMode != types.BatteryModeExport &&
-			states[i+1].soc < states[i].soc &&
-			states[i+1].soc <= min(preChargeSOC, timeline[i].minSOC)+1.0 {
-			// Reset once household load drains the battery back down to (or below) both preChargeSOC
-			// and the period's minSOC floor. Requiring min(preChargeSOC, minSOC) ensures that neither
-			// a temporary elevated minSOC reserve window nor daytime load draining a grid-charged
-			// battery down to preChargeSOC (while still sitting above minSOC) prematurely clears
-			// hasPriorCharge while grid-charged energy remains available to export.
+			(actions[i].reason == types.ActionReasonVPPPrep ||
+				((actions[i].batteryMode != types.BatteryModeExport || actions[i].reason == types.ActionReasonVPPActive) &&
+					states[i+1].soc < states[i].soc &&
+					states[i+1].soc <= min(preChargeSOC, timeline[i].minSOC)+1.0)) {
+			// Reset on mandatory VPP preparation windows (which decouple prior charges for the required
+			// 100% VPP target) or once household load / active VPP discharge drains the battery back down
+			// to (or below) both preChargeSOC and the period's minSOC floor. Requiring min(preChargeSOC, minSOC)
+			// ensures that neither a temporary elevated minSOC reserve window nor partial daytime/non-mandatory-VPP
+			// discharge down to preChargeSOC (while still sitting above minSOC) prematurely clears hasPriorCharge
+			// while grid-charged energy remains available to export.
 			hasPriorCharge = false
 			maxPriorChargeRate = 0
 			preChargeSOC = 0

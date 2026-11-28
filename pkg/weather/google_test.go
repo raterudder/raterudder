@@ -3,12 +3,18 @@ package weather
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/levenlabs/go-llog"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +40,134 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 
 		_, err = w.Location(context.Background(), "US", "")
 		assert.ErrorContains(t, err, "country code and zip code are required")
+	})
+
+	t.Run("InvalidLocationInputs", func(t *testing.T) {
+		var upstreamHits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			upstreamHits.Add(1)
+			rw.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		geoURL, err := url.Parse(ts.URL + "/geocode")
+		require.NoError(t, err)
+
+		w := &GoogleGeocodingWrapper{
+			APIKey:       "FAKE_GMAPS_KEY_MARKER_9911",
+			GeocodingURL: geoURL,
+			HTTPClient:   ts.Client(),
+		}
+
+		_, err = w.Location(context.Background(), "US", strings.Repeat("%", 400000))
+		require.ErrorIs(t, err, ErrInvalidLocation)
+		assert.NotContains(t, err.Error(), "FAKE_GMAPS_KEY_MARKER_9911")
+
+		_, err = w.Location(context.Background(), "US", strings.Repeat("9", MaxPostalCodeLength+1))
+		require.ErrorIs(t, err, ErrInvalidLocation)
+
+		_, err = w.Location(context.Background(), "US", "90210\n")
+		require.ErrorIs(t, err, ErrInvalidLocation)
+
+		_, err = w.Location(context.Background(), "U\x00", "90210")
+		require.ErrorIs(t, err, ErrInvalidLocation)
+
+		_, err = w.Location(context.Background(), "TOOLONG", "90210")
+		require.ErrorIs(t, err, ErrInvalidLocation)
+
+		_, err = w.Location(context.Background(), "US", "%%%")
+		require.ErrorIs(t, err, ErrInvalidLocation)
+
+		assert.Equal(t, int32(0), upstreamHits.Load())
+	})
+
+	t.Run("GeocodingTransportErrorRedactsAPIKey", func(t *testing.T) {
+		closedTS := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {}))
+		closedURL := closedTS.URL
+		closedClient := closedTS.Client()
+		closedTS.Close()
+
+		geoURL, err := url.Parse(closedURL + "/geocode")
+		require.NoError(t, err)
+
+		const apiKey = "FAKE_GMAPS_KEY_MARKER_9911+secret/val=1"
+		w := &GoogleGeocodingWrapper{
+			APIKey:       apiKey,
+			GeocodingURL: geoURL,
+			HTTPClient:   closedClient,
+		}
+
+		_, err = w.Location(context.Background(), "US", "60601")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "FAKE_GMAPS_KEY_MARKER_9911")
+		assert.NotContains(t, err.Error(), apiKey)
+		assert.NotContains(t, fmt.Sprintf("%v", llog.ErrKV(err)), "FAKE_GMAPS_KEY_MARKER_9911")
+		assert.Contains(t, err.Error(), "key=REDACTED")
+
+		var netErr net.Error
+		assert.ErrorAs(t, err, &netErr)
+		var urlErr *url.Error
+		if assert.ErrorAs(t, err, &urlErr) {
+			assert.NotContains(t, urlErr.URL, "FAKE_GMAPS_KEY_MARKER_9911")
+			assert.Contains(t, urlErr.URL, "key=REDACTED")
+		}
+	})
+
+	t.Run("TimezoneTransportErrorRedactsAPIKey", func(t *testing.T) {
+		geoTS := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			resp := googleGeocodingResponse{
+				Results: []googleGeocodingResult{
+					{
+						Location: googleGeocodingLocation{Latitude: 41.8818, Longitude: -87.6231},
+					},
+				},
+			}
+			_ = json.NewEncoder(rw).Encode(resp)
+		}))
+		defer geoTS.Close()
+
+		closedTZ := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {}))
+		closedTZURL := closedTZ.URL
+		closedTZ.Close()
+
+		geoURL, err := url.Parse(geoTS.URL + "/geocode")
+		require.NoError(t, err)
+		tzURL, err := url.Parse(closedTZURL + "/timezone")
+		require.NoError(t, err)
+
+		const apiKey = "FAKE_GMAPS_KEY_MARKER_9911"
+		w := &GoogleGeocodingWrapper{
+			APIKey:       apiKey,
+			GeocodingURL: geoURL,
+			TimezoneURL:  tzURL,
+			HTTPClient:   geoTS.Client(),
+		}
+
+		_, err = w.Location(context.Background(), "US", "60601")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), apiKey)
+		assert.NotContains(t, fmt.Sprintf("%v", llog.ErrKV(err)), apiKey)
+		assert.Contains(t, err.Error(), "key=REDACTED")
+
+		var netErr net.Error
+		assert.ErrorAs(t, err, &netErr)
+
+		// Also verify deadline exceeded unwrapping on timezone timeout
+		slowTZ := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		defer slowTZ.Close()
+
+		slowTZURL, err := url.Parse(slowTZ.URL + "/timezone")
+		require.NoError(t, err)
+		w.TimezoneURL = slowTZURL
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		_, err = w.Location(ctx, "US", "60601")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), apiKey)
+		assert.True(t, errors.Is(err, context.DeadlineExceeded))
 	})
 
 	t.Run("GeocodingAPIError", func(t *testing.T) {
@@ -248,6 +382,50 @@ func TestGoogleGeocodingWrapper(t *testing.T) {
 		assert.Equal(t, "Beverly Hills", loc.City)
 		assert.Equal(t, "America/Los_Angeles", loc.TimeZone)
 		assert.Equal(t, float64(0), loc.Elevation)
+	})
+
+	t.Run("InternationalAlphanumericPostalCode", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/geocode" {
+				assert.Equal(t, "SW1A 1AA", r.URL.Query().Get("address.postalCode"))
+				assert.Equal(t, "GB", r.URL.Query().Get("address.regionCode"))
+				_ = json.NewEncoder(rw).Encode(googleGeocodingResponse{
+					Results: []googleGeocodingResult{
+						{
+							PostalAddress: googleGeocodingPostalAddress{Locality: "London"},
+							Location:      googleGeocodingLocation{Latitude: 51.5014, Longitude: -0.1419},
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/timezone" {
+				_ = json.NewEncoder(rw).Encode(googleTimezoneResponse{
+					Status:     "OK",
+					TimeZoneID: "Europe/London",
+				})
+				return
+			}
+		}))
+		defer ts.Close()
+
+		geoURL, err := url.Parse(ts.URL + "/geocode")
+		require.NoError(t, err)
+		tzURL, err := url.Parse(ts.URL + "/timezone")
+		require.NoError(t, err)
+
+		w := &GoogleGeocodingWrapper{
+			APIKey:       "FAKE_GMAPS_KEY",
+			GeocodingURL: geoURL,
+			TimezoneURL:  tzURL,
+			HTTPClient:   ts.Client(),
+		}
+
+		loc, err := w.Location(context.Background(), "GB", "SW1A 1AA")
+		require.NoError(t, err)
+		assert.Equal(t, "SW1A 1AA", loc.PostalCode)
+		assert.Equal(t, "GB", loc.CountryCode)
+		assert.Equal(t, "Europe/London", loc.TimeZone)
 	})
 
 	t.Run("ForecastForwarding", func(t *testing.T) {
