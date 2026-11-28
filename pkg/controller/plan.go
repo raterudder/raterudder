@@ -2054,13 +2054,16 @@ func finalizeDecisionAndPlan(
 	// sufficient battery until charge, holding for daytime solar refill, or preventing solar curtailment).
 	minHorizonImportRate, maxHorizonImportRate := calculateTimelinePriceRange(timeline)
 
-	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
+	resolvedActions := make([]actionCandidate, min(len(winningPath.actions), len(timeline)))
+	for i := range resolvedActions {
+		action := winningPath.actions[i]
 		reason, desc, futPrice := resolvePlanActionReason(winningPath, i, timeline, settings, maxHorizonImportRate, minHorizonImportRate)
-		winningPath.actions[i].reason = reason
-		winningPath.actions[i].description = desc
-		winningPath.actions[i].futurePrice = futPrice
+		action.reason = reason
+		action.description = desc
+		action.futurePrice = futPrice
+		resolvedActions[i] = action
 	}
-	immediateAction := winningPath.actions[0]
+	immediateAction := resolvedActions[0]
 
 	// Evaluate recent home usage and Q3 baseline for action telemetry and reserve description
 	loc := now.Location()
@@ -2080,7 +2083,7 @@ func finalizeDecisionAndPlan(
 
 	if immediateAction.reason == types.ActionReasonBatteryAtReserve && isAbnormal {
 		immediateAction.description = "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid."
-		winningPath.actions[0].description = immediateAction.description
+		resolvedActions[0].description = immediateAction.description
 	}
 
 	// Resolve the integer ChargeToSOC target dispatched to the ESS hardware:
@@ -2177,8 +2180,8 @@ func finalizeDecisionAndPlan(
 	var periods []types.PlanPeriod
 	var totalCostDollars, totalExportCredits float64
 
-	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
-		action := winningPath.actions[i]
+	for i := 0; i < len(resolvedActions); i++ {
+		action := resolvedActions[i]
 		interval := timeline[i]
 		if !interval.startTime.Before(planDisplayEnd) {
 			break

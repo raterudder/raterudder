@@ -53,6 +53,9 @@ func (w *GoogleGeocodingWrapper) Location(ctx context.Context, countryCode, post
 	if countryCode == "" || postalCode == "" {
 		return types.SiteLocation{}, fmt.Errorf("country code and zip code are required")
 	}
+	if err := ValidateLocationInput(countryCode, postalCode); err != nil {
+		return types.SiteLocation{}, err
+	}
 
 	lat, lng, city, err := w.geocode(ctx, countryCode, postalCode)
 	if err != nil {
@@ -105,12 +108,12 @@ func (w *GoogleGeocodingWrapper) geocode(ctx context.Context, countryCode, posta
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("failed to create geocoding request: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to create geocoding request: %w", redactRequestError(err, w.APIKey))
 	}
 
 	resp, err := w.HTTPClient.Do(req)
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("geocoding request failed: %w", err)
+		return 0, 0, "", fmt.Errorf("geocoding request failed: %w", redactRequestError(err, w.APIKey))
 	}
 	defer resp.Body.Close()
 
@@ -154,7 +157,7 @@ func (w *GoogleGeocodingWrapper) geocode(ctx context.Context, countryCode, posta
 			slog.String("postalCode", postalCode),
 			slog.String("countryCode", countryCode),
 		)
-		return 0, 0, "", fmt.Errorf("no location found for zip code %s and country code %s", postalCode, countryCode)
+		return 0, 0, "", fmt.Errorf("%w for zip code %s and country code %s", ErrNoLocationFound, postalCode, countryCode)
 	}
 
 	log.Ctx(ctx).Debug("found geocoding results",
@@ -182,12 +185,12 @@ func (w *GoogleGeocodingWrapper) fetchTimezone(ctx context.Context, lat, lng flo
 
 	tzReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create timezone request: %w", err)
+		return "", fmt.Errorf("failed to create timezone request: %w", redactRequestError(err, w.APIKey))
 	}
 
 	tzResp, err := w.HTTPClient.Do(tzReq)
 	if err != nil {
-		return "", fmt.Errorf("timezone request failed: %w", err)
+		return "", fmt.Errorf("timezone request failed: %w", redactRequestError(err, w.APIKey))
 	}
 	defer tzResp.Body.Close()
 

@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 )
 
 var errESSRateLimited = errors.New("ESS rate limited")
@@ -75,6 +77,16 @@ func checkInteractiveESSRateLimit(authStatus *types.ESSAuthStatus, now time.Time
 		}
 	}
 	return 0
+}
+
+func clientLocationErrorMessage(err error) string {
+	if errors.Is(err, weather.ErrInvalidLocation) {
+		return err.Error()
+	}
+	if errors.Is(err, weather.ErrNoLocationFound) || (strings.Contains(strings.ToLower(err.Error()), "no location found") && !strings.Contains(err.Error(), "://")) {
+		return fmt.Sprintf("failed to fetch location data: %v", err)
+	}
+	return "failed to fetch location data"
 }
 
 type settingsWithVersion struct {
@@ -561,6 +573,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "solar trend ratio max must be at least 1", http.StatusBadRequest)
 		return
 	}
+	if err := weather.ValidateLocationInput(newSettings.CountryCode, newSettings.PostalCode); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "invalid location settings", slog.Any("error", err))
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// this should never really happen in practice but makes tests easier
 	if newSettings.Release == "" {
 		newSettings.Release = s.release
@@ -626,7 +643,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			loc, err := s.weather.Location(ctx, newSettings.CountryCode, newSettings.PostalCode)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to fetch location data", slog.Any("error", err))
-				writeJSONError(w, fmt.Sprintf("failed to fetch location data: %v", err), http.StatusBadRequest)
+				writeJSONError(w, clientLocationErrorMessage(err), http.StatusBadRequest)
 				return
 			}
 			newSettings.Location = &loc
