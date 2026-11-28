@@ -931,7 +931,7 @@ func TestExpandBlockAction(t *testing.T) {
 		deficitAtSliver := deficit15
 		deficitAtSliver.time = sliverStart
 
-		freshSliverActs := expandBlockAction(sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, nil, nil)
+		freshSliverActs := expandBlockAction(nil, nil, sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, nil, nil)
 		if assert.Len(t, freshSliverActs, 3) {
 			assert.Equal(t, types.BatteryModeStandby, freshSliverActs[0].batteryMode, "Fresh deficit with initialWait == 0 may defer across 45s sliver")
 			assert.Equal(t, types.BatteryModeChargeAny, freshSliverActs[1].batteryMode)
@@ -943,7 +943,7 @@ func TestExpandBlockAction(t *testing.T) {
 			ReserveSOC:   20.0,
 			SystemStatus: types.SystemStatus{BatterySOC: 15.0},
 		}
-		exhaustedSliverActs := expandBlockAction(sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, exhaustedLastAct, nil)
+		exhaustedSliverActs := expandBlockAction(nil, nil, sliverBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}, deficitAtSliver, sliverTimeline, nil, settings, types.SystemStatus{}, exhaustedLastAct, nil)
 		if assert.Len(t, exhaustedSliverActs, 3) {
 			assert.Equal(t, types.BatteryModeChargeAny, exhaustedSliverActs[0].batteryMode, "Exhausted 20m initialWait must charge immediately on 45s step-0 sliver")
 		}
@@ -2160,7 +2160,7 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 			SystemStatus: types.SystemStatus{BatterySOC: 11.5},
 		}
 		sliverBlocks := buildTimelineBlocks(context.Background(), tlSliverCheaperStep1, nil, settings, types.SystemStatus{}, nil)
-		_, sliverScore := critiqueBlockPlan(context.Background(), sliverBlocks, tlSliverCheaperStep1, stateSliver, nil, postHorizonValuation{knownPostHorizonRate: 0.1048}, settings, types.SystemStatus{}, lastActExhausted, chargeCompletionBufferDuration, nil)
+		_, sliverScore := critiqueBlockPlan(context.Background(), sliverBlocks, tlSliverCheaperStep1, stateSliver, nil, postHorizonValuation{knownPostHorizonRate: 0.1048}, settings, types.SystemStatus{}, lastActExhausted, chargeCompletionBufferDuration, nil, nil)
 		assert.Less(t, sliverScore, math.MaxFloat64, "critiqueBlockPlan must find a valid trajectory on a 45s deficit sliver with exhausted wait")
 		sliverPath := cSliver.searchOptimalPlanBlocks(context.Background(), tlSliverCheaperStep1, stateSliver, nil, postHorizonValuation{knownPostHorizonRate: 0.1048}, settings, types.SystemStatus{BatteryCapacityKWH: 15.0, BatterySOC: 11.5}, lastActExhausted, nil)
 		if assert.NotEmpty(t, sliverPath.actions) {
@@ -3039,7 +3039,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		state40 := planState{soc: 40.0, energyKWH: 13.5 * 0.40, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
 		status40 := types.SystemStatus{BatteryCapacityKWH: 13.5, BatterySOC: 40.0}
 		mandBlocks := buildTimelineBlocks(ctx, mandTimeline, mandVPP, vppSettings, status40, nil)
-		winMand, mandScore := critiqueBlockPlan(ctx, mandBlocks, mandTimeline, state40, mandVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil)
+		winMand, mandScore := critiqueBlockPlan(ctx, mandBlocks, mandTimeline, state40, mandVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil, nil)
 		assert.Less(t, mandScore, math.MaxFloat64, "Mandatory zero-price VPP event must produce a valid score without fallback")
 		if assert.NotEmpty(t, winMand) {
 			assert.Equal(t, blockActionCharge, winMand[0].actionType, "Must pre-charge during cheaper $0.10/kWh off-peak block before mandatory VPP prep")
@@ -3070,7 +3070,7 @@ func TestCritiqueBlockPlan(t *testing.T) {
 			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.01, batteryExportRate: 0.01, loadKWH: 0.5, minSOC: 20.0},
 		}
 		negBlocks := buildTimelineBlocks(ctx, negTimeline, negVPP, vppSettings, status40, nil)
-		_, negScore := critiqueBlockPlan(ctx, negBlocks, negTimeline, state40, negVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil)
+		_, negScore := critiqueBlockPlan(ctx, negBlocks, negTimeline, state40, negVPP, postHorizonValuation{knownPostHorizonRate: 0.10}, vppSettings, status40, nil, 0, nil, nil)
 		assert.Less(t, negScore, math.MaxFloat64, "Negative-price charge before zero-price VPP export must not fail all trajectories")
 	})
 
