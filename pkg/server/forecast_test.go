@@ -1534,4 +1534,88 @@ func TestHandleForecast(t *testing.T) {
 		assert.NotEmpty(t, res.PriceHistory)
 		assert.Empty(t, errBuf.String(), "GetStatus unauthorized fallback must emit zero ERROR logs")
 	})
+
+	t.Run("Empty Future Prices Estimates From 168h History Without 500 Or Warn", func(t *testing.T) {
+		ukLoc, err := time.LoadLocation("Europe/London")
+		require.NoError(t, err)
+		ukNow := time.Date(2026, 6, 15, 23, 5, 0, 0, ukLoc)
+		slotStart := time.Date(2026, 6, 15, 23, 0, 0, 0, ukLoc)
+		slotEnd := slotStart.Add(30 * time.Minute)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			Provider:                      "octopus",
+			DollarsPerKWH:                 0.30,
+			GenerationCreditDollarsPerKWH: 0.145,
+			SeparateGenerationCredit:      true,
+			TSStart:                       slotStart,
+			TSEnd:                         slotEnd,
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+
+		var histPrices []types.Price
+		histStart := ukNow.Add(-168 * time.Hour).Truncate(time.Hour)
+		for ts := histStart; ts.Before(slotStart); ts = ts.Add(30 * time.Minute) {
+			histPrices = append(histPrices, types.Price{
+				Provider:                      "octopus",
+				DollarsPerKWH:                 0.30,
+				GenerationCreditDollarsPerKWH: 0.12,
+				SeparateGenerationCredit:      true,
+				TSStart:                       ts,
+				TSEnd:                         ts.Add(30 * time.Minute),
+			})
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   10.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(histPrices, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         50,
+			BatteryCapacityKWH: 13.5,
+			Timestamp:          ukNow,
+		}, nil)
+
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  uMap,
+			ess:        essMap,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return ukNow },
+		}
+
+		var warnBuf bytes.Buffer
+		warnLogger := slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		req = req.WithContext(log.With(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone), warnLogger))
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var res ForecastRes
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&res))
+		require.NotNil(t, res.Plan)
+		assert.NotEmpty(t, res.Plan.Periods)
+		assert.Empty(t, warnBuf.String(), "empty GetFuturePrices during Octopus publication delay must estimate cleanly without WARN/ERROR logs")
+	})
 }

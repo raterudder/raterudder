@@ -261,6 +261,94 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 		}
 	})
 
+	t.Run("Tomorrow Cooldown Throttles DB Reads And MISO 404s For 5 Minutes", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		currentNow := time.Date(2026, time.January, 15, 9, 15, 0, 0, estLocation)
+		curTodayEST := truncateDay(currentNow)
+		curTomorrowEST := curTodayEST.AddDate(0, 0, 1)
+		curTodayStr := curTodayEST.Format("20060102")
+		curTomorrowStr := curTomorrowEST.Format("20060102")
+
+		publishTomorrow := false
+		tomorrowHTTP404s := 0
+		tomorrowHTTP200s := 0
+
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			if strings.HasSuffix(r.URL.Path, curTodayStr+"_da_expost_lmp.csv") {
+				_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33
+`))
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, curTomorrowStr+"_da_expost_lmp.csv") {
+				if !publishTomorrow {
+					tomorrowHTTP404s++
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				tomorrowHTTP200s++
+				_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
+`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer api.Close()
+
+		c := configuredAmerenSmart(m)
+		c.misoAPIURL = api.URL
+		c.nowFunc = func() time.Time { return currentNow }
+		ctx := context.Background()
+
+		todayDBStart := curTodayEST.In(ctLocation)
+		todayDBEnd := todayDBStart.Add(24 * time.Hour)
+		tomorrowDBStart := curTomorrowEST.In(ctLocation)
+		tomorrowDBEnd := tomorrowDBStart.Add(24 * time.Hour)
+
+		// Today loads once from DB/API and is cached in memory.
+		m.On("GetUtilityPrices", mock.Anything, "ameren_psp", todayDBStart, todayDBEnd).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren_psp", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 24 && p[0].TSStart.Equal(todayDBStart)
+		}), 0).Return(nil).Once()
+
+		// Tomorrow misses DB and gets 404 from MISO ONCE across multiple calls within 5 minutes.
+		m.On("GetUtilityPrices", mock.Anything, "ameren_psp", tomorrowDBStart, tomorrowDBEnd).Return([]types.PriceState{}, nil).Once()
+
+		// 1. Initial call at 09:15 EST: 1 DB read + 1 HTTP 404 for tomorrow
+		futures1, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, futures1, 14) // 10:00..24:00 EST = 14 hours
+		assert.Equal(t, 1, tomorrowHTTP404s)
+
+		// 2. Repeated calls at 09:16, 09:18, and 09:19:59 EST (< 5 minutes): 0 additional DB reads or HTTP 404s
+		for _, delta := range []time.Duration{time.Minute, 3 * time.Minute, 4*time.Minute + 59*time.Second} {
+			currentNow = time.Date(2026, time.January, 15, 9, 15, 0, 0, estLocation).Add(delta)
+			futuresRetry, retryErr := c.GetFuturePrices(ctx)
+			require.NoError(t, retryErr)
+			assert.Len(t, futuresRetry, 14)
+			assert.Equal(t, 1, tomorrowHTTP404s, "expected cooldown to suppress MISO 404 retries within 5 minutes")
+		}
+		m.AssertExpectations(t)
+
+		// 3. At 09:20:00 EST (exact 5-minute cooldown elapsed) once MISO publishes tomorrow:
+		// issues 1 DB read + 1 HTTP 200 and caches all 24 tomorrow hours.
+		publishTomorrow = true
+		currentNow = time.Date(2026, time.January, 15, 9, 20, 0, 0, estLocation)
+		m.On("GetUtilityPrices", mock.Anything, "ameren_psp", tomorrowDBStart, tomorrowDBEnd).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren_psp", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 24 && p[0].TSStart.Equal(tomorrowDBStart)
+		}), 0).Return(nil).Once()
+
+		futuresPublished, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, futuresPublished, 38) // 14 today + 24 tomorrow
+		assert.Equal(t, 1, tomorrowHTTP404s)
+		assert.Equal(t, 1, tomorrowHTTP200s)
+		m.AssertExpectations(t)
+	})
+
 	t.Run("Integration_RealAPI", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping live Ameren MISO API integration test in short mode")

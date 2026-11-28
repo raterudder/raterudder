@@ -883,6 +883,7 @@ func TestOctopusUtility(t *testing.T) {
 		mockClient := newMockHTTPClient(func(w http.ResponseWriter, r *http.Request) {
 			httpHits.Add(1)
 			assert.Equal(t, "/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-C/standard-unit-rates/", r.URL.Path)
+			assert.Equal(t, "1500", r.URL.Query().Get("page_size"))
 
 			// Return 48 half-hour slots for dayStart in reverse chronological order (matching Octopus API)
 			var results []octopusUnitRateEntry
@@ -1047,17 +1048,17 @@ func TestOctopusUtility(t *testing.T) {
 		assert.Len(t, futureDelayed, 13)
 		assert.Equal(t, int32(3), httpHits.Load())
 
-		// 4. At 16:10 UK time (within 15-minute cooldown): returns cached slots without hitting API
-		currentNow = time.Date(2026, time.October, 12, 16, 10, 0, 0, lonLocation)
+		// 4. At 16:08 UK time (within 5-minute cooldown): returns cached slots without hitting API
+		currentNow = time.Date(2026, time.October, 12, 16, 8, 0, 0, lonLocation)
 		futureCooldown, err := base.GetFuturePrices(ctx, "london")
 		require.NoError(t, err)
 		assert.Len(t, futureCooldown, 13)
 		assert.Equal(t, int32(3), httpHits.Load())
 
-		// 5. At 16:25 UK time (after 15-minute cooldown, tomorrow published through 23:00 tomorrow):
+		// 5. At 16:11 UK time (after 5-minute cooldown, tomorrow published through 23:00 tomorrow):
 		// Fetches from API and returns 16:30 today through 23:00 tomorrow (13 + 48 = 61 slots)
 		publishTomorrow = true
-		currentNow = time.Date(2026, time.October, 12, 16, 25, 0, 0, lonLocation)
+		currentNow = time.Date(2026, time.October, 12, 16, 11, 0, 0, lonLocation)
 		futureTomorrow, err := base.GetFuturePrices(ctx, "london")
 		require.NoError(t, err)
 		if assert.Len(t, futureTomorrow, 61) {
@@ -1502,6 +1503,166 @@ func TestOctopusUtility(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, confirmedCached, 50)
 		assert.Equal(t, int32(1), httpHits.Load())
+	})
+
+	t.Run("Delayed Publication Cooldown Differential Upsert And Post-2300 Fallback", func(t *testing.T) {
+		dayStart := time.Date(2026, time.November, 15, 0, 0, 0, 0, lonLocation)
+		tomorrowEnd := dayStart.AddDate(0, 0, 2)
+		currentNow := time.Date(2026, time.November, 15, 16, 5, 0, 0, lonLocation)
+
+		var publishTomorrow atomic.Bool
+		var httpHits atomic.Int32
+		var dbReads atomic.Int32
+		var upsertBatches [][]types.PriceState
+
+		mockClient := newMockHTTPClient(func(w http.ResponseWriter, r *http.Request) {
+			httpHits.Add(1)
+			assert.Equal(t, "1500", r.URL.Query().Get("page_size"))
+
+			maxSlot := 46 // 00:00..23:00 today (last slot 22:30-23:00 = slot 45)
+			if publishTomorrow.Load() {
+				maxSlot = 94 // 00:00 today .. 23:00 tomorrow (46 + 48 slots)
+			}
+			var results []octopusUnitRateEntry
+			for slot := maxSlot - 1; slot >= 0; slot-- {
+				st := dayStart.Add(time.Duration(slot) * 30 * time.Minute)
+				pence := 12.0
+				if slot == 45 {
+					pence = 19.5 // £0.195/kWh on latest published slot [22:30, 23:00)
+				} else if slot >= 46 {
+					pence = 24.0 // £0.240/kWh on newly published tomorrow slots
+				}
+				results = append(results, octopusUnitRateEntry{
+					ValueExcVAT: pence,
+					ValueIncVAT: pence,
+					ValidFrom:   st.UTC(),
+					ValidTo:     st.Add(30 * time.Minute).UTC(),
+				})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(octopusUnitRatesResponse{
+				Count:   len(results),
+				Results: results,
+			})
+		})
+
+		mockDB := &storagemock.MockDatabase{}
+		var persisted []types.PriceState
+		dbCall := mockDB.On("GetUtilityPrices", mock.Anything, "octopus_london", dayStart, tomorrowEnd).
+			Run(func(mock.Arguments) {
+				dbReads.Add(1)
+			}).
+			Return([]types.PriceState(nil), nil)
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "octopus_london", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				batch := append([]types.PriceState(nil), args.Get(2).([]types.PriceState)...)
+				upsertBatches = append(upsertBatches, batch)
+				persisted = append(persisted, batch...)
+				dbCall.Return(persisted, nil)
+			}).Return(nil)
+
+		base := &baseOctopus{
+			apiURL:          defaultOctopusAPIURL,
+			client:          mockClient,
+			db:              mockDB,
+			cachedPrices:    make(map[string]map[int64]types.Price),
+			lastFutureFetch: make(map[string]time.Time),
+			nowFunc:         func() time.Time { return currentNow },
+		}
+
+		m := NewMap(mockDB)
+		m.baseOctopus = base
+		ctx := context.Background()
+		siteUtil, err := m.Site(ctx, "site-delay-uk", types.Settings{
+			UtilityProvider: "octopus",
+			UtilityRate:     "octopus_intelligent_go",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location:       "london",
+				GenerationRate: "outgoing_agile",
+			},
+		})
+		require.NoError(t, err)
+
+		// 1. At 16:05 UK time (cold start, publication delayed): 1 DB read + 1 API fetch -> upserts 46 initial slots
+		future1605, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, future1605, 13) // 16:30..23:00
+		assert.Equal(t, int32(1), dbReads.Load())
+		assert.Equal(t, int32(1), httpHits.Load())
+		require.Len(t, upsertBatches, 1)
+		assert.Len(t, upsertBatches[0], 46)
+
+		// 2. At 16:08 UK time (< 5m cooldown): 0 additional DB reads and 0 API calls
+		currentNow = time.Date(2026, time.November, 15, 16, 8, 0, 0, lonLocation)
+		future1608, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, future1608, 13)
+		assert.Equal(t, int32(1), dbReads.Load(), "cooldown must short-circuit before loadFromDB")
+		assert.Equal(t, int32(1), httpHits.Load())
+
+		// 3. At 22:35 UK time (firstFutureSlot == 23:00 -> len(prices) == 0, still delayed):
+		// First call after cooldown refreshes once (1 DB read + 1 API call), upserts 0 unchanged slots, and returns empty slice without error!
+		currentNow = time.Date(2026, time.November, 15, 22, 35, 0, 0, lonLocation)
+		future2235, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, future2235)
+		assert.Equal(t, int32(2), dbReads.Load())
+		assert.Equal(t, int32(2), httpHits.Load())
+		assert.Len(t, upsertBatches, 1, "unchanged slots must not trigger redundant UpsertUtilityPrices writes")
+
+		// 4. At 22:38 UK time (< 5m cooldown, len(prices) == 0): cooldown STILL suppresses DB read and API call!
+		currentNow = time.Date(2026, time.November, 15, 22, 38, 0, 0, lonLocation)
+		future2238, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, future2238)
+		assert.Equal(t, int32(2), dbReads.Load(), "5m cooldown must hold before loadFromDB even when len(prices) == 0")
+		assert.Equal(t, int32(2), httpHits.Load())
+
+		// 5. At 23:05 UK time (> 5m since 22:35, still delayed past 23:00!):
+		// GetCurrentPrice serves latest published slot [22:30, 23:00) (£0.195/kWh) aligned to [23:00, 23:30) with Peak import (£0.341553),
+		// and immediate GetFuturePrices in the same poll hits the 5m cooldown (0 extra DB/API calls) and returns empty slice without error.
+		currentNow = time.Date(2026, time.November, 15, 23, 5, 0, 0, lonLocation)
+		curr2305, err := siteUtil.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, dayStart.Add(23*time.Hour), curr2305.TSStart)
+		assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), curr2305.TSEnd)
+		assert.True(t, curr2305.Contains(currentNow))
+		assert.InDelta(t, 0.341553, curr2305.DollarsPerKWH, 1e-6) // Intelligent Go Peak (before 23:30)
+		assert.InDelta(t, 0.195, curr2305.GenerationCreditDollarsPerKWH, 1e-6)
+		assert.Equal(t, int32(3), dbReads.Load())
+		assert.Equal(t, int32(3), httpHits.Load())
+
+		future2305, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, future2305)
+		assert.Equal(t, int32(3), dbReads.Load(), "GetFuturePrices in same poll must hit 5m cooldown without extra DB read")
+		assert.Equal(t, int32(3), httpHits.Load())
+
+		// 6. At 23:32 UK time (> 5m since 23:05, still delayed in Off-Peak [23:30, 24:00)):
+		// GetCurrentPrice aligns fallback slot to [23:30, 24:00) so Intelligent Go Off-Peak (£0.0990) applies!
+		currentNow = time.Date(2026, time.November, 15, 23, 32, 0, 0, lonLocation)
+		curr2332, err := siteUtil.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, dayStart.Add(23*time.Hour+30*time.Minute), curr2332.TSStart)
+		assert.Equal(t, dayStart.Add(24*time.Hour), curr2332.TSEnd)
+		assert.InDelta(t, 0.0990, curr2332.DollarsPerKWH, 1e-6) // Intelligent Go Off-Peak (23:30-05:30)
+		assert.InDelta(t, 0.195, curr2332.GenerationCreditDollarsPerKWH, 1e-6)
+		assert.Equal(t, int32(4), dbReads.Load())
+		assert.Equal(t, int32(4), httpHits.Load())
+
+		// 7. At 23:38 UK time (> 5m since 23:32), Octopus finally publishes the 48 new slots [23:00 today, 23:00 tomorrow):
+		// UpsertUtilityPrices receives ONLY the 48 newly published slots (not the 46 already-cached slots)!
+		publishTomorrow.Store(true)
+		currentNow = time.Date(2026, time.November, 15, 23, 38, 0, 0, lonLocation)
+		curr2338, err := siteUtil.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.240, curr2338.GenerationCreditDollarsPerKWH, 1e-6)
+		future2338, err := siteUtil.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, future2338, 46) // 00:00..23:00 tomorrow = 46 slots
+		if assert.Len(t, upsertBatches, 2) {
+			assert.Len(t, upsertBatches[1], 48, "differential upsert must write only the 48 newly published slots")
+		}
 	})
 
 	t.Run("Integration Real API", func(t *testing.T) {

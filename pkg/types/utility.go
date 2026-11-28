@@ -405,9 +405,11 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 
 	switch {
 	case up.SeparateBatteryGenerationCredit:
-		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
-			if originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 {
+		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.SeparateBatteryGenerationCredit || originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 || originalPrice.SeparateGenerationCredit || originalPrice.GenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
+			if originalPrice.SeparateBatteryGenerationCredit || originalPrice.BatteryGenerationCreditDollarsPerKWH != 0 {
 				p.BatteryGenerationCreditDollarsPerKWH = originalPrice.BatteryGenerationCreditDollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
+			} else if originalPrice.SeparateGenerationCredit || originalPrice.GenerationCreditDollarsPerKWH != 0 {
+				p.BatteryGenerationCreditDollarsPerKWH = originalPrice.GenerationCreditDollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
 			} else {
 				p.BatteryGenerationCreditDollarsPerKWH = originalPrice.DollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
 			}
@@ -416,8 +418,8 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 		}
 		p.SeparateBatteryGenerationCredit = true
 	case up.SeparateGenerationCredit:
-		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.GenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
-			if originalPrice.GenerationCreditDollarsPerKWH != 0 {
+		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.SeparateGenerationCredit || originalPrice.GenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
+			if originalPrice.SeparateGenerationCredit || originalPrice.GenerationCreditDollarsPerKWH != 0 {
 				p.GenerationCreditDollarsPerKWH = originalPrice.GenerationCreditDollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
 			} else {
 				p.GenerationCreditDollarsPerKWH = originalPrice.DollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
