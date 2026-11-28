@@ -2728,16 +2728,17 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
-			"site-write-rate-limited": {
-				Release: "production",
-				ESS:     "mock",
-				ESSAuthStatus: types.ESSAuthStatus{
-					ConsecutiveSetFailures: 2,
-					LastAttempt:            time.Now(),
-				},
-				UtilityProvider: "test",
+		initialWriteRateLimited := types.Settings{
+			Release: "production",
+			ESS:     "mock",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveSetFailures: 2,
+				LastAttempt:            time.Now(),
 			},
+			UtilityProvider: "test",
+		}
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
+			"site-write-rate-limited": initialWriteRateLimited,
 		}, map[string]int{
 			"site-write-rate-limited": types.CurrentSettingsVersion,
 		}, map[string]time.Time{}, nil)
@@ -2754,9 +2755,9 @@ func TestHandleUpdateSites(t *testing.T) {
 		}, true, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
-		mockS.On("SetSettings", mock.Anything, "site-write-rate-limited", mock.MatchedBy(func(s types.Settings) bool {
+		expectUpdateSettings(mockS, mock.Anything, "site-write-rate-limited", initialWriteRateLimited, types.CurrentSettingsVersion, func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
-		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		mockP := ess.NewMap()
 		mockP.SetSystem("site-write-rate-limited", mockES)
@@ -3180,9 +3181,13 @@ func TestHandleUpdateSites(t *testing.T) {
 			"site1": types.CurrentSettingsVersion,
 		}, map[string]time.Time{}, nil)
 		mockS.On("GetLatestAction", mock.Anything, "site1").Return((*types.Action)(nil), nil)
-		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+		expectUpdateSettings(mockS, mock.Anything, "site1", types.Settings{
+			ESS:             "franklin",
+			UtilityProvider: "test",
+			UpdateGroup:     1,
+		}, types.CurrentSettingsVersion, func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 1
-		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		mockES := &mockESS{MockName: "franklin"}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -4309,15 +4314,6 @@ func TestSetESSModes(t *testing.T) {
 		// Expect SetModes to succeed with changed=true
 		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny, mock.Anything).Return(true, nil)
 
-		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
-		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 0
-		}), 1, mock.Anything).Return(time.Time{}, nil)
-
-		srv := &Server{
-			storage: mockS,
-		}
-
 		settings := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
@@ -4326,6 +4322,15 @@ func TestSetESSModes(t *testing.T) {
 				},
 			},
 			version: 1,
+		}
+
+		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
+		expectUpdateSettings(mockS, mock.Anything, "test-site", settings.Settings, 1, func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 0
+		}, 1, time.Time{}, nil)
+
+		srv := &Server{
+			storage: mockS,
 		}
 
 		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{}, settings)
@@ -4360,7 +4365,7 @@ func TestSetESSModes(t *testing.T) {
 		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
 		assert.NoError(t, err)
 		assert.False(t, changed)
-		mockS.AssertNotCalled(t, "SetSettings")
+		mockS.AssertNotCalled(t, "UpdateSettings")
 		mockES.AssertExpectations(t)
 	})
 
@@ -4371,9 +4376,6 @@ func TestSetESSModes(t *testing.T) {
 
 		// 1. First permanent unauthorized error increments 0 -> 1
 		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Twice()
-		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 1
-		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -4387,15 +4389,14 @@ func TestSetESSModes(t *testing.T) {
 			},
 			version: 1,
 		}
+		expectUpdateSettings(mockS, mock.Anything, "site1", s0.Settings, 1, func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 1
+		}, 1, time.Time{}, nil).Once()
 
 		_, err := srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
 
 		// 2. Second permanent unauthorized error when ConsecutiveSetFailures >= 1 jumps to 40
-		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
-		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
-
 		s1 := settingsWithVersion{
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
@@ -4405,6 +4406,9 @@ func TestSetESSModes(t *testing.T) {
 			},
 			version: 1,
 		}
+		expectUpdateSettings(mockS, mock.Anything, "site1", s1.Settings, 1, func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
+		}, 1, time.Time{}, nil).Once()
 
 		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s1)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
@@ -4412,9 +4416,9 @@ func TestSetESSModes(t *testing.T) {
 		// 3. Explicit lockout error jumps directly from 0 to 40
 		lockedErr := fmt.Errorf("locked: %w: %w", ess.ErrAccountLocked, ess.ErrUnauthorized)
 		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, lockedErr).Once()
-		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+		expectUpdateSettings(mockS, mock.Anything, "site1", s0.Settings, 1, func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveSetFailures == 40
-		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
+		}, 1, time.Time{}, nil).Once()
 
 		_, err = srv.setESSModes(context.Background(), "site1", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, s0)
 		assert.ErrorIs(t, err, ess.ErrAccountLocked)
@@ -4432,7 +4436,7 @@ func TestSetESSModes(t *testing.T) {
 		otherErr := fmt.Errorf("network timeout")
 		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny, mock.Anything).Return(false, otherErr)
 
-		// SetSettings should NOT be called since it is not an unauthorized error
+		// UpdateSettings should NOT be called since it is not an unauthorized error
 		srv := &Server{
 			storage: mockS,
 		}
@@ -4449,7 +4453,7 @@ func TestSetESSModes(t *testing.T) {
 
 		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{}, settings)
 		assert.ErrorIs(t, err, otherErr)
-		mockS.AssertNotCalled(t, "SetSettings")
+		mockS.AssertNotCalled(t, "UpdateSettings")
 		mockES.AssertExpectations(t)
 	})
 
@@ -4493,6 +4497,162 @@ func TestSetESSModes(t *testing.T) {
 		require.NoError(t, err2)
 		assert.True(t, changed2)
 		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Retries stale ListSitesSettings timestamp without conflict errors and aborts on ESS switch", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		store := attachAtomicSettingsStore(mockS, "site-modes-rmw", types.Settings{
+			ESS:                  "tesla",
+			MinBatterySOC:        20,
+			EncryptedCredentials: []byte("initial-cipher"),
+		}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+
+		// Snapshot from ListSitesSettings becomes stale when notifications and battery reserve update concurrently
+		staleSnapshot := settingsWithVersion{
+			Settings: types.Settings{
+				ESS:                  "tesla",
+				MinBatterySOC:        20,
+				EncryptedCredentials: []byte("initial-cipher"),
+			},
+			version:   types.CurrentSettingsVersion,
+			updatedAt: fixedNow.Add(-time.Hour),
+		}
+		require.NoError(t, srv.storage.UpdateSiteNotificationSettings(context.Background(), "site-modes-rmw", "member@example.com", types.UserNotificationSettings{
+			MorningSummaryEnabled: true,
+			MorningSummaryHour:    7,
+		}))
+		_, _, _, err := store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
+			cur.MinBatterySOC = 45
+			return cur, ver, true, nil
+		})
+		require.NoError(t, err)
+
+		var logBuf bytes.Buffer
+		errCtx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		// 1. Unauthorized failure merges ConsecutiveSetFailures onto latest stored settings without clobbering notifications or concurrent edits
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-rmw", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Empty(t, logBuf.String())
+
+		afterFail, _, _, _ := store.snapshot()
+		assert.Equal(t, 1, afterFail.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, 45.0, afterFail.MinBatterySOC)
+		assert.Equal(t, []byte("initial-cipher"), afterFail.EncryptedCredentials)
+		assert.True(t, afterFail.Notifications["member@example.com"].MorningSummaryEnabled)
+
+		// 2. Subsequent recovery with stale snapshot resets ConsecutiveSetFailures while preserving concurrent changes
+		staleRecoverySnapshot := staleSnapshot
+		staleRecoverySnapshot.ESSAuthStatus.ConsecutiveSetFailures = 1
+		staleRecoverySnapshot.ESSAuthStatus.LastAttempt = fixedNow
+		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny, mock.Anything).Return(true, nil).Once()
+		changed, err := srv.setESSModes(errCtx, "site-modes-rmw", mockES, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{}, staleRecoverySnapshot)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Empty(t, logBuf.String())
+
+		afterRecover, _, _, _ := store.snapshot()
+		assert.Equal(t, 0, afterRecover.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, 45.0, afterRecover.MinBatterySOC)
+		assert.Equal(t, []byte("initial-cipher"), afterRecover.EncryptedCredentials)
+		assert.True(t, afterRecover.Notifications["member@example.com"].MorningSummaryEnabled)
+
+		// 3. If admin switched ESS provider concurrently, setESSModes aborts auth-status write-back
+		_, _, _, err = store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
+			cur.ESS = "franklin"
+			return cur, ver, true, nil
+		})
+		require.NoError(t, err)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-rmw", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+
+		afterSwitch, _, _, _ := store.snapshot()
+		assert.Equal(t, "franklin", afterSwitch.ESS)
+		assert.Equal(t, 0, afterSwitch.ESSAuthStatus.ConsecutiveSetFailures)
+	})
+
+	t.Run("Aborts ConsecutiveSetFailures write-back when same-provider credentials changed concurrently", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{MockName: "tesla"}
+		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+			nowFunc:       func() time.Time { return fixedNow },
+		}
+
+		encOrig, err := srv.encryptCredentials(context.Background(), "site-modes-cred-supersede", types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "mock-old-access",
+				RefreshToken: "mock-old-refresh",
+				Expiry:       fixedNow.Add(time.Hour),
+				EnergySiteID: 1234,
+			},
+		})
+		require.NoError(t, err)
+
+		encAdminNew, err := srv.encryptCredentials(context.Background(), "site-modes-cred-supersede", types.Credentials{
+			Tesla: &types.TeslaCredentials{
+				Region:       "NA",
+				AccessToken:  "mock-fresh-admin-access",
+				RefreshToken: "mock-fresh-admin-refresh",
+				Expiry:       fixedNow.Add(8 * time.Hour),
+				EnergySiteID: 1234,
+			},
+		})
+		require.NoError(t, err)
+
+		store := attachAtomicSettingsStore(mockS, "site-modes-cred-supersede", types.Settings{
+			ESS:                  "tesla",
+			EncryptedCredentials: encAdminNew,
+		}, types.CurrentSettingsVersion, fixedNow)
+
+		staleSnapshot := settingsWithVersion{
+			Settings: types.Settings{
+				ESS:                  "tesla",
+				EncryptedCredentials: encOrig,
+			},
+			version:   types.CurrentSettingsVersion,
+			updatedAt: fixedNow.Add(-5 * time.Minute),
+		}
+
+		var logBuf bytes.Buffer
+		errCtx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		// 1. Admin saved fresh credentials for same ESS ("tesla") while SetModes failed with old credentials -> aborts write-back
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-cred-supersede", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Empty(t, logBuf.String())
+
+		afterSupersede, _, _, _ := store.snapshot()
+		assert.Equal(t, 0, afterSupersede.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, encAdminNew, afterSupersede.EncryptedCredentials)
+
+		// 2. EncryptedCredentials cleared concurrently -> also aborts write-back
+		_, _, _, err = store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
+			cur.EncryptedCredentials = nil
+			return cur, ver, true, nil
+		})
+		require.NoError(t, err)
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
+		_, err = srv.setESSModes(errCtx, "site-modes-cred-supersede", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
+		require.ErrorIs(t, err, ess.ErrUnauthorized)
+		assert.Empty(t, logBuf.String())
+
+		afterClear, _, _, _ := store.snapshot()
+		assert.Equal(t, 0, afterClear.ESSAuthStatus.ConsecutiveSetFailures)
 	})
 }
 

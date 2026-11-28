@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"reflect"
 	"slices"
@@ -236,11 +237,12 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 	ctx, cancel := withDefaultTimeout(ctx)
 	defer cancel()
 
-	const maxRetries = 5
-	backoff := 200 * time.Millisecond
+	const maxAttempts = 15
+	backoff := 50 * time.Millisecond
+	const maxBackoff = 500 * time.Millisecond
 
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		doc, err := f.getDocWithRetry(ctx, docRef)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
@@ -272,17 +274,18 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 		}
 
 		lastErr = err
-		if (isOptimisticRetryableErr(err) || writeTimedOut) && attempt < maxRetries-1 {
+		if (isOptimisticRetryableErr(err) || writeTimedOut) && attempt < maxAttempts-1 {
 			log.Ctx(ctx).WarnContext(ctx, "firestore optimistic write conflict or transient error, retrying",
 				slog.String("path", docRef.Path),
 				slog.Int("attempt", attempt+1),
 				slog.Any("error", err),
 			)
+			sleep := backoff/2 + rand.N(backoff)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(backoff):
-				backoff *= 2
+			case <-time.After(sleep):
+				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 		}
@@ -379,6 +382,89 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 		return time.Time{}, fmt.Errorf("failed to save settings: %w", err)
 	}
 	return wr.UpdateTime, nil
+}
+
+// UpdateSettings atomically reads, mutates, and writes the "config/settings" document
+// with optimistic concurrency retries via readModifyWriteDoc.
+func (f *FirestoreProvider) UpdateSettings(ctx context.Context, siteID string, mutate SettingsMutator) (types.Settings, int, time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
+	if mutate == nil {
+		return types.Settings{}, 0, time.Time{}, errors.New("settings mutator cannot be nil")
+	}
+
+	coll, err := f.getCollection(siteID, "config")
+	if err != nil {
+		return types.Settings{}, 0, time.Time{}, err
+	}
+	docRef := coll.Doc("settings")
+
+	var resultSettings types.Settings
+	var resultVersion int
+	var existingUpdateTime time.Time
+
+	wr, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		var current types.Settings
+		var currentVersion int
+		existingUpdateTime = time.Time{}
+
+		if doc != nil {
+			existingUpdateTime = doc.UpdateTime
+			if v, err := doc.DataAt("version"); err == nil {
+				if vInt, ok := v.(int64); ok {
+					currentVersion = int(vInt)
+				}
+			}
+
+			val, err := doc.DataAt("json")
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "settings doc missing json", slog.String("siteID", siteID))
+				return nil, fmt.Errorf("settings document missing 'json' field: %w", err)
+			}
+			jsonStr, ok := val.(string)
+			if !ok {
+				log.Ctx(ctx).WarnContext(ctx, "settings doc json not string", slog.String("siteID", siteID))
+				return nil, fmt.Errorf("settings 'json' field is not a string")
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &current); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal settings json", slog.String("siteID", siteID), slog.Any("err", err))
+				return nil, fmt.Errorf("failed to unmarshal settings json: %w", err)
+			}
+		}
+
+		updated, newVersion, save, err := mutate(current, currentVersion)
+		if err != nil {
+			return nil, err
+		}
+		if !save {
+			resultSettings = current
+			resultVersion = currentVersion
+			return nil, nil
+		}
+
+		jsonBytes, err := json.Marshal(updated)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal settings: %w", err)
+		}
+
+		resultSettings = updated
+		resultVersion = newVersion
+
+		return map[string]any{
+			"json":        string(jsonBytes),
+			"version":     newVersion,
+			"updateGroup": updated.UpdateGroup,
+			"release":     updated.Release,
+		}, nil
+	})
+	if err != nil {
+		return types.Settings{}, 0, time.Time{}, err
+	}
+	if wr != nil {
+		return resultSettings, resultVersion, wr.UpdateTime, nil
+	}
+	return resultSettings, resultVersion, existingUpdateTime, nil
 }
 
 func actionBucket(t time.Time) (string, time.Time) {

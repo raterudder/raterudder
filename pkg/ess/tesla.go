@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -418,18 +419,24 @@ func (b *baseTesla) getBaseURL(region string) (string, error) {
 	return "", fmt.Errorf("unknown region %s", region)
 }
 
+const maxRedeemedTeslaRefreshTokens = 16
+
 // Tesla implements the System interface for Tesla Fleet API.
 type Tesla struct {
-	base             *baseTesla
-	settings         types.Settings
-	mu               sync.Mutex
-	token            string
-	baseURL          string
-	energySiteID     int64
-	siteInfoCache    teslaSiteInfoResponse
-	siteInfoExpiry   time.Time
-	liveStatusCache  teslaLiveStatusResponse
-	liveStatusExpiry time.Time
+	base                  *baseTesla
+	settings              types.Settings
+	mu                    sync.Mutex
+	token                 string
+	cachedRefreshToken    string
+	cachedExpiry          time.Time
+	cachedRegion          string
+	redeemedRefreshTokens []string
+	baseURL               string
+	energySiteID          int64
+	siteInfoCache         teslaSiteInfoResponse
+	siteInfoExpiry        time.Time
+	liveStatusCache       teslaLiveStatusResponse
+	liveStatusExpiry      time.Time
 
 	// retry delays for live_status 424 failures
 	retryDelay1 time.Duration
@@ -479,6 +486,48 @@ type teslaTokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+func (b *Tesla) currentTime() time.Time {
+	if b.nowFunc != nil {
+		return b.nowFunc()
+	}
+	return time.Now()
+}
+
+func (b *Tesla) applyRedeemedRefreshToken(creds *types.TeslaCredentials) bool {
+	if creds.RefreshToken == "" || b.token == "" {
+		return false
+	}
+	if b.cachedRegion != "" && creds.Region != "" && b.cachedRegion != creds.Region {
+		return false
+	}
+	if !slices.Contains(b.redeemedRefreshTokens, creds.RefreshToken) {
+		return false
+	}
+	changed := creds.AccessToken != b.token ||
+		creds.RefreshToken != b.cachedRefreshToken ||
+		!creds.Expiry.Equal(b.cachedExpiry)
+	creds.AccessToken = b.token
+	creds.RefreshToken = b.cachedRefreshToken
+	creds.Expiry = b.cachedExpiry
+	return changed
+}
+
+func (b *Tesla) cacheRedeemedRefresh(prevRefreshToken string, creds *types.TeslaCredentials) {
+	b.token = creds.AccessToken
+	if prevRefreshToken == "" || (b.cachedRefreshToken != "" && prevRefreshToken != b.cachedRefreshToken) {
+		b.redeemedRefreshTokens = nil
+	}
+	b.cachedRefreshToken = creds.RefreshToken
+	b.cachedExpiry = creds.Expiry
+	b.cachedRegion = creds.Region
+	if prevRefreshToken != "" && !slices.Contains(b.redeemedRefreshTokens, prevRefreshToken) {
+		if len(b.redeemedRefreshTokens) >= maxRedeemedTeslaRefreshTokens {
+			b.redeemedRefreshTokens = b.redeemedRefreshTokens[1:]
+		}
+		b.redeemedRefreshTokens = append(b.redeemedRefreshTokens, prevRefreshToken)
+	}
+}
+
 // Authenticate validates the credentials and performs OAuth exchange or token refresh.
 func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
 	if creds.Tesla == nil || (creds.Tesla.AuthCode == "" && creds.Tesla.AccessToken == "") {
@@ -509,11 +558,17 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		}
 		creds.Tesla.AccessToken = res.AccessToken
 		creds.Tesla.RefreshToken = res.RefreshToken
-		creds.Tesla.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
+		creds.Tesla.Expiry = b.currentTime().Add(time.Duration(res.ExpiresIn) * time.Second)
 		creds.Tesla.AuthCode = "" // clear it so we don't try again
 		creds.Tesla.Region = region
 		b.baseURL = baseURL
 		b.token = res.AccessToken
+		b.redeemedRefreshTokens = nil
+		b.cachedRefreshToken = res.RefreshToken
+		b.cachedExpiry = creds.Tesla.Expiry
+		b.cachedRegion = region
+		b.siteInfoExpiry = time.Time{}
+		b.liveStatusExpiry = time.Time{}
 		changed = true
 		refreshed = true
 	} else {
@@ -523,28 +578,40 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		}
 		b.baseURL = baseURL
 
+		if b.applyRedeemedRefreshToken(creds.Tesla) {
+			log.Ctx(ctx).DebugContext(ctx, "reusing cached rotated tesla credentials for already-redeemed refresh token")
+			changed = true
+		}
+
 		// If token is expired or about to expire, refresh it
-		if creds.Tesla.RefreshToken != "" && time.Now().Add(15*time.Minute).After(creds.Tesla.Expiry) {
+		if creds.Tesla.RefreshToken != "" && b.currentTime().Add(15*time.Minute).After(creds.Tesla.Expiry) {
 			// the refresh token can only be used once so we need to ensure we return it
 			// and it gets updated along with the new one and the updated token
 			// we can't do ensureLogin like we do in franklin because we might use the
 			// refresh token and not be able to ensure it gets stored in the database
 			log.Ctx(ctx).DebugContext(ctx, "refreshing tesla access token", slog.Time("expiry", creds.Tesla.Expiry))
-			res, err := b.refreshToken(ctx, baseURL, creds.Tesla.RefreshToken)
+			prevRefreshToken := creds.Tesla.RefreshToken
+			res, err := b.refreshToken(ctx, baseURL, prevRefreshToken)
 			if err != nil {
-				return creds, false, fmt.Errorf("failed to refresh token: %w", err)
+				return creds, changed, fmt.Errorf("failed to refresh token: %w", err)
 			}
 			creds.Tesla.AccessToken = res.AccessToken
 			if res.RefreshToken != "" {
 				creds.Tesla.RefreshToken = res.RefreshToken
 			}
-			creds.Tesla.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
-			b.token = res.AccessToken
+			creds.Tesla.Expiry = b.currentTime().Add(time.Duration(res.ExpiresIn) * time.Second)
+			b.cacheRedeemedRefresh(prevRefreshToken, creds.Tesla)
 			changed = true
 			refreshed = true
 		} else {
 			// use the existing token
 			b.token = creds.Tesla.AccessToken
+			if creds.Tesla.RefreshToken == "" || creds.Tesla.RefreshToken != b.cachedRefreshToken {
+				b.redeemedRefreshTokens = nil
+			}
+			b.cachedRefreshToken = creds.Tesla.RefreshToken
+			b.cachedExpiry = creds.Tesla.Expiry
+			b.cachedRegion = creds.Tesla.Region
 		}
 	}
 
@@ -579,7 +646,8 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		var httpErr *teslaHTTPError
 		if !refreshed && creds.Tesla.RefreshToken != "" && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized {
 			log.Ctx(ctx).DebugContext(ctx, "tesla access token unauthorized, refreshing token")
-			res, refreshErr := b.refreshToken(ctx, b.baseURL, creds.Tesla.RefreshToken)
+			prevRefreshToken := creds.Tesla.RefreshToken
+			res, refreshErr := b.refreshToken(ctx, b.baseURL, prevRefreshToken)
 			if refreshErr != nil {
 				return creds, changed, fmt.Errorf("failed to refresh token: %w", refreshErr)
 			}
@@ -587,8 +655,8 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			if res.RefreshToken != "" {
 				creds.Tesla.RefreshToken = res.RefreshToken
 			}
-			creds.Tesla.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
-			b.token = res.AccessToken
+			creds.Tesla.Expiry = b.currentTime().Add(time.Duration(res.ExpiresIn) * time.Second)
+			b.cacheRedeemedRefresh(prevRefreshToken, creds.Tesla)
 			changed = true
 			refreshed = true
 			err = validateSiteAccess()

@@ -995,6 +995,78 @@ describe('App & Settings', () => {
         });
     });
 
+    it('holds opaque stageToken from submitESSStage across resend and passes it to updateSettings on OTP completion', async () => {
+        const user = userEvent.setup();
+        (api.fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'enphase',
+            hasCredentials: { enphase: false }
+        });
+        (api.fetchESSList as any).mockResolvedValue([
+            {
+                id: 'enphase',
+                name: 'Enphase',
+                credentials: [
+                    { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                    { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1, oneTime: true }
+                ]
+            }
+        ]);
+        (api.submitESSStage as any)
+            .mockResolvedValueOnce({ success: true, stageToken: 'mock-stage-blob-1' })
+            .mockResolvedValueOnce({ success: true, stageToken: 'mock-stage-blob-2' });
+
+        await navigateToSettings();
+
+        const emailInput = await screen.findByLabelText('Email');
+        await user.type(emailInput, 'owner@example.com');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+        expect(api.submitESSStage).toHaveBeenNthCalledWith(1, 'enphase', { username: 'owner@example.com' }, expect.any(String));
+
+        // Resend refreshes the opaque stageToken
+        const resendBtn = await screen.findByRole('button', { name: /Resend Code/i });
+        await user.click(resendBtn);
+        expect(api.submitESSStage).toHaveBeenNthCalledWith(2, 'enphase', { username: 'owner@example.com' }, expect.any(String));
+
+        const codeInput = await screen.findByLabelText(/Email Code/i);
+        await user.type(codeInput, '654321');
+
+        // Expired stageToken resets back to stage 0 so the user can request a fresh token
+        (updateSettings as any).mockRejectedValueOnce(
+            new Error('ESS verification session expired. Please start verification again.')
+        );
+        await user.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(
+                expect.objectContaining({ ess: 'enphase' }),
+                expect.any(String),
+                { enphase: { username: 'owner@example.com', code: '654321' } },
+                'mock-stage-blob-2'
+            );
+        });
+        expect(await screen.findByRole('button', { name: 'Continue' })).toBeInTheDocument();
+
+        // Start stage 0 again and complete save cleanly
+        (api.submitESSStage as any).mockResolvedValueOnce({ success: true, stageToken: 'mock-stage-blob-3' });
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+        const freshCodeInput = await screen.findByLabelText(/Email Code/i);
+        await user.type(freshCodeInput, '112233');
+        (updateSettings as any).mockResolvedValueOnce(undefined);
+        await user.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenLastCalledWith(
+                expect.objectContaining({ ess: 'enphase' }),
+                expect.any(String),
+                { enphase: { username: 'owner@example.com', code: '112233' } },
+                'mock-stage-blob-3'
+            );
+        });
+    });
+
     it('can request a new utility rate/option via the dialog', async () => {
         const user = userEvent.setup();
         (api.fetchSettings as any).mockResolvedValue({

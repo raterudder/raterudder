@@ -8,11 +8,13 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -22,7 +24,17 @@ const (
 	credsEncryptionPrefixV2 = "v2:"
 	hkdfSaltSize            = 16
 	hkdfInfoPrefix          = "raterudder-credentials:"
+	essStageHKDFInfoPrefix  = "raterudder-ess-stage:"
+	essStageTokenTTL        = 30 * time.Minute
 )
+
+var errESSStageTokenExpired = errors.New("ess stage token expired")
+
+type essStageTokenPayload struct {
+	ESS         string            `json:"ess"`
+	Credentials types.Credentials `json:"credentials"`
+	ExpiresAt   time.Time         `json:"expiresAt"`
+}
 
 func (s *Server) decryptCredentials(ctx context.Context, siteID string, encrypted []byte) (types.Credentials, bool, error) {
 	if len(encrypted) == 0 {
@@ -177,4 +189,146 @@ func (s *Server) encryptCredentials(ctx context.Context, siteID string, creds ty
 	out = append(out, salt...)
 	out = append(out, ciphertext...)
 	return out, nil
+}
+
+func (s *Server) encryptStageCredentials(ctx context.Context, siteID, essName string, creds types.Credentials, expiresAt time.Time) (string, error) {
+	if s.encryptionKey == "" {
+		log.Ctx(ctx).ErrorContext(ctx, "cannot encrypt stage credentials: no encryption key configured")
+		return "", errors.New("cannot encrypt stage credentials: no encryption key configured")
+	}
+	if siteID == "" {
+		log.Ctx(ctx).ErrorContext(ctx, "cannot encrypt stage credentials: missing siteID")
+		return "", errors.New("cannot encrypt stage credentials: missing siteID")
+	}
+	if essName == "" {
+		return "", errors.New("cannot encrypt stage credentials: missing ess")
+	}
+	if expiresAt.IsZero() {
+		return "", errors.New("cannot encrypt stage credentials: missing expiration")
+	}
+
+	masterKey := []byte(s.encryptionKey)
+	if len(masterKey) != 32 {
+		log.Ctx(ctx).ErrorContext(ctx, "invalid encryption key length (must be 32 bytes)", slog.Int("length", len(masterKey)))
+		return "", errors.New("invalid encryption key length (must be 32 bytes)")
+	}
+
+	payloadBytes, err := json.Marshal(essStageTokenPayload{
+		ESS:         essName,
+		Credentials: creds,
+		ExpiresAt:   expiresAt.UTC(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal stage credentials: %w", err)
+	}
+
+	salt := make([]byte, hkdfSaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return "", fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	domain := essStageHKDFInfoPrefix + siteID
+	derivedKey, err := hkdf.Key(sha256.New, masterKey, salt, domain, 32)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive stage encryption key: %w", err)
+	}
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create gcm: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, payloadBytes, []byte(domain))
+	out := make([]byte, 0, len(credsEncryptionPrefixV2)+len(salt)+len(ciphertext))
+	out = append(out, credsEncryptionPrefixV2...)
+	out = append(out, salt...)
+	out = append(out, ciphertext...)
+	return base64.StdEncoding.EncodeToString(out), nil
+}
+
+func (s *Server) decryptStageCredentials(ctx context.Context, siteID, expectedESS, token string, now time.Time) (types.Credentials, error) {
+	if token == "" {
+		return types.Credentials{}, errors.New("missing ess stage token")
+	}
+	if s.encryptionKey == "" {
+		log.Ctx(ctx).ErrorContext(ctx, "cannot decrypt stage credentials: no encryption key configured")
+		return types.Credentials{}, errors.New("cannot decrypt stage credentials: no encryption key configured")
+	}
+	if siteID == "" {
+		return types.Credentials{}, errors.New("cannot decrypt stage credentials: missing siteID")
+	}
+	if expectedESS == "" {
+		return types.Credentials{}, errors.New("cannot decrypt stage credentials: missing ess")
+	}
+
+	masterKey := []byte(s.encryptionKey)
+	if len(masterKey) != 32 {
+		log.Ctx(ctx).ErrorContext(ctx, "invalid encryption key length (must be 32 bytes)", slog.Int("length", len(masterKey)))
+		return types.Credentials{}, errors.New("invalid encryption key length (must be 32 bytes)")
+	}
+
+	encrypted, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("malformed ess stage token: %w", err)
+	}
+	if !bytes.HasPrefix(encrypted, []byte(credsEncryptionPrefixV2)) {
+		return types.Credentials{}, errors.New("malformed ess stage token")
+	}
+
+	raw := encrypted[len(credsEncryptionPrefixV2):]
+	if len(raw) < hkdfSaltSize {
+		return types.Credentials{}, errors.New("malformed ess stage token")
+	}
+	salt := raw[:hkdfSaltSize]
+	sealed := raw[hkdfSaltSize:]
+
+	domain := essStageHKDFInfoPrefix + siteID
+	derivedKey, err := hkdf.Key(sha256.New, masterKey, salt, domain, 32)
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("failed to derive stage encryption key: %w", err)
+	}
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("failed to create gcm: %w", err)
+	}
+
+	if len(sealed) < gcm.NonceSize() {
+		return types.Credentials{}, errors.New("malformed ess stage token")
+	}
+
+	nonce, ciphertext := sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(domain))
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("failed to decrypt ess stage token: %w", err)
+	}
+
+	var payload essStageTokenPayload
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		return types.Credentials{}, fmt.Errorf("failed to unmarshal ess stage token: %w", err)
+	}
+
+	if payload.ESS != expectedESS {
+		return types.Credentials{}, errors.New("ess stage token provider mismatch")
+	}
+	if payload.ExpiresAt.IsZero() || !now.Before(payload.ExpiresAt) {
+		return types.Credentials{}, errESSStageTokenExpired
+	}
+
+	return payload.Credentials, nil
 }

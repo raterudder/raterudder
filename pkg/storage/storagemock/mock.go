@@ -2,6 +2,7 @@ package storagemock
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/feats"
@@ -12,6 +13,11 @@ import (
 
 type MockDatabase struct {
 	mock.Mock
+	updateSettingsInFlight atomic.Int32
+}
+
+func (m *MockDatabase) InUpdateSettingsCall() bool {
+	return m.updateSettingsInFlight.Load() > 0
 }
 
 var _ storage.Database = (*MockDatabase)(nil)
@@ -19,6 +25,9 @@ var _ storage.Database = (*MockDatabase)(nil)
 func (m *MockDatabase) GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error) {
 	args := m.Called(ctx, siteID)
 	if len(args) > 0 {
+		if fn, ok := args.Get(0).(func(context.Context, string) (types.Settings, int, time.Time, error)); ok {
+			return fn(ctx, siteID)
+		}
 		return args.Get(0).(types.Settings), args.Int(1), args.Get(2).(time.Time), args.Error(3)
 	}
 	return types.Settings{}, 0, time.Time{}, nil
@@ -31,6 +40,27 @@ func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings 
 		t = args.Get(0).(time.Time)
 	}
 	return t, args.Error(1)
+}
+
+func (m *MockDatabase) UpdateSettings(ctx context.Context, siteID string, mutate storage.SettingsMutator) (types.Settings, int, time.Time, error) {
+	m.updateSettingsInFlight.Add(1)
+	defer m.updateSettingsInFlight.Add(-1)
+	args := m.Called(ctx, siteID, mutate)
+	if len(args) > 0 {
+		if fn, ok := args.Get(0).(func(context.Context, string, storage.SettingsMutator) (types.Settings, int, time.Time, error)); ok {
+			return fn(ctx, siteID, mutate)
+		}
+		var s types.Settings
+		if v, ok := args.Get(0).(types.Settings); ok {
+			s = v
+		}
+		var t time.Time
+		if v, ok := args.Get(2).(time.Time); ok {
+			t = v
+		}
+		return s, args.Int(1), t, args.Error(3)
+	}
+	return types.Settings{}, 0, time.Time{}, nil
 }
 
 func (m *MockDatabase) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
@@ -329,6 +359,11 @@ func (m *MockDatabase) ReplaceUserPushSubscription(ctx context.Context, prevEndp
 
 func (m *MockDatabase) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
 	args := m.Called(ctx, siteID, userID, settings)
+	if len(args) > 0 {
+		if fn, ok := args.Get(0).(func(context.Context, string, string, types.UserNotificationSettings) error); ok {
+			return fn(ctx, siteID, userID, settings)
+		}
+	}
 	return args.Error(0)
 }
 

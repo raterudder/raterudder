@@ -1415,13 +1415,14 @@ func TestHandleForecast(t *testing.T) {
 		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(priceHist, nil)
 
 		// 1. Live Authenticate permanent ErrUnauthorized returns 200 with history + fault
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		initialForecastSettings := types.Settings{
 			UtilityProvider: "test",
 			ESS:             "franklin",
-		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+		}
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(initialForecastSettings, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		expectUpdateSettings(mockS, mock.Anything, mock.Anything, initialForecastSettings, types.CurrentSettingsVersion, func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 1
-		}), types.CurrentSettingsVersion, mock.Anything).Return(now, nil).Once()
+		}, types.CurrentSettingsVersion, now, nil).Once()
 
 		mockES := &mockESS{MockName: "franklin"}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)

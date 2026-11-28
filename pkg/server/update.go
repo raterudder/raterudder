@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -331,6 +332,7 @@ func (s *Server) performSiteUpdate(
 		// TODO: how should we alert the user when this fails?
 		return nil, "", fmt.Errorf("failed to get ESS system: %w", err)
 	}
+	notifData.settings = settings.Settings
 	notifData.essSystem = essSystem
 
 	// get utility
@@ -1451,27 +1453,55 @@ func (s *Server) setESSModes(
 		solarMode = types.SolarModeAny
 	}
 
+	targetESS := settings.ESS
+	origEncrypted := settings.EncryptedCredentials
 	changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
-			settings.ESSAuthStatus.ConsecutiveSetFailures = nextESSFailureCount(settings.ESSAuthStatus.ConsecutiveSetFailures, err)
-			settings.ESSAuthStatus.LastAttempt = s.now().UTC()
-			if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+			now := s.now().UTC()
+			_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
+				if current.ESS != targetESS {
+					return current, curVersion, false, nil
+				}
+				if !bytes.Equal(origEncrypted, current.EncryptedCredentials) {
+					log.Ctx(ctx).InfoContext(ctx, "aborting ess set-modes auth write-back because credentials changed concurrently",
+						slog.String("ess", targetESS),
+					)
+					return current, curVersion, false, nil
+				}
+				next := current
+				next.ESSAuthStatus.ConsecutiveSetFailures = nextESSFailureCount(current.ESSAuthStatus.ConsecutiveSetFailures, err)
+				next.ESSAuthStatus.LastAttempt = now
+				ver := curVersion
+				if ver == 0 {
+					ver = settings.version
+				}
+				return next, ver, true, nil
+			})
+			if dbErr != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))
-			} else {
-				settings.updatedAt = newUpdatedAt
 			}
 		}
 		return false, err
 	}
 
 	if changed && settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
-		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
-		settings.ESSAuthStatus.LastAttempt = s.now().UTC()
-		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+		now := s.now().UTC()
+		_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
+			if current.ESS != targetESS || current.ESSAuthStatus.ConsecutiveSetFailures == 0 {
+				return current, curVersion, false, nil
+			}
+			next := current
+			next.ESSAuthStatus.ConsecutiveSetFailures = 0
+			next.ESSAuthStatus.LastAttempt = now
+			ver := curVersion
+			if ver == 0 {
+				ver = settings.version
+			}
+			return next, ver, true, nil
+		})
+		if dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes success", slog.Any("error", dbErr))
-		} else {
-			settings.updatedAt = newUpdatedAt
 		}
 	}
 	return changed, nil

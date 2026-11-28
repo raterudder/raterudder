@@ -359,6 +359,7 @@ export type CredentialsPayload = Record<string, Record<string, any>>;
 export interface SettingsUpdate {
     settings: Settings;
     credentials?: CredentialsPayload;
+    stageToken?: string;
     siteID?: string;
 }
 
@@ -372,7 +373,7 @@ export class UpdateSettingsError extends Error {
     }
 }
 
-export const updateSettings = async (settings: Settings, siteID?: string, credentials?: CredentialsPayload): Promise<void> => {
+export const updateSettings = async (settings: Settings, siteID?: string, credentials?: CredentialsPayload, stageToken?: string): Promise<void> => {
     const payload: any = {
         ...settings,
         siteID: siteID,
@@ -384,6 +385,10 @@ export const updateSettings = async (settings: Settings, siteID?: string, creden
 
     if (credentials) {
         payload.credentials = credentials;
+    }
+
+    if (stageToken) {
+        payload.stageToken = stageToken;
     }
 
     const response = await fetch('/api/settings', {
@@ -749,7 +754,12 @@ export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<H
     return response.json();
 };
 
-export const submitESSStage = async (ess: string, credentials: Record<string, any>, siteID?: string): Promise<void> => {
+export interface ESSStageResponse {
+    success: boolean;
+    stageToken?: string;
+}
+
+export const submitESSStage = async (ess: string, credentials: Record<string, any>, siteID?: string, stageToken?: string): Promise<ESSStageResponse> => {
     const payload: any = {
         ess,
         credentials: {
@@ -758,6 +768,9 @@ export const submitESSStage = async (ess: string, credentials: Record<string, an
     };
     if (siteID) {
         payload.siteID = siteID;
+    }
+    if (stageToken) {
+        payload.stageToken = stageToken;
     }
     const response = await fetch('/api/ess/stage', {
         method: 'POST',
@@ -769,6 +782,7 @@ export const submitESSStage = async (ess: string, credentials: Record<string, an
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to trigger next stage'));
     }
+    return response.json();
 };
 
 interface SavingsPeriod {

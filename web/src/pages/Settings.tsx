@@ -1145,6 +1145,7 @@ const Settings = ({
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [currentStage, setCurrentStage] = useState(0);
+    const [essStageToken, setEssStageToken] = useState<string | null>(null);
     const [isStaging, setIsStaging] = useState(false);
     const [stageMessage, setStageMessage] = useState<string | null>(null);
     const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0);
@@ -1652,6 +1653,7 @@ const Settings = ({
         setIsManualAppsOpen(false);
         setSavedCredentialsProviders({});
         setReconnectRequiredProviders({});
+        setEssStageToken(null);
         setStageMessage(null);
         setResendCooldownSeconds(0);
 
@@ -2058,6 +2060,7 @@ const Settings = ({
             setBatteryError(null);
             setSavedCredentialsProviders({});
             setReconnectRequiredProviders({});
+            setEssStageToken(null);
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setError(null);
@@ -2066,6 +2069,7 @@ const Settings = ({
 
     const handleStage0FieldChange = () => {
         setCurrentStage(0);
+        setEssStageToken(null);
         setStageMessage(null);
         setResendCooldownSeconds(0);
         clearOneTimeCredentials();
@@ -2104,7 +2108,10 @@ const Settings = ({
             }
 
             attemptedStage = true;
-            await submitESSStage(settings.ess, payload, siteID);
+            const stageRes = essStageToken
+                ? await submitESSStage(settings.ess, payload, siteID, essStageToken)
+                : await submitESSStage(settings.ess, payload, siteID);
+            setEssStageToken(stageRes?.stageToken ?? null);
             setCurrentStage(prev => prev + 1);
             setStageMessage('Verification code sent. Please check your email and enter it below.');
         } catch (err) {
@@ -2143,7 +2150,8 @@ const Settings = ({
             }
 
             attemptedStage = true;
-            await submitESSStage(settings.ess, payload, siteID);
+            const stageRes = await submitESSStage(settings.ess, payload, siteID);
+            setEssStageToken(stageRes?.stageToken ?? null);
             clearOneTimeCredentials();
             setResendCooldownSeconds(30);
             setStageMessage('A new verification code has been sent. Please check your email.');
@@ -2272,14 +2280,19 @@ const Settings = ({
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
             submittedESS = finalSettings.ess || '';
-            attemptedESSAuth = Boolean(credentialsPayload && submittedESS);
-            await updateSettings(finalSettings, siteID, credentialsPayload);
+            const didSubmitESSCredentials = Boolean((credentialsPayload || essStageToken) && submittedESS);
+            attemptedESSAuth = didSubmitESSCredentials;
+            if (essStageToken) {
+                await updateSettings(finalSettings, siteID, credentialsPayload, essStageToken);
+            } else {
+                await updateSettings(finalSettings, siteID, credentialsPayload);
+            }
             if (attemptedESSAuth) {
                 recordInteractiveESSAuthResult(true);
             }
             setSuccessMessage('Settings saved successfully');
 
-            const updatedSettings = credentialsPayload && finalSettings.ess ? {
+            const updatedSettings = didSubmitESSCredentials && finalSettings.ess ? {
                 ...finalSettings,
                 hasCredentials: {
                     ...finalSettings.hasCredentials,
@@ -2300,11 +2313,12 @@ const Settings = ({
             const isGridModalSetup = ['tesla', 'franklin', 'enphase'].includes(finalSettings.ess) && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured;
             setSettings(updatedSettings);
             originalSettingsRef.current = JSON.stringify(updatedSettings);
-            if (credentialsPayload && settings.ess) {
+            if (didSubmitESSCredentials && settings.ess) {
                 setEditESS(false);
                 setEssCredentials({});
                 setOauthStatus('idle');
             }
+            setEssStageToken(null);
             setSavedCredentialsProviders({});
             setReconnectRequiredProviders({});
             setStageMessage(null);
@@ -2336,6 +2350,10 @@ const Settings = ({
             }
             if (attemptedESSAuth && credentialsSaved && submittedESS) {
                 setSavedCredentialsProviders(prev => ({ ...prev, [submittedESS]: true }));
+                setEssStageToken(null);
+            } else if (/verification session expired|invalid ess verification token/i.test(errMsg)) {
+                setEssStageToken(null);
+                setCurrentStage(0);
             } else if (
                 attemptedESSAuth &&
                 submittedESS &&
@@ -2380,6 +2398,7 @@ const Settings = ({
 
     const handleChange = <K extends keyof SettingsType>(field: K, value: SettingsType[K]) => {
         if (field === 'ess') {
+            setEssStageToken(null);
             setStageMessage(null);
             setResendCooldownSeconds(0);
             setSavedCredentialsProviders({});
@@ -2443,8 +2462,13 @@ const Settings = ({
             const credentialsPayload = buildESSCredentialsPayload(essProvider, hasSavedCredentials);
 
             submittedESS = finalSettings.ess || '';
-            attemptedESSAuth = Boolean(credentialsPayload && submittedESS);
-            await updateSettings(finalSettings, siteID, credentialsPayload);
+            const didSubmitESSCredentials = Boolean((credentialsPayload || essStageToken) && submittedESS);
+            attemptedESSAuth = didSubmitESSCredentials;
+            if (essStageToken) {
+                await updateSettings(finalSettings, siteID, credentialsPayload, essStageToken);
+            } else {
+                await updateSettings(finalSettings, siteID, credentialsPayload);
+            }
             if (attemptedESSAuth) {
                 recordInteractiveESSAuthResult(true);
             }
@@ -2454,13 +2478,14 @@ const Settings = ({
                 await onSettingsSaved();
             }
 
-            const isESSNowConfigured = !!finalSettings.ess && finalSettings.ess !== "" && (!!finalSettings.hasCredentials?.[finalSettings.ess] || !!credentialsPayload?.[finalSettings.ess]);
+            const isESSNowConfigured = !!finalSettings.ess && finalSettings.ess !== "" && (!!finalSettings.hasCredentials?.[finalSettings.ess] || didSubmitESSCredentials);
 
-            if (credentialsPayload && finalSettings.ess) {
+            if (didSubmitESSCredentials && finalSettings.ess) {
                 setEditESS(false);
                 setEssCredentials({});
                 setOauthStatus('idle');
             }
+            setEssStageToken(null);
             setSavedCredentialsProviders({});
             setReconnectRequiredProviders({});
             setStageMessage(null);
@@ -2490,6 +2515,10 @@ const Settings = ({
             }
             if (attemptedESSAuth && credentialsSaved && submittedESS) {
                 setSavedCredentialsProviders(prev => ({ ...prev, [submittedESS]: true }));
+                setEssStageToken(null);
+            } else if (/verification session expired|invalid ess verification token/i.test(errMsg)) {
+                setEssStageToken(null);
+                setCurrentStage(0);
             } else if (
                 attemptedESSAuth &&
                 submittedESS &&

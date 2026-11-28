@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,6 +104,92 @@ func TestFirestoreProvider(t *testing.T) {
 		staleSettings.DryRun = true
 		_, err = f.SetSettings(ctx, siteID, staleSettings, version, updatedTime)
 		assert.ErrorIs(t, err, ErrSettingsConflict)
+	})
+
+	t.Run("UpdateSettingsAtomicAndConcurrentWithNotifications", func(t *testing.T) {
+		siteID := "atomic-rmw-site"
+
+		// 1. UpdateSettings creates document when missing and sets top-level release and updateGroup fields
+		created, ver, commitTime1, err := f.UpdateSettings(ctx, siteID, func(cur types.Settings, curVer int) (types.Settings, int, bool, error) {
+			assert.Equal(t, 0, curVer)
+			cur.Release = "production"
+			cur.UpdateGroup = 4
+			cur.ESS = "tesla"
+			cur.MinBatterySOC = 15
+			return cur, types.CurrentSettingsVersion, true, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, ver)
+		assert.False(t, commitTime1.IsZero())
+		assert.Equal(t, 15.0, created.MinBatterySOC)
+
+		// Verify ListSitesSettings indexes top-level release and updateGroup written by UpdateSettings
+		grouped, groupedVers, groupedTimes, err := f.ListSitesSettings(ctx, "production", []int{4})
+		require.NoError(t, err)
+		require.Contains(t, grouped, siteID)
+		assert.Equal(t, types.CurrentSettingsVersion, groupedVers[siteID])
+		assert.True(t, commitTime1.Equal(groupedTimes[siteID]))
+
+		// 2. UpdateSettings with save=false is a no-op that preserves UpdateTime
+		noopSettings, noopVer, noopTime, err := f.UpdateSettings(ctx, siteID, func(cur types.Settings, curVer int) (types.Settings, int, bool, error) {
+			cur.MinBatterySOC = 99
+			return cur, curVer, false, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, noopVer)
+		assert.Equal(t, 15.0, noopSettings.MinBatterySOC)
+		assert.True(t, commitTime1.Equal(noopTime))
+
+		// 3. Concurrent UpdateSiteNotificationSettings and UpdateSettings persist every mutation without errors
+		var logBuf bytes.Buffer
+		errCtx := log.With(ctx, slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+
+		const numUsers = 5
+		var wg sync.WaitGroup
+		errCh := make(chan error, numUsers*2)
+
+		for i := range numUsers {
+			wg.Add(2)
+			go func(idx int) {
+				defer wg.Done()
+				userID := fmt.Sprintf("member-%d@example.com", idx)
+				errCh <- f.UpdateSiteNotificationSettings(errCtx, siteID, userID, types.UserNotificationSettings{
+					MorningSummaryEnabled: true,
+					MorningSummaryHour:    6 + (idx % 4),
+					MorningSummaryFlavor:  "metrics_heavy",
+				})
+			}(i)
+			go func(idx int) {
+				defer wg.Done()
+				_, _, _, uErr := f.UpdateSettings(errCtx, siteID, func(cur types.Settings, curVer int) (types.Settings, int, bool, error) {
+					cur.ESSAuthStatus.ConsecutiveSetFailures++
+					if idx == numUsers-1 {
+						cur.EncryptedCredentials = []byte("rotated-tesla-cipher")
+					}
+					return cur, curVer, true, nil
+				})
+				errCh <- uErr
+			}(i)
+		}
+
+		wg.Wait()
+		close(errCh)
+		for opErr := range errCh {
+			require.NoError(t, opErr)
+		}
+		assert.Empty(t, logBuf.String(), "concurrent RMW updates must emit zero ERROR logs")
+
+		finalSettings, finalVer, _, err := f.GetSettings(ctx, siteID)
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, finalVer)
+		assert.Equal(t, numUsers, finalSettings.ESSAuthStatus.ConsecutiveSetFailures)
+		assert.Equal(t, []byte("rotated-tesla-cipher"), finalSettings.EncryptedCredentials)
+		require.Len(t, finalSettings.Notifications, numUsers)
+		for i := range numUsers {
+			userID := fmt.Sprintf("member-%d@example.com", i)
+			assert.True(t, finalSettings.Notifications[userID].MorningSummaryEnabled)
+			assert.Equal(t, 6+(i%4), finalSettings.Notifications[userID].MorningSummaryHour)
+		}
 	})
 
 	t.Run("EmptySiteID", func(t *testing.T) {
