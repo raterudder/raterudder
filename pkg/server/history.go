@@ -22,22 +22,16 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
 
-	// Get Date from query
+	// Validate date format upfront when specified before making database calls.
 	dateStr := r.URL.Query().Get("date")
-	var targetDate time.Time
-	if dateStr == "" {
-		targetDate = s.now()
-		dateStr = targetDate.Format("2006-01-02")
-	} else {
-		var err error
-		targetDate, err = time.Parse("2006-01-02", dateStr)
-		if err != nil {
+	if dateStr != "" {
+		if _, err := time.Parse("2006-01-02", dateStr); err != nil {
 			writeJSONError(w, "invalid date format, use YYYY-MM-DD", http.StatusBadRequest)
 			return
 		}
 	}
 
-	// Get Settings and Location
+	// Get Settings and resolve site timezone before evaluating local date boundaries.
 	settings, _, err := s.getSettingsWithMigration(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get settings", slog.Any("error", err))
@@ -45,15 +39,25 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// add a day because if today is the 8th locally it might be the 9th in UTC
-	// but the frontend will send the 8th to the backend which means targetDate
-	// will be the 8th and then we'll only end up fetching data for the 7th
-	end := targetDate.AddDate(0, 0, 1)
-	// we have to go back x+1 days because in UTC time, which we parsed from the user
-	// input might be actually a day ahead of the user's local time
-	start := targetDate.AddDate(0, 0, -forecastHistoryDays-1)
+	loc := s.resolveSiteLocation(ctx, siteID, settings)
 
-	// Fetch combined history
+	var targetDateLocal time.Time
+	if dateStr == "" {
+		nowLocal := s.now().In(loc)
+		dateStr = nowLocal.Format("2006-01-02")
+		targetDateLocal = truncateDay(nowLocal)
+	} else {
+		targetDateLocal, err = time.ParseInLocation("2006-01-02", dateStr, loc)
+		if err != nil {
+			writeJSONError(w, "invalid date format, use YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+	}
+
+	end := targetDateLocal.AddDate(0, 0, 1)
+	start := targetDateLocal.AddDate(0, 0, -forecastHistoryDays)
+
+	// Fetch combined history in the site's local timezone
 	allStats, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, start, end, nil)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get combined history", slog.Any("error", err))
@@ -88,24 +92,26 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		return fallback
 	}
 
-	loc := time.UTC
-	for _, day := range allStats {
-		if day.TimeLocation != "" {
-			loc = getLocation(day.TimeLocation, time.UTC)
-			if loc != time.UTC {
+	if loc == time.UTC {
+		for _, day := range allStats {
+			if day.TimeLocation != "" {
+				loc = getLocation(day.TimeLocation, time.UTC)
+				if loc != time.UTC {
+					break
+				}
+			} else if !day.TSDayStart.IsZero() && day.TSDayStart.Location() != time.UTC && day.TSDayStart.Location().String() != "" {
+				loc = day.TSDayStart.Location()
 				break
 			}
-		} else if !day.TSDayStart.IsZero() && day.TSDayStart.Location() != time.UTC && day.TSDayStart.Location().String() != "" {
-			loc = day.TSDayStart.Location()
-			break
+		}
+		if loc != time.UTC {
+			if parsed, parseErr := time.ParseInLocation("2006-01-02", dateStr, loc); parseErr == nil {
+				targetDateLocal = parsed
+				end = targetDateLocal.AddDate(0, 0, 1)
+			}
 		}
 	}
 
-	var targetDateLocal time.Time
-	targetDateLocal, err = time.ParseInLocation("2006-01-02", dateStr, loc)
-	if err != nil {
-		targetDateLocal = targetDate.In(loc)
-	}
 	// NOTE: We pass targetDateLocal (local midnight of the target day) as the 'now' parameter here.
 	// The energy model uses 'now' as the starting point to scan forward 24 hours of prediction.
 	// By starting at local midnight of the target day, all 24 hours evaluated fall on the target day.
@@ -138,7 +144,11 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 
 	dayWeather := make([]WeatherRes, 0, 24)
 	for _, w := range weatherHistory {
-		if w.TSDayStart.Format("2006-01-02") != dateStr {
+		if w.TSDayStart.IsZero() {
+			continue
+		}
+		wLoc := getLocation(w.TimeLocation, loc)
+		if w.TSDayStart.In(wLoc).Format("2006-01-02") != dateStr {
 			continue
 		}
 		for _, h := range w.ForecastHours {
@@ -172,7 +182,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	// Cache historical data for 24 hours if it's in the past
-	if end.Before(truncateDay(s.now())) {
+	if end.Before(truncateDay(s.now().In(loc))) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=300")

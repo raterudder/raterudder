@@ -2205,15 +2205,26 @@ func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID stri
 
 	// Each summary document covers at most one calendar month. Any summary with data overlapping
 	// [start, end) must have earliestDate < end. To avoid scanning all prior history, we bound the
-	// lower end to the 1st of start's month. We only need to include the previous month if start is
-	// within 23 hours of the month start (to account for site timezone offsets relative to UTC).
+	// lower end to the 1st of start's month minus 14 hours (the maximum positive UTC offset,
+	// covering Australia/Sydney +10/+11, Europe/London +1, and DST shifts) without stepping back
+	// into the previous calendar month on localized day-1 queries. When a caller passes a UTC start
+	// within the first 12 hours of the month (the maximum negative UTC offset, e.g. 2026-06-01T02:00:00Z
+	// which is 2026-05-31 21:00 CDT in America/Chicago), we step back to the previous calendar month
+	// so negative-UTC-offset sites still match the prior month's summary.
 	// The alternative is calculating all of the months and then using GetAll but we would pay for
 	// a lookup for each month even if the site has no data. By doing a query that can return nothing
 	// we save Firestore reads.
+	const (
+		maxPositiveUTCOffset = 14 * time.Hour
+		maxNegativeUTCOffset = 12 * time.Hour
+	)
 	loc := start.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
 	monthStart := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, loc)
-	queryStart := monthStart
-	if start.Sub(monthStart) < 23*time.Hour {
+	queryStart := monthStart.Add(-maxPositiveUTCOffset)
+	if loc == time.UTC && start.Sub(monthStart) < maxNegativeUTCOffset {
 		queryStart = monthStart.AddDate(0, -1, 0)
 	}
 
@@ -2286,13 +2297,27 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 			}
 		}
 
+		locCache := make(map[string]*time.Location)
+		formatDayKey := func(ts time.Time, tz string) string {
+			if tz != "" {
+				if l, ok := locCache[tz]; ok && l != nil {
+					return ts.In(l).Format("2006-01-02")
+				}
+				if l, err := time.LoadLocation(tz); err == nil {
+					locCache[tz] = l
+					return ts.In(l).Format("2006-01-02")
+				}
+			}
+			return ts.Format("2006-01-02")
+		}
+
 		// Merge Energy data, favoring the newSummary's days.
 		energyMap := make(map[string]types.DailyEnergyStats)
 		for _, e := range existing.Energy {
-			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+			energyMap[formatDayKey(e.TSDayStart, e.TimeLocation)] = e
 		}
 		for _, e := range newSummary.Energy {
-			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+			energyMap[formatDayKey(e.TSDayStart, e.TimeLocation)] = e
 		}
 		var mergedEnergy []types.DailyEnergyStats
 		for _, e := range energyMap {
@@ -2305,10 +2330,10 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 		// Merge Weather data, favoring the newSummary's days.
 		weatherMap := make(map[string]types.Weather)
 		for _, w := range existing.Weather {
-			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+			weatherMap[formatDayKey(w.TSDayStart, w.TimeLocation)] = w
 		}
 		for _, w := range newSummary.Weather {
-			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+			weatherMap[formatDayKey(w.TSDayStart, w.TimeLocation)] = w
 		}
 		var mergedWeather []types.Weather
 		for _, w := range weatherMap {
@@ -2329,21 +2354,26 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 			Weather:      mergedWeather,
 		}
 
-		// Intentionally compute earliestDate and latestDate from Energy only, ignoring Weather.
-		// Weather can be stored and summarized for a day before delayed ESS energy telemetry
-		// arrives; deriving summary date bounds from weather would expose energy-less summaries
-		// and cause history/backfill logic to skip missing energy days.
+		// Compute earliestDate and latestDate across both Energy and Weather so weather-only
+		// monthly summaries remain queryable via GetHistorySummaries while the server tracks
+		// archived energy and weather dates separately for late ESS energy backfill.
 		var latestDate, earliestDate time.Time
+		updateBounds := func(ts time.Time) {
+			if ts.IsZero() {
+				return
+			}
+			if earliestDate.IsZero() || ts.Before(earliestDate) {
+				earliestDate = ts
+			}
+			if latestDate.IsZero() || ts.After(latestDate) {
+				latestDate = ts
+			}
+		}
 		for _, day := range mergedSummary.Energy {
-			if day.TSDayStart.IsZero() {
-				continue
-			}
-			if earliestDate.IsZero() || day.TSDayStart.Before(earliestDate) {
-				earliestDate = day.TSDayStart
-			}
-			if latestDate.IsZero() || day.TSDayStart.After(latestDate) {
-				latestDate = day.TSDayStart
-			}
+			updateBounds(day.TSDayStart)
+		}
+		for _, w := range mergedSummary.Weather {
+			updateBounds(w.TSDayStart)
 		}
 
 		jsonBytes, err := json.Marshal(mergedSummary)

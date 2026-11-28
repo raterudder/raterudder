@@ -1717,9 +1717,11 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("WeatherOnlySummaryTriggersBackfill", func(t *testing.T) {
+	t.Run("WeatherOnlySummaryBackfillsLateEnergyWithoutRepeatingBackfill", func(t *testing.T) {
 		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
-		yesterday := truncateDay(now).AddDate(0, 0, -1)
+		today := truncateDay(now)
+		yesterday := today.AddDate(0, 0, -1)
+		historyStart := today.AddDate(0, 0, -forecastHistoryDays)
 		monthStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 
 		lateEnergy := []types.DailyEnergyStats{
@@ -1731,6 +1733,8 @@ func TestHandleUpdate(t *testing.T) {
 			},
 		}
 
+		// 1. Late ESS energy arrives within the 35-day lookback window: merged into 2026-07 without
+		// triggering backfillHistorySummaries or re-querying already-archived weather.
 		mockS := &mockStorage{}
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			DryRun:          true,
@@ -1745,14 +1749,10 @@ func TestHandleUpdate(t *testing.T) {
 				},
 			},
 		}, nil).Once()
-		// Backfill queries [monthStart, yesterday + 1d) and saves the missing energy into 2026-07
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, monthStart, yesterday.AddDate(0, 0, 1)).Return(lateEnergy, nil).Once()
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, monthStart, yesterday.AddDate(0, 0, 1)).Return([]types.Weather{
-			{TSDayStart: yesterday},
-		}, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, historyStart, yesterday.AddDate(0, 0, 1)).Return(lateEnergy, nil).Once()
 		mockS.On("GetActionHistory", mock.Anything, types.SiteIDNone, yesterday.Add(23*time.Hour), yesterday.Add(24*time.Hour)).Return([]types.Action{}, nil).Once()
 		mockS.On("UpdateHistorySummary", mock.Anything, types.SiteIDNone, "2026-07", mock.MatchedBy(func(hs types.HistorySummary) bool {
-			return len(hs.Energy) == 1 && hs.Energy[0].TSDayStart.Equal(yesterday)
+			return len(hs.Energy) == 1 && hs.Energy[0].TSDayStart.Equal(yesterday) && len(hs.Weather) == 0
 		})).Return(types.HistorySummary{
 			TSMonthStart: monthStart,
 			Energy:       lateEnergy,
@@ -1760,7 +1760,7 @@ func TestHandleUpdate(t *testing.T) {
 		}, nil).Once()
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, truncateDay(now), truncateDay(now).AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, today, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
 		mockS.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 		mockS.On("InsertAction", mock.Anything, types.SiteIDNone, mock.Anything).Return(nil).Once()
 
@@ -1799,7 +1799,69 @@ func TestHandleUpdate(t *testing.T) {
 		srv.handleUpdate(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
+		mockS.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
+
+		// 2. Weather-only month with no energy data yet: performs zero UpdateHistorySummary writes
+		// and does not repeat backfillHistorySummaries.
+		mockNoOp := &mockStorage{}
+		mockNoOp.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			DryRun:          true,
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockNoOp.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
+		mockNoOp.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Weather: []types.Weather{
+					{TSDayStart: yesterday},
+				},
+			},
+		}, nil).Once()
+		mockNoOp.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, historyStart, yesterday.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockNoOp.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
+		mockNoOp.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
+		mockNoOp.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, historyStart, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockNoOp.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockNoOp.On("InsertAction", mock.Anything, types.SiteIDNone, mock.Anything).Return(nil).Once()
+
+		mockESNoOp := &mockESS{}
+		mockESNoOp.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockESNoOp.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockESNoOp.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Times(3)
+		mockESNoOp.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
+		mockESNoOp.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		mockPNoOp := ess.NewMap()
+		mockPNoOp.SetSystem(types.SiteIDNone, mockESNoOp)
+
+		mockUNoOp := &mockUtility{}
+		mockUNoOp.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockUNoOp.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil).Once()
+		mockUNoOp.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil).Once()
+		mockUNoOp.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Once()
+		mockUNoOp.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMapNoOp := utility.NewMap(mockNoOp)
+		mockUMapNoOp.SetProvider(types.SiteIDNone, mockUNoOp)
+
+		srvNoOp := &Server{
+			utilities:  mockUMapNoOp,
+			ess:        mockPNoOp,
+			storage:    mockNoOp,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		reqNoOp := httptest.NewRequest("GET", "/api/update", nil)
+		reqNoOp = reqNoOp.WithContext(context.WithValue(reqNoOp.Context(), siteIDContextKey, types.SiteIDNone))
+		wNoOp := httptest.NewRecorder()
+		srvNoOp.handleUpdate(wNoOp, reqNoOp)
+
+		assert.Equal(t, http.StatusOK, wNoOp.Code)
+		mockNoOp.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockNoOp.AssertExpectations(t)
 	})
 
 	t.Run("SetESSModes Rate Limited In PerformSiteUpdate Emits Warn And Zero Error Logs", func(t *testing.T) {
@@ -5429,7 +5491,7 @@ func TestGetFuturePrices(t *testing.T) {
 	})
 }
 
-func TestSyncHistorySummaryRange(t *testing.T) {
+func TestSyncHistorySummaryWindow(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
@@ -5514,7 +5576,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			nowFunc: func() time.Time { return now },
 		}
 
-		_, err := srv.syncHistorySummaryRange(context.Background(), "site1", yesterday, now, false)
+		_, err := srv.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, now, false, nil)
 		require.NoError(t, err)
 		mockS.AssertExpectations(t)
 
@@ -5575,7 +5637,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockDefer,
 			nowFunc: func() time.Time { return earlyNow },
 		}
-		updated, err := srvDefer.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		updated, err := srvDefer.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockDefer.AssertNotCalled(t, "GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -5604,7 +5666,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockFresh,
 			nowFunc: func() time.Time { return earlyNow },
 		}
-		updated, err = srvFresh.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		updated, err = srvFresh.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Len(t, updated, 1)
 		if assert.Len(t, archivedFresh.Weather, 1) {
@@ -5628,7 +5690,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockFallback,
 			nowFunc: func() time.Time { return sixHourNow },
 		}
-		updated, err = srvFallback.syncHistorySummaryRange(context.Background(), "site1", yesterday, sixHourNow, false)
+		updated, err = srvFallback.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, sixHourNow, false, nil)
 		require.NoError(t, err)
 		assert.Len(t, updated, 1)
 		if assert.Len(t, archivedFallback.Weather, 1) {
@@ -5674,11 +5736,49 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			nowFunc: func() time.Time { return earlyNow },
 		}
 
-		updated, err := srv.syncHistorySummaryRange(context.Background(), "site1", dstDay, earlyNow, false)
+		updated, err := srv.syncHistorySummaryWindow(context.Background(), "site1", dstDay, true, dstDay, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockS.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
+	})
+
+	t.Run("SkipsEmptyMonthlySummariesAndAlreadyArchivedDays", func(t *testing.T) {
+		day1 := time.Date(2026, 10, 10, 0, 0, 0, 0, loc)
+		day2 := time.Date(2026, 10, 11, 0, 0, 0, 0, loc)
+		now := time.Date(2026, 10, 12, 8, 0, 0, 0, loc)
+
+		// 1. Empty month skips UpdateHistorySummary
+		mockEmpty := &mockStorage{}
+		mockEmpty.On("GetEnergyHistory", mock.Anything, "site1", day1, truncateDay(now)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockEmpty.On("GetWeather", mock.Anything, "site1", day1, truncateDay(now)).Return([]types.Weather{}, nil).Once()
+		srvEmpty := &Server{storage: mockEmpty, nowFunc: func() time.Time { return now }}
+
+		updated, err := srvEmpty.syncHistorySummaryWindow(context.Background(), "site1", day1, true, day1, true, now, true, nil)
+		require.NoError(t, err)
+		assert.Empty(t, updated)
+		mockEmpty.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockEmpty.AssertExpectations(t)
+
+		// 2. Already-archived weather-only days skip redundant UpdateHistorySummary writes
+		existing := []types.HistorySummary{
+			{
+				Weather: []types.Weather{
+					{TSDayStart: day1, TimeLocation: loc.String(), TSUpdated: day1.Add(30 * time.Hour)},
+					{TSDayStart: day2, TimeLocation: loc.String(), TSUpdated: day2.Add(30 * time.Hour)},
+				},
+			},
+		}
+		mockArchived := &mockStorage{}
+		mockArchived.On("GetEnergyHistory", mock.Anything, "site1", day1, truncateDay(now)).Return([]types.DailyEnergyStats{}, nil).Once()
+		srvArchived := &Server{storage: mockArchived, nowFunc: func() time.Time { return now }}
+
+		updated, err = srvArchived.syncHistorySummaryWindow(context.Background(), "site1", day1, true, day2.AddDate(0, 0, 1), true, now, false, existing)
+		require.NoError(t, err)
+		assert.Empty(t, updated)
+		mockArchived.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockArchived.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockArchived.AssertExpectations(t)
 	})
 }
 
@@ -5792,18 +5892,183 @@ func TestGetCombinedHistory(t *testing.T) {
 		assert.Len(t, weather, 1)
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("SixHourPostMidnightDeferralAndBehindWarningGuards", func(t *testing.T) {
+		today := time.Date(2026, 7, 20, 0, 0, 0, 0, chicagoLoc)
+		yesterday := today.AddDate(0, 0, -1)
+		twoDaysAgo := today.AddDate(0, 0, -2)
+		historyStart := today.AddDate(0, 0, -35)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart:   twoDaysAgo,
+						TimeLocation: chicagoLoc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: twoDaysAgo, HomeKWH: 1.0}},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart:    twoDaysAgo,
+						TimeLocation:  chicagoLoc.String(),
+						ForecastHours: []types.HourlyWeather{{TSHourStart: twoDaysAgo, TemperatureC: 20}},
+					},
+				},
+			},
+		}
+
+		locSettings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{
+					TimeZone:  chicagoLoc.String(),
+					Latitude:  41.8781,
+					Longitude: -87.6298,
+				},
+			},
+		}
+
+		// 1. At 03:00 local (< 6h after local midnight): yesterday is fetched & merged, zero behind warnings emitted.
+		earlyNow := today.Add(3 * time.Hour)
+		mockEarly := &mockStorage{}
+		mockEarly.On("GetEnergyHistory", mock.Anything, "site1", yesterday, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: chicagoLoc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: yesterday.Add(12 * time.Hour), HomeKWH: 2.5}},
+			},
+		}, nil).Once()
+		mockEarly.On("GetWeather", mock.Anything, "site1", yesterday, today.AddDate(0, 0, 2)).Return([]types.Weather{
+			{
+				TSDayStart:    yesterday,
+				TimeLocation:  chicagoLoc.String(),
+				ForecastHours: []types.HourlyWeather{{TSHourStart: yesterday.Add(12 * time.Hour), TemperatureC: 25}},
+			},
+		}, nil).Once()
+
+		var warnBuf bytes.Buffer
+		warnLogger := slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		ctxEarly := log.With(context.Background(), warnLogger)
+
+		srvEarly := &Server{storage: mockEarly, nowFunc: func() time.Time { return earlyNow }}
+		energy, weatherRes, err := srvEarly.getCombinedHistory(ctxEarly, "site1", locSettings, historyStart, earlyNow, summaries)
+		require.NoError(t, err)
+		assert.Len(t, energy, 2, "yesterday unsummarized energy must still be merged during 00:00-06:00 window")
+		assert.Len(t, weatherRes, 2, "yesterday unsummarized weather must still be merged during 00:00-06:00 window")
+		assert.Empty(t, warnBuf.String(), "must emit zero behind warnings between 00:00 and 06:00 local")
+		mockEarly.AssertExpectations(t)
+
+		// 2. At 07:00 local (>= 6h after local midnight) with unsummarized yesterday records: emits behind warning.
+		lateNow := today.Add(7 * time.Hour)
+		mockLate := &mockStorage{}
+		mockLate.On("GetEnergyHistory", mock.Anything, "site1", yesterday, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: chicagoLoc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: yesterday.Add(12 * time.Hour), HomeKWH: 2.5}},
+			},
+		}, nil).Once()
+		mockLate.On("GetWeather", mock.Anything, "site1", yesterday, today.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		warnBuf.Reset()
+		srvLate := &Server{storage: mockLate, nowFunc: func() time.Time { return lateNow }}
+		_, _, err = srvLate.getCombinedHistory(log.With(context.Background(), warnLogger), "site1", locSettings, historyStart, lateNow, summaries)
+		require.NoError(t, err)
+		assert.Contains(t, warnBuf.String(), "energy history summary is behind")
+		assert.NotContains(t, warnBuf.String(), "weather history summary is behind", "no unsummarized weather <= yesterday means zero weather behind warning")
+		mockLate.AssertExpectations(t)
+
+		// 3. ESS outage (no unsummarized energy <= yesterday, only today's data) and nil Location: zero warnings and zero GetWeather calls.
+		nilLocSettings := settingsWithVersion{
+			Settings: types.Settings{Location: nil},
+		}
+		mockOutage := &mockStorage{}
+		mockOutage.On("GetEnergyHistory", mock.Anything, "site1", yesterday, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   today,
+				TimeLocation: chicagoLoc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: today.Add(time.Hour), HomeKWH: 1.0}},
+			},
+		}, nil).Once()
+
+		warnBuf.Reset()
+		srvOutage := &Server{storage: mockOutage, nowFunc: func() time.Time { return lateNow }}
+		energyOutage, weatherOutage, err := srvOutage.getCombinedHistory(log.With(context.Background(), warnLogger), "site1", nilLocSettings, historyStart, lateNow, summaries)
+		require.NoError(t, err)
+		assert.Len(t, energyOutage, 2)
+		assert.Len(t, weatherOutage, 1)
+		assert.Empty(t, warnBuf.String(), "must emit zero behind warnings during ESS outage or with nil settings.Location")
+		mockOutage.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockOutage.AssertExpectations(t)
+	})
+
+	t.Run("TrimsSummaryAndUnsummarizedDaysBeforeHistoryStart", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 12, 0, 0, 0, chicagoLoc)
+		today := truncateDay(now)
+		yesterday := today.AddDate(0, 0, -1)
+		historyStart := today.AddDate(0, 0, -5)
+		tooOld := historyStart.AddDate(0, 0, -3)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: tooOld, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: tooOld, HomeKWH: 9}}},
+					{TSDayStart: yesterday, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: yesterday, HomeKWH: 2}}},
+				},
+				Weather: []types.Weather{
+					{TSDayStart: tooOld, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: tooOld, TemperatureC: 10}}},
+					{TSDayStart: yesterday, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: yesterday, TemperatureC: 22}}},
+				},
+			},
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", today, today.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{
+			{TSDayStart: tooOld, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: tooOld, HomeKWH: 9}}},
+			{TSDayStart: today, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: today, HomeKWH: 3}}},
+		}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", today, today.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: tooOld, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: tooOld, TemperatureC: 10}}},
+		}, nil).Once()
+
+		srv := &Server{storage: mockS, nowFunc: func() time.Time { return now }}
+		locSettings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{TimeZone: chicagoLoc.String(), Latitude: 41.8, Longitude: -87.6},
+			},
+		}
+
+		energy, weatherRes, err := srv.getCombinedHistory(context.Background(), "site1", locSettings, historyStart, now, summaries)
+		require.NoError(t, err)
+		if assert.Len(t, energy, 2) {
+			assert.Equal(t, "2026-07-19", energy[0].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
+			assert.Equal(t, "2026-07-20", energy[1].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
+		}
+		if assert.Len(t, weatherRes, 1) {
+			assert.Equal(t, "2026-07-19", weatherRes[0].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
+		}
+		mockS.AssertExpectations(t)
+	})
 }
 
-func TestGetSummaryLatestDate(t *testing.T) {
+func TestGetSummaryLatestDates(t *testing.T) {
 	d1 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	d2 := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
 	d3 := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	d4 := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
 
 	t.Run("EmptySummaries", func(t *testing.T) {
-		assert.True(t, getSummaryLatestDate(nil).IsZero())
-		assert.True(t, getSummaryLatestDate([]types.HistorySummary{}).IsZero())
-		assert.True(t, getSummaryLatestDate([]types.HistorySummary{{}}).IsZero())
+		e, w := getSummaryLatestDates(nil, time.UTC)
+		assert.True(t, e.IsZero())
+		assert.True(t, w.IsZero())
+
+		e, w = getSummaryLatestDates([]types.HistorySummary{}, time.UTC)
+		assert.True(t, e.IsZero())
+		assert.True(t, w.IsZero())
+
+		e, w = getSummaryLatestDates([]types.HistorySummary{{}}, time.UTC)
+		assert.True(t, e.IsZero())
+		assert.True(t, w.IsZero())
 	})
 
 	t.Run("EnergyOnlySummaries", func(t *testing.T) {
@@ -5820,10 +6085,12 @@ func TestGetSummaryLatestDate(t *testing.T) {
 				},
 			},
 		}
-		assert.Equal(t, d3, getSummaryLatestDate(summaries))
+		e, w := getSummaryLatestDates(summaries, time.UTC)
+		assert.Equal(t, d3, e)
+		assert.True(t, w.IsZero())
 	})
 
-	t.Run("WeatherOnlySummariesIgnored", func(t *testing.T) {
+	t.Run("WeatherOnlySummaries", func(t *testing.T) {
 		summaries := []types.HistorySummary{
 			{
 				Weather: []types.Weather{
@@ -5837,17 +6104,21 @@ func TestGetSummaryLatestDate(t *testing.T) {
 				},
 			},
 		}
-		assert.True(t, getSummaryLatestDate(summaries).IsZero())
+		e, w := getSummaryLatestDates(summaries, time.UTC)
+		assert.True(t, e.IsZero())
+		assert.Equal(t, d3, w)
 	})
 
-	t.Run("MixedEnergyAndWeatherSummariesIgnoresWeather", func(t *testing.T) {
+	t.Run("MixedEnergyAndWeatherTrackedSeparately", func(t *testing.T) {
 		weatherNewer := []types.HistorySummary{
 			{
 				Energy:  []types.DailyEnergyStats{{TSDayStart: d2}},
 				Weather: []types.Weather{{TSDayStart: d4}},
 			},
 		}
-		assert.Equal(t, d2, getSummaryLatestDate(weatherNewer))
+		e, w := getSummaryLatestDates(weatherNewer, time.UTC)
+		assert.Equal(t, d2, e)
+		assert.Equal(t, d4, w)
 
 		energyNewer := []types.HistorySummary{
 			{
@@ -5855,6 +6126,24 @@ func TestGetSummaryLatestDate(t *testing.T) {
 				Weather: []types.Weather{{TSDayStart: d3}},
 			},
 		}
-		assert.Equal(t, d4, getSummaryLatestDate(energyNewer))
+		e, w = getSummaryLatestDates(energyNewer, time.UTC)
+		assert.Equal(t, d4, e)
+		assert.Equal(t, d3, w)
+	})
+
+	t.Run("LocalizesDatesToSiteTimezone", func(t *testing.T) {
+		sydLoc, err := time.LoadLocation("Australia/Sydney")
+		require.NoError(t, err)
+		sydDay := time.Date(2026, 6, 10, 0, 0, 0, 0, sydLoc)
+		// Stored as UTC instant 2026-06-09T14:00:00Z after JSON round-trip
+		summaries := []types.HistorySummary{
+			{
+				Energy:  []types.DailyEnergyStats{{TSDayStart: sydDay.UTC(), TimeLocation: sydLoc.String()}},
+				Weather: []types.Weather{{TSDayStart: sydDay.UTC(), TimeLocation: sydLoc.String()}},
+			},
+		}
+		e, w := getSummaryLatestDates(summaries, sydLoc)
+		assert.Equal(t, sydDay, e)
+		assert.Equal(t, sydDay, w)
 	})
 }

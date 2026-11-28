@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/feats"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -939,7 +942,10 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			},
 		}, nil).Once()
 
-		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+		lookbackStart := monthStart.AddDate(0, 0, -shadowWarmupLookbackDays)
+		fetchEnd := dayEnd.AddDate(0, 0, nextDayValuationLookaheadDays)
+		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, lookbackStart, monthStart).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, weekStart.AddDate(0, 0, 1), fetchEnd).Return([]types.DailyEnergyStats{
 			{
 				TSDayStart: dayStart,
 				Hourly: []types.EnergyStats{
@@ -1068,6 +1074,106 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		}
 		assert.InDelta(t, 2.00, resp.Savings.TotalSavingsDollars, 0.001)
 	})
+
+	t.Run("US Site Evening After UTC Midnight Emits Zero Warnings", func(t *testing.T) {
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		// 2026-06-06 02:00 UTC is 2026-06-05 21:00 CDT (still Friday evening in Chicago)
+		nowUTC := time.Date(2026, 6, 6, 2, 0, 0, 0, time.UTC)
+		localToday := time.Date(2026, 6, 5, 0, 0, 0, 0, chicagoLoc)
+		localYesterday := localToday.AddDate(0, 0, -1)
+		dayEnd := localToday.AddDate(0, 0, 1)
+
+		mockStore := &mockStorage{}
+		mockStore.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			UtilityProvider: "test",
+			MinBatterySOC:   20,
+			Location: &types.SiteLocation{
+				TimeZone:  chicagoLoc.String(),
+				Latitude:  41.8781,
+				Longitude: -87.6298,
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: localYesterday.Add(12 * time.Hour), TSEnd: localYesterday.Add(13 * time.Hour), DollarsPerKWH: 0.20},
+			{TSStart: localToday.Add(12 * time.Hour), TSEnd: localToday.Add(13 * time.Hour), DollarsPerKWH: 0.20},
+		}, nil).Once()
+
+		mockStore.On("GetActionHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Action{
+			{
+				Timestamp:    localToday.Add(12 * time.Hour),
+				SystemStatus: types.SystemStatus{BatteryCapacityKWH: 13.5, TimeLocation: chicagoLoc.String()},
+			},
+		}, nil).Once()
+
+		// Frontend sends UTC ISO timestamps (toISOString) for the local day window
+		expectedLookback := localToday.AddDate(0, 0, -shadowWarmupLookbackDays)
+		expectedFetchEnd := dayEnd.AddDate(0, 0, nextDayValuationLookaheadDays)
+
+		mockStore.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s time.Time) bool {
+			return s.Equal(expectedLookback) && s.Location().String() == chicagoLoc.String()
+		}), mock.MatchedBy(func(e time.Time) bool {
+			return e.Equal(expectedFetchEnd)
+		})).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart:   localYesterday.UTC(),
+						TimeLocation: chicagoLoc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: localYesterday.Add(12 * time.Hour).UTC(), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5}},
+					},
+				},
+			},
+		}, nil).Once()
+
+		// Leading gap [expectedLookback, localYesterday) and trailing gap [localToday, expectedFetchEnd)
+		mockStore.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, expectedLookback, localYesterday).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockStore.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, localToday, expectedFetchEnd).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   localToday,
+				TimeLocation: chicagoLoc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: localToday.Add(12 * time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5}},
+			},
+		}, nil).Once()
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockUtilities := utility.NewMap(mockStore)
+		mockUtilities.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			storage:    mockStore,
+			utilities:  mockUtilities,
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return nowUTC },
+		}
+
+		var warnBuf bytes.Buffer
+		warnLogger := slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+		q := make(url.Values)
+		q.Set("start", localToday.UTC().Format(time.RFC3339))
+		q.Set("end", dayEnd.UTC().Format(time.RFC3339))
+
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(log.With(ctx, warnLogger))
+		rr := httptest.NewRecorder()
+
+		srv.handleHistoryActionsAndSavings(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.Empty(t, warnBuf.String(), "must emit zero warnings during US evening hours after UTC midnight")
+
+		var resp struct {
+			Savings types.SavingsStats `json:"savings"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		assert.InDelta(t, 1.00, resp.Savings.TotalSavingsDollars, 0.001)
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestHandleHistoryEnergy(t *testing.T) {
@@ -1084,6 +1190,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
 
 		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1149,6 +1256,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
 
 		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1198,6 +1306,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
 
 		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1245,6 +1354,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		// Prior Friday (May 29) has load 1.0, Target Friday (June 5) has load 10.0
 		priorFriday := d.AddDate(0, 0, -7)
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return((*types.Action)(nil), nil).Once()
 
 		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1293,5 +1403,102 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		if assert.Len(t, res.Weather, 1) {
 			assert.InDelta(t, 1.0, res.Weather[0].ImprovedHomeLoad, 0.001)
 		}
+	})
+
+	t.Run("US Site Evening After UTC Midnight Resolves Site Timezone With Zero Warnings", func(t *testing.T) {
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		// 2026-06-06 02:00 UTC is 2026-06-05 21:00 CDT: 2026-06-05 is still local today!
+		nowUTC := time.Date(2026, 6, 6, 2, 0, 0, 0, time.UTC)
+		localToday := time.Date(2026, 6, 5, 0, 0, 0, 0, chicagoLoc)
+		localYesterday := localToday.AddDate(0, 0, -1)
+
+		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			Location: &types.SiteLocation{
+				TimeZone:  chicagoLoc.String(),
+				Latitude:  41.8781,
+				Longitude: -87.6298,
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return(&types.Action{
+			SystemStatus: types.SystemStatus{TimeLocation: chicagoLoc.String()},
+		}, nil).Once()
+
+		expectedStart := localToday.AddDate(0, 0, -forecastHistoryDays)
+		expectedEnd := localToday.AddDate(0, 0, 1)
+
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s time.Time) bool {
+			return s.Equal(expectedStart) && s.Location().String() == chicagoLoc.String()
+		}), mock.MatchedBy(func(e time.Time) bool {
+			return e.Equal(expectedEnd)
+		})).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart:   localYesterday.UTC(),
+						TimeLocation: chicagoLoc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: localYesterday.Add(12 * time.Hour).UTC(), HomeKWH: 2.0}},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart:    localYesterday.UTC(),
+						TimeLocation:  chicagoLoc.String(),
+						ForecastHours: []types.HourlyWeather{{TSHourStart: localYesterday.Add(12 * time.Hour).UTC(), TemperatureC: 20}},
+					},
+				},
+			},
+		}, nil).Once()
+
+		// Because localYesterday is archived and localToday is still in progress, unsummarized fetch starts at localToday
+		// and emits zero behind-schedule warnings.
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, localToday, expectedEnd.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart:   localToday,
+				TimeLocation: chicagoLoc.String(),
+				Hourly:       []types.EnergyStats{{TSHourStart: localToday.Add(20 * time.Hour), SolarKWH: 1.5, HomeKWH: 3.0}},
+			},
+		}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, localToday, expectedEnd.AddDate(0, 0, 2)).Return([]types.Weather{
+			{
+				TSDayStart:    localToday,
+				TimeLocation:  chicagoLoc.String(),
+				ForecastHours: []types.HourlyWeather{{TSHourStart: localToday.Add(20 * time.Hour), TemperatureC: 24, DNI: 100}},
+			},
+		}, nil).Once()
+
+		srv := &Server{
+			storage:            mockS,
+			bypassAuth:         true,
+			controller:         controller.NewController(),
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+			nowFunc:            func() time.Time { return nowUTC },
+		}
+
+		var warnBuf bytes.Buffer
+		warnLogger := slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+		req := httptest.NewRequest("GET", "/api/history/energy?date=2026-06-05", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(log.With(ctx, warnLogger))
+		w := httptest.NewRecorder()
+
+		srv.handleHistoryEnergy(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"), "local today must use short 5-minute cache even after UTC midnight")
+		assert.Empty(t, warnBuf.String(), "must emit zero behind warnings during US evening hours after UTC midnight")
+
+		var res HistoryEnergyRes
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+		assert.Len(t, res.Energy, 1)
+		assert.Len(t, res.Weather, 1)
+		mockS.AssertExpectations(t)
 	})
 }
