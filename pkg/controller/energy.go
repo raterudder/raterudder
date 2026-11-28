@@ -1553,14 +1553,17 @@ func (p weekdayOutlierPeriods) coversHour(h int) bool {
 	return false
 }
 
-// detectDayOfWeekOutliers identifies which days of the week (Sunday..Saturday) and time-of-day periods
+// detectDayOfWeekOutliers identifies which weekend days (Saturday, Sunday) and time-of-day periods
 // (defined in outlierWindows) historically exhibit a statistically significant increase in energy usage
-// compared to their 2 preceding weekdays.
+// compared to their 2 preceding days (or Thursday+Friday for Sunday).
 // Evaluating sub-periods alongside waking/whole-day prevents a quiet afternoon from diluting a high Saturday
-// morning routine while also catching routines (such as Friday laundry/chores) whose hours shift across the
-// afternoon or span across the morning-afternoon boundary. Non-morning periods skip classification when the
-// target weekday's mean period temperature differed from preceding days by >= weatherDrivenSurgeTempDeltaC
-// so hot summer HVAC spells on specific calendar dates do not masquerade as recurring weekday chore schedules.
+// morning routine while also catching weekend routines whose hours shift across the afternoon or span across
+// the morning-afternoon boundary. Non-morning periods skip classification when the target day's mean period
+// temperature differed from preceding days by >= weatherDrivenSurgeTempDeltaC so hot summer HVAC spells on
+// specific calendar dates do not masquerade as recurring weekend chore schedules.
+// Weekdays (Monday-Friday) are intentionally skipped: backtesting across 50 production sites showed that
+// weekday triggers (especially Monday compared against quieter weekends and small-sample Thu/Fri noise)
+// caused net MAE and over-prediction regressions while weekend triggers improved weekend accuracy.
 func detectDayOfWeekOutliers(
 	ctx context.Context,
 	loc *time.Location,
@@ -1598,11 +1601,15 @@ func detectDayOfWeekOutliers(
 		if err != nil {
 			continue
 		}
+		wd := dTime.Weekday()
+		if wd != time.Thursday && wd != time.Friday && wd != time.Saturday && wd != time.Sunday {
+			continue
+		}
 		parsedDays = append(parsedDays, parsedValidDay{
 			dateStr: dateStr,
 			dTime:   dTime,
 			nextDay: dTime.AddDate(0, 0, 1),
-			wd:      dTime.Weekday(),
+			wd:      wd,
 			day:     d,
 		})
 	}
@@ -1666,18 +1673,18 @@ func detectDayOfWeekOutliers(
 			stats = append(stats, ds)
 		}
 
-		// Test all 7 days of the week (Sunday through Saturday).
-		// Each target day wd is compared against its 2 immediately preceding calendar days (p1 = wd-1, p2 = wd-2)
-		// because those recent days carry the highest exponential recency weights (0.95^1 and 0.95^2) in the
-		// hourly prediction pool and pull down wd's forecast if wd has a much higher load profile.
-		// - For Saturday (wd = 6), p1 and p2 are already Friday and Thursday (the last 2 workdays).
+		// Test weekend days (Saturday and Sunday) against their 2 immediately preceding calendar days
+		// (p1 = wd-1, p2 = wd-2) because those recent days carry the highest exponential recency weights
+		// (0.95^1 and 0.95^2) in the hourly prediction pool and pull down weekend forecasts when weekends
+		// have a much higher load profile.
+		// - For Saturday (wd = 6), p1 and p2 are Friday and Thursday (the last 2 workdays).
 		// - For Sunday (wd = 0), p1 and p2 are Saturday and Friday. When a household is home all weekend,
 		//   both Saturday and Sunday are elevated, so comparing Sunday against Saturday + Friday mixes a high
 		//   weekend day (Saturday) into the baseline pool—inflating both the baseline mean and variance so
 		//   Welch's t-test fails. Therefore, Sunday also falls back to testing against Thursday + Friday
 		//   (the same 2 pre-weekend workdays that Saturday is tested against).
-		for wdInt := 0; wdInt < 7; wdInt++ {
-			wd := time.Weekday(wdInt)
+		for _, wd := range []time.Weekday{time.Sunday, time.Saturday} {
+			wdInt := int(wd)
 			p1 := time.Weekday((wdInt - 1 + 7) % 7)
 			p2 := time.Weekday((wdInt - 2 + 7) % 7)
 
