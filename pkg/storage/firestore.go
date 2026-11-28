@@ -789,7 +789,12 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 		return nil
 	}
 
-	// For multiple items, use BulkWriter
+	// For multiple items, use BulkWriter rather than RunTransaction. Pure-write
+	// batches do not need a stateful transaction, and under Firestore write-rate
+	// throttling (ResourceExhausted) the Go SDK's GAPIC layer retries Commit with
+	// the now-invalidated transaction ID, turning transient throttling into a
+	// non-retryable InvalidArgument ("transaction has expired") error. BulkWriter
+	// uses stateless BatchWrite RPCs with built-in backoff and rate limiting.
 	bw := f.client.BulkWriter(ctx)
 	var endOnce sync.Once
 	endBW := func() { endOnce.Do(func() { bw.End() }) }
@@ -868,31 +873,12 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		return nil
 	}
 
-	if len(weather) <= 10 {
-		if err := f.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
-			for _, w := range weather {
-				jsonBytes, err := json.Marshal(w)
-				if err != nil {
-					return fmt.Errorf("failed to marshal weather: %w", err)
-				}
-				docID := w.TSDayStart.Format("2006-01-02")
-				if err := tx.Set(coll.Doc(docID), map[string]any{
-					"json":       string(jsonBytes),
-					"tsDayStart": w.TSDayStart,
-					"tsUpdated":  w.TSUpdated,
-					"version":    version,
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return fmt.Errorf("failed to upsert weather: %w", err)
-		}
-		return nil
-	}
-
-	// For larger batches, use BulkWriter
+	// For multiple items, use BulkWriter rather than RunTransaction. Pure-write
+	// batches do not need a stateful transaction, and under Firestore write-rate
+	// throttling (ResourceExhausted) the Go SDK's GAPIC layer retries Commit with
+	// the now-invalidated transaction ID, turning transient throttling into a
+	// non-retryable InvalidArgument ("transaction has expired") error. BulkWriter
+	// uses stateless BatchWrite RPCs with built-in backoff and rate limiting.
 	bw := f.client.BulkWriter(ctx)
 	var endOnce sync.Once
 	endBW := func() { endOnce.Do(func() { bw.End() }) }

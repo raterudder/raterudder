@@ -4298,6 +4298,65 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		assert.Less(t, elapsed, 500*time.Millisecond)
 		mockW.AssertExpectations(t)
 	})
+
+	t.Run("Staggered Slot Defers Until Site Offset And Rotates Across Dates", func(t *testing.T) {
+		siteID := "stagger-test-site"
+		baseDay := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+
+		seenOffsets := make(map[time.Duration]bool)
+		var nonZeroDay time.Time
+		var nonZeroOffset time.Duration
+		for d := 0; d < 30; d++ {
+			day := baseDay.AddDate(0, 0, d)
+			off := siteStaggerOffset(siteID, day)
+			seenOffsets[off] = true
+			if nonZeroDay.IsZero() && off > 0 {
+				nonZeroDay = day
+				nonZeroOffset = off
+			}
+		}
+		require.True(t, seenOffsets[0] && seenOffsets[20*time.Minute] && seenOffsets[40*time.Minute], "expected site offset to rotate across 0m, 20m, and 40m over 30 days")
+		require.False(t, nonZeroDay.IsZero())
+
+		yesterdayMidnight := nonZeroDay.AddDate(0, 0, -1)
+		tomorrowMidnight := nonZeroDay.AddDate(0, 0, 1)
+		lastUpdate := yesterdayMidnight.Add(22*time.Hour + siteStaggerOffset(siteID, yesterdayMidnight) + 5*time.Minute)
+
+		// Before 00:00 + stagger: still in yesterday's 22:00 slot, so skip.
+		mockSBefore := &mockStorage{}
+		mockWBefore := &mockWeather{}
+		beforeSlot := nonZeroDay.Add(nonZeroOffset - time.Minute)
+		mockSBefore.On("GetLatestWeatherTime", mock.Anything, siteID).Return(nonZeroDay, lastUpdate, types.CurrentWeatherVersion, nil).Once()
+		srvBefore := &Server{
+			storage: mockSBefore,
+			weather: mockWBefore,
+			nowFunc: func() time.Time { return beforeSlot },
+		}
+		require.NoError(t, srvBefore.updateWeatherHistory(context.Background(), siteID, sl))
+		mockWBefore.AssertNotCalled(t, "Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockSBefore.AssertExpectations(t)
+
+		// At 00:00 + stagger: midnight slot fires and backfills yesterday through tomorrow.
+		mockSAfter := &mockStorage{}
+		mockWAfter := &mockWeather{}
+		atSlot := nonZeroDay.Add(nonZeroOffset)
+		mockSAfter.On("GetLatestWeatherTime", mock.Anything, siteID).Return(nonZeroDay, lastUpdate, types.CurrentWeatherVersion, nil).Once()
+		mockSAfter.On("GetWeather", mock.Anything, siteID, nonZeroDay, nonZeroDay.Add(24*time.Hour)).Return([]types.Weather{}, nil).Once()
+		mockWAfter.On("Forecast", mock.Anything, sl, yesterdayMidnight, nonZeroDay.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: yesterdayMidnight},
+			{TSDayStart: nonZeroDay},
+			{TSDayStart: tomorrowMidnight},
+		}, nil).Once()
+		mockSAfter.On("UpsertWeather", mock.Anything, siteID, mock.Anything, types.CurrentWeatherVersion).Return(nil).Once()
+		srvAfter := &Server{
+			storage: mockSAfter,
+			weather: mockWAfter,
+			nowFunc: func() time.Time { return atSlot },
+		}
+		require.NoError(t, srvAfter.updateWeatherHistory(context.Background(), siteID, sl))
+		mockSAfter.AssertExpectations(t)
+		mockWAfter.AssertExpectations(t)
+	})
 }
 
 func TestSetESSModes(t *testing.T) {
@@ -5885,6 +5944,107 @@ func TestGetCombinedHistory(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, energy, 1)
 		assert.Len(t, weather, 1)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("SuppressesSummaryBehindWarningWithinFirstHourOfDay", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 4, 0, 45, 0, 0, chicagoLoc)
+		todayStart := truncateDay(now)
+		yesterdayStart := todayStart.AddDate(0, 0, -1)
+		twoDaysAgo := todayStart.AddDate(0, 0, -2)
+		historyStart := todayStart.AddDate(0, 0, -35)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: twoDaysAgo, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: twoDaysAgo, HomeKWH: 1.0}}},
+				},
+				Weather: []types.Weather{
+					{TSDayStart: twoDaysAgo, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: twoDaysAgo, TemperatureC: 10}}},
+				},
+			},
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", yesterdayStart, todayStart.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", yesterdayStart, todayStart.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		srv := &Server{storage: mockS, nowFunc: func() time.Time { return now }}
+		settings := settingsWithVersion{Settings: types.Settings{Location: &types.SiteLocation{TimeZone: chicagoLoc.String()}}}
+
+		var warnBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		_, _, err := srv.getCombinedHistory(ctx, "site1", settings, historyStart, now, summaries)
+		require.NoError(t, err)
+		assert.NotContains(t, warnBuf.String(), "history summary is behind")
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("WarnsWhenSummaryMoreThanOneDayBehindWithinFirstHour", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 4, 0, 45, 0, 0, chicagoLoc)
+		todayStart := truncateDay(now)
+		threeDaysAgo := todayStart.AddDate(0, 0, -3)
+		twoDaysAgo := todayStart.AddDate(0, 0, -2)
+		historyStart := todayStart.AddDate(0, 0, -35)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: threeDaysAgo, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: threeDaysAgo, HomeKWH: 1.0}}},
+				},
+				Weather: []types.Weather{
+					{TSDayStart: threeDaysAgo, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: threeDaysAgo, TemperatureC: 10}}},
+				},
+			},
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", twoDaysAgo, todayStart.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", twoDaysAgo, todayStart.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		srv := &Server{storage: mockS, nowFunc: func() time.Time { return now }}
+		settings := settingsWithVersion{Settings: types.Settings{Location: &types.SiteLocation{TimeZone: chicagoLoc.String()}}}
+
+		var warnBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		_, _, err := srv.getCombinedHistory(ctx, "site1", settings, historyStart, now, summaries)
+		require.NoError(t, err)
+		assert.Contains(t, warnBuf.String(), "energy history summary is behind")
+		assert.Contains(t, warnBuf.String(), "weather history summary is behind")
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("WarnsWhenYesterdayMissingAfterFirstHour", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 4, 1, 5, 0, 0, chicagoLoc)
+		todayStart := truncateDay(now)
+		yesterdayStart := todayStart.AddDate(0, 0, -1)
+		twoDaysAgo := todayStart.AddDate(0, 0, -2)
+		historyStart := todayStart.AddDate(0, 0, -35)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: twoDaysAgo, TimeLocation: chicagoLoc.String(), Hourly: []types.EnergyStats{{TSHourStart: twoDaysAgo, HomeKWH: 1.0}}},
+				},
+				Weather: []types.Weather{
+					{TSDayStart: twoDaysAgo, TimeLocation: chicagoLoc.String(), ForecastHours: []types.HourlyWeather{{TSHourStart: twoDaysAgo, TemperatureC: 10}}},
+				},
+			},
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", yesterdayStart, todayStart.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", yesterdayStart, todayStart.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		srv := &Server{storage: mockS, nowFunc: func() time.Time { return now }}
+		settings := settingsWithVersion{Settings: types.Settings{Location: &types.SiteLocation{TimeZone: chicagoLoc.String()}}}
+
+		var warnBuf bytes.Buffer
+		ctx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&warnBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		_, _, err := srv.getCombinedHistory(ctx, "site1", settings, historyStart, now, summaries)
+		require.NoError(t, err)
+		assert.Contains(t, warnBuf.String(), "energy history summary is behind")
+		assert.Contains(t, warnBuf.String(), "weather history summary is behind")
 		mockS.AssertExpectations(t)
 	})
 }

@@ -451,11 +451,16 @@ func (s *Server) performSiteUpdate(
 		yesterdayStart := todayStart.AddDate(0, 0, -1)
 
 		if latestDay.Before(yesterdayStart) {
-			newSummaries, err = s.updateHistorySummary(ctx, siteID, latestDay, now)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update history summary", slog.Any("error", err))
-			} else if len(newSummaries) > 0 {
-				hasUpdateOrBackfill = true
+			summaryReady := !now.Before(todayStart.Add(siteStaggerOffset(siteID, todayStart)))
+			// Defer during the staggered midnight window only when yesterday is the single
+			// missing day; if summaries are more than one day behind, catch up immediately.
+			if summaryReady || latestDay.Before(yesterdayStart.AddDate(0, 0, -1)) {
+				newSummaries, err = s.updateHistorySummary(ctx, siteID, latestDay, now)
+				if err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to update history summary", slog.Any("error", err))
+				} else if len(newSummaries) > 0 {
+					hasUpdateOrBackfill = true
+				}
 			}
 		}
 	}
@@ -1208,6 +1213,21 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 	return nil
 }
 
+// siteStaggerOffset returns a deterministic 0, 20, or 40 minute offset for a site on a given
+// local date. Without staggering, every site in a timezone refreshes weather and commits daily
+// history summaries on the same top-of-the-hour poll, triggering Firestore write-rate throttling
+// (500/50/5 ramp-up limits) and Open-Meteo request bursts. Hashing the site's local date rotates
+// sites fairly across buckets each day without shifting slots mid-day, and applying the same
+// offset to both weather and updateHistorySummary keeps the midnight weather refresh ahead of
+// daily archival.
+func siteStaggerOffset(siteID string, localDay time.Time) time.Duration {
+	if siteID == "" {
+		return 0
+	}
+	sum := sha256.Sum256([]byte(siteID + "\x00" + localDay.Format("2006-01-02")))
+	return time.Duration(binary.BigEndian.Uint64(sum[:8])%3) * 20 * time.Minute
+}
+
 func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc types.SiteLocation) error {
 	timeLoc, err := time.LoadLocation(loc.TimeZone)
 	if err != nil {
@@ -1234,9 +1254,10 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	for _, dayOffset := range []int{-1, 0} {
 		// targetDay represents the local date (yesterday or today) we are evaluating.
 		targetDay := now.AddDate(0, 0, dayOffset)
+		stagger := siteStaggerOffset(siteID, targetDay)
 		for _, hr := range hours {
 			// slotTime is the absolute timestamp of the scheduled slot on targetDay in timeLoc.
-			slotTime := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), hr, 0, 0, 0, timeLoc)
+			slotTime := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), hr, 0, 0, 0, timeLoc).Add(stagger)
 			// Since hours and days are sorted in ascending order, the first slot we find that is
 			// in the future means all subsequent slots will also be in the future.
 			if slotTime.After(now) {
@@ -1624,17 +1645,25 @@ func (s *Server) getCombinedHistory(
 	// Callers like handleHistoryEnergy may pass targetDate+1d as now, so cap
 	// expectedLatestDay at the actual yesterday to avoid expecting today in the summary.
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
-	realYesterdayStart := truncateDay(s.now().In(now.Location())).AddDate(0, 0, -1)
+	realNow := s.now().In(now.Location())
+	realTodayStart := truncateDay(realNow)
+	realYesterdayStart := realTodayStart.AddDate(0, 0, -1)
 	expectedLatestDay := yesterdayStart
 	if realYesterdayStart.Before(expectedLatestDay) {
 		expectedLatestDay = realYesterdayStart
+	}
+	// Daily summary rollups are staggered across the first hour after midnight, so only
+	// warn about yesterday being missing once we are at least an hour past midnight.
+	warnExpectedLatestDay := expectedLatestDay
+	if expectedLatestDay.Equal(realYesterdayStart) && realNow.Sub(realTodayStart) < time.Hour {
+		warnExpectedLatestDay = realYesterdayStart.AddDate(0, 0, -1)
 	}
 
 	// Determine start range for fetching unsummarized energy history
 	energyFetchStart := todayStart
 	if !latestSummaryEnergyDay.IsZero() {
 		energyFetchStart = latestSummaryEnergyDay.AddDate(0, 0, 1)
-		if latestSummaryEnergyDay.Before(expectedLatestDay) {
+		if latestSummaryEnergyDay.Before(warnExpectedLatestDay) {
 			log.Ctx(ctx).WarnContext(ctx, "energy history summary is behind, fetching missing days from database",
 				slog.String("siteID", siteID),
 				slog.Time("latestSummaryDay", latestSummaryEnergyDay),
@@ -1664,7 +1693,7 @@ func (s *Server) getCombinedHistory(
 	weatherFetchStart := todayStart
 	if !latestSummaryWeatherDay.IsZero() {
 		weatherFetchStart = latestSummaryWeatherDay.AddDate(0, 0, 1)
-		if latestSummaryWeatherDay.Before(expectedLatestDay) {
+		if latestSummaryWeatherDay.Before(warnExpectedLatestDay) {
 			log.Ctx(ctx).WarnContext(ctx, "weather history summary is behind, fetching missing days from database",
 				slog.String("siteID", siteID),
 				slog.Time("latestSummaryDay", latestSummaryWeatherDay),
