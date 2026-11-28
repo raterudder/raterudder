@@ -163,6 +163,24 @@ describe('Header Component', () => {
         expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
     });
 
+    it('hides notification bell when onOpenNotifications is omitted even if notifications feature flag is enabled', () => {
+        const { hook } = memoryLocation({ static: true, path: '/dashboard' });
+        render(
+            <FeaturesProvider features={{ notifications: true }}>
+                <Router hook={hook}>
+                    <Header
+                        loggedIn={true}
+                        sites={[{ id: 'site1', name: 'Site 1' }]}
+                        selectedSiteID="site1"
+                        onSiteChange={mockOnSiteChange}
+                        onLogout={mockOnLogout}
+                    />
+                </Router>
+            </FeaturesProvider>
+        );
+        expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
+    });
+
     it('calls onOpenNotifications when bell button is clicked', async () => {
         renderHeader('/dashboard', true, { notifications: true });
         const bellBtn = screen.getByTestId('header-bell-btn');

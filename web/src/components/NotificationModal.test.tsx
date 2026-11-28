@@ -1488,5 +1488,105 @@ describe('NotificationModal', () => {
 
         expect(api.updateNotificationSettings).not.toHaveBeenCalled();
     });
+
+    it('uses default settings instead of another user entry when currentUserID has no saved preferences', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                'other-user-999': {
+                    morningSummaryEnabled: true,
+                    morningSummaryHour: 9,
+                    morningSummaryFlavor: 'executive',
+                    eveningSummaryEnabled: true,
+                    eveningSummaryHour: 21,
+                    eveningSummaryFlavor: 'pilot',
+                    gridOutageAlert: false,
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        const morningSwitch = await screen.findByRole('switch', { name: /Daily Morning Summary/i });
+        const eveningSwitch = screen.getByRole('switch', { name: /Daily Evening Summary/i });
+        expect(morningSwitch).toHaveAttribute('aria-checked', 'false');
+        expect(eveningSwitch).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    eveningSummaryEnabled: false,
+                    eveningSummaryHour: 20,
+                    eveningSummaryFlavor: 'home_planner',
+                    gridOutageAlert: true,
+                })
+            );
+        });
+    });
+
+    it('falls back to first notifications entry when currentUserID is empty', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                'legacy-user': {
+                    morningSummaryEnabled: true,
+                    morningSummaryHour: 9,
+                    morningSummaryFlavor: 'executive',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID=""
+            />
+        );
+
+        const morningSwitch = await screen.findByRole('switch', { name: /Daily Morning Summary/i });
+        expect(morningSwitch).toHaveAttribute('aria-checked', 'true');
+    });
 });
 

@@ -3718,9 +3718,15 @@ func (s *Server) handleUpdateNotificationSettings(w http.ResponseWriter, r *http
 		return
 	}
 
+	ctx := r.Context()
 	siteID := s.getSiteID(r)
 	if siteID == "" {
 		writeJSONError(w, "siteID is required", http.StatusBadRequest)
+		return
+	}
+	if !s.hasDirectSitePermission(r) {
+		log.Ctx(ctx).WarnContext(ctx, "update notification settings rejected: user lacks direct site permission", slog.String("userID", userID), slog.String("siteID", siteID))
+		writeJSONError(w, "site access denied", http.StatusForbidden)
 		return
 	}
 
@@ -3783,7 +3789,6 @@ func (s *Server) handleUpdateNotificationSettings(w http.ResponseWriter, r *http
 		}
 	}
 
-	ctx := r.Context()
 	if err := s.storage.UpdateSiteNotificationSettings(ctx, siteID, userID, req.Settings); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to update notification settings", slog.Any("error", err))
 		writeJSONError(w, "failed to update notification settings", http.StatusInternalServerError)

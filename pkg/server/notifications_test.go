@@ -1736,6 +1736,113 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.Contains(t, rec.Body.String(), "quiet period start and end hours must be between 0 and 23, and start cannot equal end")
 	})
+
+	t.Run("RejectsMultiSiteAdminWithoutDirectSitePermission", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+		srv.bypassAuth = false
+		srv.sessionEncryptionKey = "fedcba9876543210fedcba9876543210"
+		srv.adminEmails = []string{"admin@example.com"}
+		handler := srv.setupHandler()
+
+		adminSessionToken, err := srv.createSessionToken("admin-user", "admin@example.com", "MOCK_ADMIN_SECRET", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "admin-user").Return(types.User{
+			ID:            "admin-user",
+			Email:         "admin@example.com",
+			SessionSecret: "MOCK_ADMIN_SECRET",
+			Sites:         []types.UserSite{{ID: "admin-site", Name: "Admin Site"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "victim-site").Return(types.Site{
+			ID:          "victim-site",
+			Permissions: []types.SitePermissions{{UserID: "victim-user"}},
+		}, nil).Once()
+
+		notifBody := []byte(`{"siteID":"victim-site","settings":{"gridOutageAlert":true,"morningSummaryEnabled":true,"morningSummaryHour":8,"morningSummaryFlavor":"home_planner"}}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(notifBody))
+		req.AddCookie(&http.Cookie{Name: "session_token", Value: adminSessionToken})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Contains(t, rec.Body.String(), "site access denied")
+		mockS.AssertNotCalled(t, "UpdateSiteNotificationSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("AllowsMultiSiteAdminWithDirectSitePermission", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+		srv.bypassAuth = false
+		srv.sessionEncryptionKey = "fedcba9876543210fedcba9876543210"
+		srv.adminEmails = []string{"admin@example.com"}
+		handler := srv.setupHandler()
+
+		adminSessionToken, err := srv.createSessionToken("admin-user", "admin@example.com", "MOCK_ADMIN_SECRET", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "admin-user").Return(types.User{
+			ID:            "admin-user",
+			Email:         "admin@example.com",
+			SessionSecret: "MOCK_ADMIN_SECRET",
+			Sites:         []types.UserSite{{ID: "admin-site", Name: "Admin Site"}},
+		}, nil).Once()
+		mockS.On("GetSite", mock.Anything, "admin-site").Return(types.Site{
+			ID:          "admin-site",
+			Permissions: []types.SitePermissions{{UserID: "admin-user"}},
+		}, nil).Once()
+		mockS.On("UpdateSiteNotificationSettings", mock.Anything, "admin-site", "admin-user", mock.Anything).Return(nil).Once()
+
+		notifBody := []byte(`{"siteID":"admin-site","settings":{"gridOutageAlert":true,"morningSummaryEnabled":true,"morningSummaryHour":8,"morningSummaryFlavor":"home_planner"}}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(notifBody))
+		req.AddCookie(&http.Cookie{Name: "session_token", Value: adminSessionToken})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("MissingSiteIDBeforeDirectSitePermission", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+		srv.bypassAuth = false
+		srv.sessionEncryptionKey = "fedcba9876543210fedcba9876543210"
+		srv.adminEmails = []string{"admin@example.com"}
+		handler := srv.setupHandler()
+
+		adminSessionToken, err := srv.createSessionToken("admin-user", "admin@example.com", "MOCK_ADMIN_SECRET", time.Hour)
+		require.NoError(t, err)
+
+		mockS.On("GetUser", mock.Anything, "admin-user").Return(types.User{
+			ID:            "admin-user",
+			Email:         "admin@example.com",
+			SessionSecret: "MOCK_ADMIN_SECRET",
+			Sites: []types.UserSite{
+				{ID: "admin-site-1", Name: "Admin Site 1"},
+				{ID: "admin-site-2", Name: "Admin Site 2"},
+			},
+		}, nil).Once()
+
+		notifBody := []byte(`{"siteID":"","settings":{"morningSummaryEnabled":true,"morningSummaryHour":8,"morningSummaryFlavor":"home_planner"}}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(notifBody))
+		req.AddCookie(&http.Cookie{Name: "session_token", Value: adminSessionToken})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		mockS.AssertExpectations(t)
+
+		// Also verify direct handler check order when siteID in context is empty
+		reqDirect := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(notifBody))
+		ctx := context.WithValue(reqDirect.Context(), userContextKey, types.User{ID: "admin-user"})
+		ctx = context.WithValue(ctx, siteIDContextKey, "")
+		recDirect := httptest.NewRecorder()
+		srv.handleUpdateNotificationSettings(recDirect, reqDirect.WithContext(ctx))
+		assert.Equal(t, http.StatusBadRequest, recDirect.Code)
+		assert.Contains(t, recDirect.Body.String(), "siteID is required")
+	})
 }
 
 func TestHandleGetNotificationSubscriptions(t *testing.T) {

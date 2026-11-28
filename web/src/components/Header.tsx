@@ -160,12 +160,12 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     <div className="header-right">
                         {loggedIn ? (
                             <>
-                                {showNotifications && (
+                                {showNotifications && onOpenNotifications && (
                                     <button
                                         type="button"
                                         className="notification-bell-btn"
                                         onClick={() => {
-                                            onOpenNotifications?.();
+                                            onOpenNotifications();
                                             setIsMenuOpen(false);
                                         }}
                                         aria-label="Notification settings"

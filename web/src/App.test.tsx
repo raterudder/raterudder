@@ -347,4 +347,87 @@ describe('App routing and viewSite parameter preservation', () => {
             expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
         });
     });
+
+    it('hides notification bell and modal when viewing an unowned site via ?viewSite= and restores them on owned site', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/dashboard?viewSite=victim-site');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            userID: 'admin-user-1',
+            sites: [{ id: 'site1', name: 'Site 1' }],
+        });
+
+        (api.fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            features: { notifications: true },
+        });
+
+        render(<App />);
+
+        expect(await screen.findByText('Admin Mode: Viewing Site victim-site')).toBeInTheDocument();
+        await waitFor(() => {
+            expect(api.fetchSettings).toHaveBeenCalledWith('victim-site');
+        });
+        expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Configuring alerts for/i)).not.toBeInTheDocument();
+
+        // Switch back to the user's owned site from the site dropdown
+        const trigger = screen.getByLabelText('Select Site');
+        await user.click(trigger);
+        const site1Option = await screen.findByRole('option', { name: 'Site 1' });
+        await user.click(site1Option);
+
+        const bellBtn = await screen.findByTestId('header-bell-btn');
+        await user.click(bellBtn);
+
+        expect(await screen.findByText(/Configuring alerts for Site 1/i)).toBeInTheDocument();
+
+        // Navigating to an unowned ?viewSite= closes the modal and hides the bell
+        act(() => {
+            window.history.pushState(null, '', '/dashboard?viewSite=victim-site');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('Admin Mode: Viewing Site victim-site')).toBeInTheDocument();
+            expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
+            expect(screen.queryByText(/Configuring alerts for/i)).not.toBeInTheDocument();
+        });
+    });
+
+    it('keeps notification bell and modal enabled when viewing an owned site via ?viewSite=', async () => {
+        const user = userEvent.setup();
+        window.history.pushState(null, '', '/dashboard?viewSite=site1');
+
+        (api.fetchAuthStatus as any).mockResolvedValue({
+            ...defaultAuthStatus,
+            loggedIn: true,
+            userID: 'admin-user-1',
+            sites: [
+                { id: 'site1', name: 'Site 1' },
+                { id: 'site2', name: 'Site 2' },
+            ],
+        });
+
+        (api.fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            features: { notifications: true },
+        });
+
+        render(<App />);
+
+        expect(await screen.findByText('Admin Mode: Viewing Site site1')).toBeInTheDocument();
+        const bellBtn = await screen.findByTestId('header-bell-btn');
+        await user.click(bellBtn);
+
+        expect(await screen.findByText(/Configuring alerts for Site 1/i)).toBeInTheDocument();
+    });
 });

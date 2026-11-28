@@ -392,6 +392,15 @@ function AppContent() {
         ? [...sites, { id: viewSiteOverride, name: "" }]
         : sites;
 
+    const isDirectSiteMember = sites.some(site => site.id === effectiveSiteID);
+    const canConfigureNotifications = effectiveSiteID === 'ALL' ? sites.length > 0 : isDirectSiteMember;
+
+    useEffect(() => {
+        if (!canConfigureNotifications && isNotificationModalOpen) {
+            setIsNotificationModalOpen(false);
+        }
+    }, [canConfigureNotifications, isNotificationModalOpen]);
+
     useEffect(() => {
         if (selectedSiteID === 'ALL' && effectiveSites.length <= 1) {
             setSelectedSiteID(sites[0]?.id || "");
@@ -434,7 +443,7 @@ function AppContent() {
                     selectedSiteID={effectiveSiteID}
                     onSiteChange={handleSiteChange}
                     onLogout={handleLogout}
-                    onOpenNotifications={() => setIsNotificationModalOpen(true)}
+                    onOpenNotifications={canConfigureNotifications ? () => setIsNotificationModalOpen(true) : undefined}
                 />
 
                 <main className="main-content">
@@ -591,7 +600,7 @@ function AppContent() {
                     </Suspense>
                 )}
 
-                {loggedIn && isNotificationModalOpen && (
+                {loggedIn && canConfigureNotifications && isNotificationModalOpen && (
                     <Suspense fallback={null}>
                         <NotificationModal
                             open={isNotificationModalOpen}
