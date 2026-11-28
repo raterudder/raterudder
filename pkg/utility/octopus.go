@@ -1268,9 +1268,24 @@ type octopusUnitRatesResponse struct {
 	Results  []octopusUnitRateEntry `json:"results"`
 }
 
-func (c *baseOctopus) storeInMemory(loc string, prices []types.Price) {
+func octopusSlotEqual(a, b types.Price) bool {
+	return a.Provider == b.Provider &&
+		a.TSStart.Equal(b.TSStart) &&
+		a.TSEnd.Equal(b.TSEnd) &&
+		a.DollarsPerKWH == b.DollarsPerKWH &&
+		a.GridUseDollarsPerKWH == b.GridUseDollarsPerKWH &&
+		a.GenerationCreditDollarsPerKWH == b.GenerationCreditDollarsPerKWH &&
+		a.SeparateGenerationCredit == b.SeparateGenerationCredit &&
+		a.BatteryGenerationCreditDollarsPerKWH == b.BatteryGenerationCreditDollarsPerKWH &&
+		a.SeparateBatteryGenerationCredit == b.SeparateBatteryGenerationCredit &&
+		a.BuyAllSellAll == b.BuyAllSellAll &&
+		a.GenerationAdjustmentDollarsPerKWH == b.GenerationAdjustmentDollarsPerKWH &&
+		a.PeriodName == b.PeriodName
+}
+
+func (c *baseOctopus) storeInMemory(loc string, prices []types.Price) []types.Price {
 	if len(prices) == 0 {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1280,11 +1295,38 @@ func (c *baseOctopus) storeInMemory(loc string, prices []types.Price) {
 	if c.cachedPrices[loc] == nil {
 		c.cachedPrices[loc] = make(map[int64]types.Price)
 	}
+	var changed []types.Price
 	for _, p := range prices {
 		p.TSStart = p.TSStart.In(lonLocation)
 		p.TSEnd = p.TSEnd.In(lonLocation)
-		c.cachedPrices[loc][p.TSStart.Unix()] = p
+		key := p.TSStart.Unix()
+		existing, ok := c.cachedPrices[loc][key]
+		if !ok || !octopusSlotEqual(existing, p) {
+			c.cachedPrices[loc][key] = p
+			changed = append(changed, p)
+		}
 	}
+	return changed
+}
+
+func (c *baseOctopus) latestSlotBefore(loc string, minStart, maxStart time.Time) (types.Price, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	locMap := c.cachedPrices[loc]
+	if len(locMap) == 0 {
+		return types.Price{}, false
+	}
+	var latest types.Price
+	var found bool
+	for _, p := range locMap {
+		if !p.TSStart.Before(minStart) && p.TSStart.Before(maxStart) {
+			if !found || p.TSStart.After(latest.TSStart) {
+				latest = p
+				found = true
+			}
+		}
+	}
+	return latest, found
 }
 
 // getRangeFromMemory returns all cached prices in [start, end) and reports whether every
@@ -1362,7 +1404,7 @@ func (c *baseOctopus) fetchOctopusRates(ctx context.Context, loc string, start, 
 		baseURL = defaultOctopusAPIURL
 	}
 	tariffCode := fmt.Sprintf("E-1R-%s-%s", octopusAgileOutgoingProduct, cfg.RegionCode)
-	endpoint := fmt.Sprintf("%s/products/%s/electricity-tariffs/%s/standard-unit-rates/?period_from=%s&period_to=%s",
+	endpoint := fmt.Sprintf("%s/products/%s/electricity-tariffs/%s/standard-unit-rates/?period_from=%s&period_to=%s&page_size=1500",
 		baseURL,
 		url.PathEscape(octopusAgileOutgoingProduct),
 		url.PathEscape(tariffCode),
@@ -1430,12 +1472,12 @@ func (c *baseOctopus) fetchOctopusRates(ctx context.Context, loc string, start, 
 		return a.TSStart.Compare(b.TSStart)
 	})
 
-	c.storeInMemory(loc, allPrices)
+	changed := c.storeInMemory(loc, allPrices)
 
-	if c.db != nil {
+	if c.db != nil && len(changed) > 0 {
 		nowTime := c.now()
-		toUpsert := make([]types.PriceState, 0, len(allPrices))
-		for _, p := range allPrices {
+		toUpsert := make([]types.PriceState, 0, len(changed))
+		for _, p := range changed {
 			toUpsert = append(toUpsert, types.PriceState{
 				Price:     p,
 				Confirmed: true,
@@ -1455,17 +1497,35 @@ func (c *baseOctopus) fetchOctopusRates(ctx context.Context, loc string, start, 
 }
 
 // GetCurrentPrice returns the half-hourly Agile Outgoing rate for the current 30-minute settlement period.
+// If next-day publication is delayed past 23:00 UK time, it serves the latest published slot's export rate
+// aligned to the current 30-minute window without persisting fabricated slots.
 func (c *baseOctopus) GetCurrentPrice(ctx context.Context, location string) (types.Price, error) {
+	loc, _, err := normalizeOctopusLocation(location)
+	if err != nil {
+		return types.Price{}, err
+	}
 	nowLon := c.now().In(lonLocation)
 	slotStart := nowLon.Truncate(30 * time.Minute)
-	prices, err := c.getPrices(ctx, location, slotStart, slotStart.Add(30*time.Minute))
+	slotEnd := slotStart.Add(30 * time.Minute)
+	prices, err := c.getPrices(ctx, loc, slotStart, slotEnd)
 	if err != nil {
 		return types.Price{}, fmt.Errorf("failed to get current octopus price for %s: %w", location, err)
 	}
-	if len(prices) == 0 {
-		return types.Price{}, fmt.Errorf("no current octopus price found for %s at %s", location, nowLon.Format(time.RFC3339))
+	if len(prices) > 0 {
+		return prices[0], nil
 	}
-	return prices[0], nil
+
+	today := truncateDay(nowLon)
+	todayPublishEnd := time.Date(today.Year(), today.Month(), today.Day(), 23, 0, 0, 0, lonLocation)
+	if !slotStart.Before(todayPublishEnd) {
+		if latest, ok := c.latestSlotBefore(loc, today, slotStart); ok {
+			latest.TSStart = slotStart
+			latest.TSEnd = slotEnd
+			return latest, nil
+		}
+	}
+
+	return types.Price{}, fmt.Errorf("no current octopus price found for %s at %s", location, nowLon.Format(time.RFC3339))
 }
 
 // GetFuturePrices returns the published half-hourly Agile Outgoing rates from now onward.
@@ -1479,14 +1539,25 @@ func (c *baseOctopus) GetCurrentPrice(ctx context.Context, location string) (typ
 // GetFuturePrices returns only the actual published rates from Octopus without fabricating or predicting
 // missing future intervals (Server.getFuturePrices estimates any un-published hours from historical data).
 func (c *baseOctopus) GetFuturePrices(ctx context.Context, location string) ([]types.Price, error) {
+	loc, _, err := normalizeOctopusLocation(location)
+	if err != nil {
+		return nil, err
+	}
 	nowLon := c.now().In(lonLocation)
+	today := truncateDay(nowLon)
+	todayPublishEnd := time.Date(today.Year(), today.Month(), today.Day(), 23, 0, 0, 0, lonLocation)
 	firstFutureSlot := nowLon.Truncate(30 * time.Minute).Add(30 * time.Minute)
-	tomorrowEnd := truncateDay(nowLon).AddDate(0, 0, 2)
-	prices, err := c.getPrices(ctx, location, firstFutureSlot, tomorrowEnd)
+	tomorrowEnd := today.AddDate(0, 0, 2)
+	prices, err := c.getPrices(ctx, loc, firstFutureSlot, tomorrowEnd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get future octopus prices for %s: %w", location, err)
 	}
 	if len(prices) == 0 {
+		if !firstFutureSlot.Before(todayPublishEnd) {
+			if _, ok := c.latestSlotBefore(loc, today, firstFutureSlot); ok {
+				return []types.Price{}, nil
+			}
+		}
 		return nil, fmt.Errorf("no future octopus prices found for %s", location)
 	}
 	return prices, nil
@@ -1562,6 +1633,17 @@ func (c *baseOctopus) getPrices(ctx context.Context, location string, start, end
 			return nil, nil
 		}
 
+		c.mu.Lock()
+		lastFetch := c.lastFutureFetch[loc]
+		c.mu.Unlock()
+
+		// Check 5-minute cooldown before loadFromDB even when len(prices) == 0 (e.g. after 22:30 / 23:00 UK time)
+		// to prevent repeated Firestore reads and Octopus API queries during delayed next-day publication.
+		_, prePublishCovered := c.getRangeFromMemory(loc, startLon, todayPublishEnd, startLon, todayPublishEnd)
+		if checkEnd.After(todayPublishEnd) && !lastFetch.IsZero() && now.Sub(lastFetch) < 5*time.Minute && (!startLon.Before(today) || prePublishCovered) {
+			return nil, nil
+		}
+
 		// 1. Check database first which retrieves a wider range than we want
 		c.loadFromDB(ctx, loc, fetchStart, fetchEnd)
 		// then filter to see if we have all of the range covered
@@ -1570,35 +1652,26 @@ func (c *baseOctopus) getPrices(ctx context.Context, location string, start, end
 			return nil, nil
 		}
 
-		c.mu.Lock()
-		lastFetch := c.lastFutureFetch[loc]
-		c.mu.Unlock()
-
-		// If checking into the post-23:00 window after 16:00 and we recently queried the API,
-		// avoid hammering the API while tomorrow's publication is delayed if we already have prices.
-		if checkEnd.After(todayPublishEnd) && !lastFetch.IsZero() && now.Sub(lastFetch) < 15*time.Minute && len(prices) > 0 {
-			return nil, nil
-		}
-
 		// 2. Fetch from Octopus API
-		if _, err := c.fetchOctopusRates(ctx, loc, fetchStart, fetchEnd); err != nil {
-			if len(prices) > 0 {
-				log.Ctx(ctx).WarnContext(ctx, "failed to refresh octopus prices from api, using cached prices",
-					slog.String("location", loc),
-					slog.Any("error", err),
-				)
-				return nil, nil
-			}
-			return nil, err
-		}
-		// store when we last fetched only if we expected there to be data
-		if nowLon.Hour() >= 16 && !fetchEnd.Before(tomorrowPublishEnd) {
+		_, fetchErr := c.fetchOctopusRates(ctx, loc, fetchStart, fetchEnd)
+		_, hasTodaySlots := c.latestSlotBefore(loc, today, todayPublishEnd)
+		if (fetchErr == nil || len(prices) > 0 || hasTodaySlots) && nowLon.Hour() >= 16 && !fetchEnd.Before(tomorrowPublishEnd) {
 			c.mu.Lock()
 			if c.lastFutureFetch == nil {
 				c.lastFutureFetch = make(map[string]time.Time)
 			}
 			c.lastFutureFetch[loc] = c.now()
 			c.mu.Unlock()
+		}
+		if fetchErr != nil {
+			if len(prices) > 0 || (!startLon.Before(todayPublishEnd) && hasTodaySlots) {
+				log.Ctx(ctx).WarnContext(ctx, "failed to refresh octopus prices from api, using cached prices",
+					slog.String("location", loc),
+					slog.Any("error", fetchErr),
+				)
+				return nil, nil
+			}
+			return nil, fetchErr
 		}
 
 		return nil, nil

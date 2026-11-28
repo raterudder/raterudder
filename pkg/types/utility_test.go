@@ -513,6 +513,42 @@ func TestUtilityFeesPeriodApply(t *testing.T) {
 		assert.True(t, result.SeparateGenerationCredit)
 	})
 
+	t.Run("GenerationCreditDollarsPerKWHPreMultiple on zero-dollar wholesale interval", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			TimePeriod:                               TimePeriod{},
+			DollarsPerKWH:                            0.25,
+			SeparateGenerationCredit:                 true,
+			GenerationCreditDollarsPerKWHPreMultiple: 0.90,
+		}
+		p := Price{
+			TSStart:                       testTime,
+			DollarsPerKWH:                 0.0,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 0.0,
+		}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, result.GenerationCreditDollarsPerKWH)
+		assert.True(t, result.SeparateGenerationCredit)
+
+		upBattery := UtilityFeesPeriod{
+			TimePeriod:                               TimePeriod{},
+			DollarsPerKWH:                            0.25,
+			SeparateBatteryGenerationCredit:          true,
+			GenerationCreditDollarsPerKWHPreMultiple: 0.90,
+		}
+		pBattery := Price{
+			TSStart:                              testTime,
+			DollarsPerKWH:                        0.15,
+			SeparateBatteryGenerationCredit:      true,
+			BatteryGenerationCreditDollarsPerKWH: 0.0,
+		}
+		resBattery, err := upBattery.Apply(pBattery, pBattery)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, resBattery.BatteryGenerationCreditDollarsPerKWH)
+		assert.True(t, resBattery.SeparateBatteryGenerationCredit)
+	})
+
 	t.Run("DollarsPerKWHPreMultiple", func(t *testing.T) {
 		up := UtilityFeesPeriod{
 			TimePeriod:               TimePeriod{},
@@ -774,5 +810,43 @@ func TestApplyUtilityFeesPeriods(t *testing.T) {
 		// BuyAllSellAll without SeparateBatteryGenerationCredit does not assume $0 battery export; it falls back to ExportRateDollars
 		vosWithoutSeparateBat := Price{DollarsPerKWH: 0.15, GenerationCreditDollarsPerKWH: 0.1289, SeparateGenerationCredit: true, BuyAllSellAll: true}
 		assert.InDelta(t, 0.1289, vosWithoutSeparateBat.BatteryExportRateDollars(Settings{}, nil), 1e-6)
+	})
+
+	t.Run("Zero-dollar ERCOT wholesale interval prices export credit at $0.00/kWh", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{
+				TimePeriod:    TimePeriod{Name: "On-Peak"},
+				DollarsPerKWH: 0.1800,
+				Description:   "Tesla Dynamic On-Peak Energy Rate",
+			},
+			{
+				TimePeriod:     TimePeriod{},
+				DollarsPerKWH:  0.06533,
+				GridAdditional: true,
+				Description:    "CenterPoint TDU Delivery Charge",
+			},
+			{
+				TimePeriod:                               TimePeriod{},
+				DollarsPerKWH:                            0.2500,
+				SeparateGenerationCredit:                 true,
+				GenerationCreditDollarsPerKWHPreMultiple: 0.90,
+				Description:                              "Tesla Dynamic Peak Export Credit",
+			},
+		}
+		zeroERCOT := Price{
+			Provider:                      "ercot",
+			TSStart:                       testTime,
+			TSEnd:                         testTime.Add(time.Hour),
+			DollarsPerKWH:                 0.0,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 0.0,
+		}
+		result, err := ApplyUtilityFeesPeriods(zeroERCOT, periods)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.1800, result.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.06533, result.GridUseDollarsPerKWH, 1e-6)
+		assert.Equal(t, 0.0, result.GenerationCreditDollarsPerKWH)
+		assert.Equal(t, 0.0, result.ExportRateDollars(Settings{}, nil))
+		assert.Equal(t, 0.0, result.BatteryExportRateDollars(Settings{}, nil))
 	})
 }

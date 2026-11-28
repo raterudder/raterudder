@@ -169,6 +169,33 @@ func TestTexasUtility(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 2.25, finalPrice.GenerationCreditDollarsPerKWH, 1e-6) // 90% of $2.50
 		assert.InDelta(t, 0.06533, finalPrice.GridUseDollarsPerKWH, 1e-6)       // CenterPoint delivery
+
+		// Verify $0.00/MWh wholesale intervals multiply to $0.00/kWh during both Peak and Off-Peak
+		zeroPeakWholesale := types.Price{
+			Provider:                      "ercot",
+			TSStart:                       time.Date(2026, time.July, 15, 19, 0, 0, 0, ctLocation),
+			TSEnd:                         time.Date(2026, time.July, 15, 20, 0, 0, 0, ctLocation),
+			DollarsPerKWH:                 0.0,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 0.0,
+		}
+		zeroPeakFinal, err := siteFees.applyFees(zeroPeakWholesale)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, zeroPeakFinal.GenerationCreditDollarsPerKWH)
+		assert.Equal(t, 0.0, zeroPeakFinal.ExportRateDollars(types.Settings{}, nil))
+
+		zeroOffPeakWholesale := types.Price{
+			Provider:                      "ercot",
+			TSStart:                       time.Date(2026, time.July, 15, 14, 0, 0, 0, ctLocation),
+			TSEnd:                         time.Date(2026, time.July, 15, 15, 0, 0, 0, ctLocation),
+			DollarsPerKWH:                 0.0,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 0.0,
+		}
+		zeroOffPeakFinal, err := siteFees.applyFees(zeroOffPeakWholesale)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, zeroOffPeakFinal.GenerationCreditDollarsPerKWH)
+		assert.Equal(t, 0.0, zeroOffPeakFinal.ExportRateDollars(types.Settings{}, nil))
 	})
 
 	t.Run("Tesla Electric Dynamic - Missing or Invalid TDU", func(t *testing.T) {

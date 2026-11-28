@@ -59,8 +59,8 @@ func TestERCOT(t *testing.T) {
 		end := start.Add(24 * time.Hour)
 
 		// 1. Initial query: DB empty -> fetches from API -> persists to DB
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.MatchedBy(func(prices []types.PriceState) bool {
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.MatchedBy(func(prices []types.PriceState) bool {
 			return len(prices) == 24
 		}), 0).Return(nil).Once()
 
@@ -83,7 +83,7 @@ func TestERCOT(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("Missing Hour Uses Prior Hour", func(t *testing.T) {
+	t.Run("Missing Hour Omitted Without Carry-Forward", func(t *testing.T) {
 		mockDB := &storagemock.MockDatabase{}
 		nowCT := time.Now().In(ctLocation)
 		dateStr := nowCT.Format("2006-01-02")
@@ -92,7 +92,7 @@ func TestERCOT(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			var entries []ercotSPPEntry
 			// Supply data for HE 1 ($50/MWh = $0.05/kWh) and HE 3 ($100/MWh = $0.10/kWh)
-			// HE 2 is intentionally missing
+			// HE 2 and HE 4..24 are intentionally unpublished
 			entries = append(entries, ercotSPPEntry{
 				DeliveryDate:         dateStr,
 				DeliveryHour:         1,
@@ -116,22 +116,25 @@ func TestERCOT(t *testing.T) {
 		base.token = "mock-token"
 
 		start := truncateDay(nowCT)
-		end := start.Add(24 * time.Hour)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+		end := start.AddDate(0, 0, 1)
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 2
+		}), 0).Return(nil).Once()
 
 		prices, _, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
-		require.Len(t, prices, 24)
+		require.Len(t, prices, 2)
 
-		// Hour 0 (HE 1): $0.05
+		// First published hour is HE 1 (00:00-01:00): $0.05
+		assert.Equal(t, start, prices[0].TSStart)
 		assert.InDelta(t, 0.05, prices[0].DollarsPerKWH, 1e-6)
-		// Hour 1 (HE 2): missing, so should use Hour 0's price ($0.05)
-		assert.InDelta(t, 0.05, prices[1].DollarsPerKWH, 1e-6)
-		// Hour 2 (HE 3): $0.10
-		assert.InDelta(t, 0.10, prices[2].DollarsPerKWH, 1e-6)
+		// Second published hour is HE 3 (02:00-03:00): $0.10 (missing HE 2 and future hours are not carried forward)
+		assert.Equal(t, start.Add(2*time.Hour), prices[1].TSStart)
+		assert.InDelta(t, 0.10, prices[1].DollarsPerKWH, 1e-6)
 		// PeriodName should be empty
 		assert.Empty(t, prices[0].PeriodName)
+		mockDB.AssertExpectations(t)
 	})
 
 	t.Run("DAM Future Prices and DB Caching After 1:30 PM CT", func(t *testing.T) {
@@ -179,15 +182,15 @@ func TestERCOT(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Today's DAM DB query and upsert (unified ID: ercot_lz_houston, Confirmed: false)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
+		// Today's DAM DB query and upsert (ercot_dam_lz_houston, Confirmed: false)
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) == 24 && !p[0].Confirmed
 		}), 0).Return(nil).Once()
 
-		// Tomorrow's DAM DB query and upsert (unified ID: ercot_lz_houston, Confirmed: false)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", tomorrowStart, tomorrowEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
+		// Tomorrow's DAM DB query and upsert (ercot_dam_lz_houston, Confirmed: false)
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", tomorrowStart, tomorrowEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) == 24 && !p[0].Confirmed
 		}), 0).Return(nil).Once()
 
@@ -253,8 +256,8 @@ func TestERCOT(t *testing.T) {
 		ctx := context.Background()
 
 		// Only today is queried and upserted
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) == 24 && !p[0].Confirmed
 		}), 0).Return(nil).Once()
 
@@ -313,10 +316,10 @@ func TestERCOT(t *testing.T) {
 		ctx := context.Background()
 
 		// DB misses for Houston
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", todayStart, todayEnd).Return([]types.PriceState{}, nil).Once()
 		// Upserts for both Houston and North from the single response!
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_north", mock.Anything, 0).Return(nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.Anything, 0).Return(nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_north", mock.Anything, 0).Return(nil).Once()
 
 		// 1. Query Houston -> triggers 1 API call, caches BOTH Houston and North
 		houstonPrices, err := base.getDAMPricesForDate(ctx, nowCT, "LZ_HOUSTON")
@@ -370,9 +373,10 @@ func TestERCOT(t *testing.T) {
 		base.token = "mock-token"
 
 		start := truncateDay(nowCT)
-		end := start.Add(24 * time.Hour)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", start, end).Return([]types.PriceState{}, nil).Twice()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+		end := start.AddDate(0, 0, 1)
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.Anything, 0).Return(nil).Once()
 
 		price, err := base.GetCurrentPrice(context.Background(), "LZ_HOUSTON")
 		require.NoError(t, err)
@@ -828,8 +832,8 @@ func TestERCOT(t *testing.T) {
 		baseSpring.nowFunc = func() time.Time { return currentSpringNow }
 
 		var springUpsert []types.PriceState
-		springDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", springDay, springEnd).Return([]types.PriceState{}, nil).Once()
-		springDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		springDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", springDay, springEnd).Return([]types.PriceState{}, nil).Once()
+		springDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				springUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -900,8 +904,8 @@ func TestERCOT(t *testing.T) {
 		baseFall.nowFunc = func() time.Time { return currentFallNow }
 
 		var fallUpsert []types.PriceState
-		fallDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", fallDay, fallEnd).Return([]types.PriceState{}, nil).Once()
-		fallDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		fallDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", fallDay, fallEnd).Return([]types.PriceState{}, nil).Once()
+		fallDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				fallUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -955,7 +959,7 @@ func TestERCOT(t *testing.T) {
 		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			var entries []ercotSPPEntry
-			// Supply all 4 15-minute intervals for HE 1..10 (hours 00:00 to 10:00)
+			// Supply all 4 15-minute intervals for HE 1..10 (hours 00:00 to 10:00) + 1 interval for in-progress HE 11 (10:00 to 11:00)
 			for h := 1; h <= 10; h++ {
 				for interval := 1; interval <= 4; interval++ {
 					entries = append(entries, ercotSPPEntry{
@@ -967,6 +971,13 @@ func TestERCOT(t *testing.T) {
 					})
 				}
 			}
+			entries = append(entries, ercotSPPEntry{
+				DeliveryDate:         dateStr,
+				DeliveryHour:         11,
+				DeliveryInterval:     1,
+				SettlementPoint:      "LZ_HOUSTON",
+				SettlementPointPrice: 65.0,
+			})
 			_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
 		}))
 		defer apiServer.Close()
@@ -978,22 +989,22 @@ func TestERCOT(t *testing.T) {
 
 		start := truncateDay(nowCT)
 		end := start.AddDate(0, 0, 1)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", start, end).Return([]types.PriceState{}, nil).Once()
 
 		var capturedUpsert []types.PriceState
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				capturedUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
 
 		prices, confirmedEnd, err := base.getPricesForDate(context.Background(), nowCT, "LZ_HOUSTON")
 		require.NoError(t, err)
-		assert.Len(t, prices, 24)
+		assert.Len(t, prices, 11, "only the 11 published RTM hours must be emitted without carrying forward unpublished hours")
 		assert.Equal(t, start.Add(10*time.Hour), confirmedEnd)
 
-		require.NotEmpty(t, capturedUpsert)
+		require.Len(t, capturedUpsert, 11)
 		// For hours ending before 10:30 AM (hours 0..9, ending up to 10:00 AM), Confirmed must be true.
-		// For hours ending after 10:30 AM (hour 10 ending 11:00 AM, and forward), Confirmed must be false.
+		// For in-progress hour 10 (ending 11:00 AM), Confirmed must be false.
 		for _, ps := range capturedUpsert {
 			if ps.Price.TSEnd.Before(nowCT) || ps.Price.TSEnd.Equal(nowCT) {
 				assert.True(t, ps.Confirmed, "elapsed interval must be confirmed")
@@ -1077,8 +1088,8 @@ func TestERCOT(t *testing.T) {
 
 		// 1. At 00:02 CT, HE 24 is missing interval 4: only 23 hours are confirmed, and DB marks HE 24 Confirmed=false
 		var firstUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, yesterdayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterday, yesterdayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				firstUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1101,8 +1112,8 @@ func TestERCOT(t *testing.T) {
 		currentNow = yesterdayEnd.Add(8 * time.Minute)
 
 		var secondUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, yesterdayEnd).Return(firstUpsert, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterday, yesterdayEnd).Return(firstUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				secondUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1122,8 +1133,8 @@ func TestERCOT(t *testing.T) {
 		currentNow = yesterdayEnd.Add(70 * time.Minute) // Oct 8 01:10 CT
 		todayEnd := yesterdayEnd.AddDate(0, 0, 1)
 		var todayUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterdayEnd, todayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterdayEnd, todayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				todayUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1131,7 +1142,7 @@ func TestERCOT(t *testing.T) {
 		confirmedToday, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", yesterdayEnd, currentNow.Add(12*time.Hour))
 		require.NoError(t, err)
 		assert.Empty(t, confirmedToday, "partial HE 1 must not be confirmed when confirmedEnd equals dayStart")
-		if assert.Len(t, todayUpsert, 24) {
+		if assert.Len(t, todayUpsert, 1) {
 			assert.False(t, todayUpsert[0].Confirmed, "partial HE 1 must not be marked confirmed in DB")
 		}
 
@@ -1200,8 +1211,8 @@ func TestERCOT(t *testing.T) {
 
 		// 1. Intraday at 14:25 CT: HE 5 missing interval 2 does not block HE 6..13, while incomplete frontier HE 14 is still excluded
 		var intradayUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				intradayUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1213,7 +1224,7 @@ func TestERCOT(t *testing.T) {
 			assert.InDelta(t, 0.060, intradayConfirmed[4].DollarsPerKWH, 1e-6)
 			assert.Equal(t, dayStart.Add(13*time.Hour), intradayConfirmed[12].TSEnd)
 		}
-		if assert.Len(t, intradayUpsert, 24) {
+		if assert.Len(t, intradayUpsert, 14) {
 			assert.True(t, intradayUpsert[12].Confirmed, "completed HE 13 must be marked confirmed")
 			assert.False(t, intradayUpsert[13].Confirmed, "partial frontier HE 14 must not be marked confirmed")
 		}
@@ -1223,8 +1234,8 @@ func TestERCOT(t *testing.T) {
 		currentNow = dayEnd.Add(10 * time.Minute)
 
 		var midnightUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(intradayUpsert, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(intradayUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				midnightUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1238,8 +1249,8 @@ func TestERCOT(t *testing.T) {
 		currentNow = dayEnd.Add(time.Hour)
 
 		var nextDayUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(midnightUpsert, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(midnightUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				nextDayUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1317,8 +1328,8 @@ func TestERCOT(t *testing.T) {
 		// 1. With HE 5 completely missing (0 intervals) and HE 6..24 all complete (0x0f),
 		// latestPublishedEnd must stop at HE 5's start (04:00 CT) and not jump to dayEnd.
 		var firstUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", pastDay, dayEnd).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				firstUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1326,19 +1337,19 @@ func TestERCOT(t *testing.T) {
 		confirmed1, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", pastDay, dayEnd)
 		require.NoError(t, err)
 		assert.Equal(t, int32(1), apiCalls.Load())
-		if assert.Len(t, confirmed1, 4, "confirmed prices must stop at missing HE 5 start and exclude carry-forward and subsequent hours") {
+		if assert.Len(t, confirmed1, 4, "confirmed prices must stop at missing HE 5 start and exclude subsequent hours") {
 			assert.Equal(t, pastDay, confirmed1[0].TSStart)
 			assert.Equal(t, pastDay.Add(4*time.Hour), confirmed1[3].TSEnd)
 			assert.InDelta(t, 0.500, confirmed1[3].DollarsPerKWH, 1e-6)
 		}
-		if assert.Len(t, firstUpsert, 24) {
+		if assert.Len(t, firstUpsert, 23) {
 			for i := 0; i < 4; i++ {
 				assert.True(t, firstUpsert[i].Confirmed, "contiguous completed hour %d before gap must be confirmed", i)
 			}
-			// Carry-forward placeholder HE 5 (index 4) and subsequent complete hours HE 6..24 (indices 5..23) must NOT be confirmed
-			assert.InDelta(t, 0.500, firstUpsert[4].DollarsPerKWH, 1e-6, "missing HE 5 carries forward HE 4 price in raw slice")
-			for i := 4; i < 24; i++ {
-				assert.False(t, firstUpsert[i].Confirmed, "hour index %d at or after 0-interval gap must not be marked confirmed in DB", i)
+			// Missing HE 5 is omitted; subsequent complete hours HE 6..24 (indices 4..22) must NOT be confirmed ahead of gap
+			assert.Equal(t, pastDay.Add(5*time.Hour), firstUpsert[4].TSStart)
+			for i := 4; i < 23; i++ {
+				assert.False(t, firstUpsert[i].Confirmed, "hour index %d after 0-interval gap must not be marked confirmed in DB", i)
 			}
 		}
 
@@ -1346,8 +1357,8 @@ func TestERCOT(t *testing.T) {
 		// advancing past the 5-minute TTL triggers a fresh API lookup instead of serving stale cache forever.
 		currentNow = currentNow.Add(6 * time.Minute)
 		var secondUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return(firstUpsert, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", pastDay, dayEnd).Return(firstUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				secondUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1361,8 +1372,8 @@ func TestERCOT(t *testing.T) {
 		gapFilled.Store(true)
 		currentNow = currentNow.Add(6 * time.Minute)
 		var thirdUpsert []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", pastDay, dayEnd).Return(secondUpsert, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", pastDay, dayEnd).Return(secondUpsert, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				thirdUpsert = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1468,8 +1479,8 @@ func TestERCOT(t *testing.T) {
 		// and today's HE 1..2 are complete. Must return ONLY yesterday's contiguous prefix (HE 1..4)
 		// and NOT request or include today's HE 1..2.
 		var yesterdayUpsert1 []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterday, today).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				yesterdayUpsert1 = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1487,8 +1498,8 @@ func TestERCOT(t *testing.T) {
 		// Must return 0 prices (preserving the yesterday 04:00 CT cursor) both within and after TTL.
 		currentNow = currentNow.Add(6 * time.Minute) // 02:16 CT (after 5-minute TTL, HE 5 still missing)
 		var yesterdayUpsert2 []types.PriceState
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return(yesterdayUpsert1, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterday, today).Return(yesterdayUpsert1, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 			Run(func(args mock.Arguments) {
 				yesterdayUpsert2 = args.Get(2).([]types.PriceState)
 			}).Return(nil).Once()
@@ -1503,10 +1514,10 @@ func TestERCOT(t *testing.T) {
 		// Must return all remaining hours of yesterday (HE 5..24) followed contiguously by today's completed hours (HE 1..2).
 		yesterdayGapFilled.Store(true)
 		currentNow = currentNow.Add(6 * time.Minute) // 02:22 CT (after 5-minute TTL)
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", yesterday, today).Return(yesterdayUpsert2, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
-		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", today, tomorrow).Return([]types.PriceState{}, nil).Once()
-		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", yesterday, today).Return(yesterdayUpsert2, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).Return(nil).Once()
+		mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", today, tomorrow).Return([]types.PriceState{}, nil).Once()
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).Return(nil).Once()
 
 		poll3, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", cursor, currentNow.Add(12*time.Hour))
 		require.NoError(t, err)
@@ -1596,8 +1607,8 @@ func TestERCOT(t *testing.T) {
 
 			// 1. At 10:35 CT (< 45m after HE 10 ended), complete HE 11 must NOT jump latestPublishedEnd past partial HE 10.
 			var firstUpsert []types.PriceState
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 				Run(func(args mock.Arguments) {
 					firstUpsert = args.Get(2).([]types.PriceState)
 				}).Return(nil).Once()
@@ -1607,7 +1618,7 @@ func TestERCOT(t *testing.T) {
 			if assert.Len(t, confirmed1, 9, "partial HE 10 must hold back confirmation even when HE 11 has all 4 intervals") {
 				assert.Equal(t, dayStart.Add(9*time.Hour), confirmed1[8].TSEnd)
 			}
-			if assert.Len(t, firstUpsert, 24) {
+			if assert.Len(t, firstUpsert, 11) {
 				assert.True(t, firstUpsert[8].Confirmed, "HE 9 must be confirmed")
 				assert.False(t, firstUpsert[9].Confirmed, "partial HE 10 within 45m window must not be marked confirmed in DB")
 				assert.False(t, firstUpsert[10].Confirmed, "HE 11 must not be marked confirmed ahead of partial HE 10")
@@ -1619,8 +1630,8 @@ func TestERCOT(t *testing.T) {
 			currentNow = dayStart.Add(10*time.Hour + 41*time.Minute)
 
 			var secondUpsert []types.PriceState
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 				Run(func(args mock.Arguments) {
 					secondUpsert = args.Get(2).([]types.PriceState)
 				}).Return(nil).Once()
@@ -1628,15 +1639,15 @@ func TestERCOT(t *testing.T) {
 			_, confirmedEnd, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
 			require.NoError(t, err)
 			assert.Equal(t, dayStart.Add(11*time.Hour), confirmedEnd, "both HE 10 and HE 11 must advance latestPublishedEnd contiguously once 4th sample arrives")
-			if assert.Len(t, secondUpsert, 24) {
+			if assert.Len(t, secondUpsert, 11) {
 				assert.True(t, secondUpsert[9].Confirmed, "completed HE 10 must now be confirmed in DB")
 				assert.InDelta(t, 0.060, secondUpsert[9].DollarsPerKWH, 1e-6)
 			}
 
-			// At 11:00 CT (within 5m TTL of 10:41 CT -> memory hit? 19m > 5m -> refreshes cleanly), GetConfirmedPrices returns all 11 hours.
+			// At 11:00 CT (19m > 5m -> refreshes cleanly), GetConfirmedPrices returns all 11 hours.
 			currentNow = dayStart.Add(11 * time.Hour)
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).Return(nil).Once()
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).Return(nil).Once()
 
 			confirmed2, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", dayStart, dayEnd)
 			require.NoError(t, err)
@@ -1699,8 +1710,8 @@ func TestERCOT(t *testing.T) {
 
 			// 1. At 10:35 CT (< 45m after HE 10 ended), latestPublishedEnd stops at 09:00 CT.
 			var firstUpsert []types.PriceState
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return([]types.PriceState{}, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 				Run(func(args mock.Arguments) {
 					firstUpsert = args.Get(2).([]types.PriceState)
 				}).Return(nil).Once()
@@ -1708,7 +1719,7 @@ func TestERCOT(t *testing.T) {
 			_, confirmedEnd1, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
 			require.NoError(t, err)
 			assert.Equal(t, dayStart.Add(9*time.Hour), confirmedEnd1)
-			if assert.Len(t, firstUpsert, 24) {
+			if assert.Len(t, firstUpsert, 11) {
 				assert.False(t, firstUpsert[9].Confirmed)
 				assert.False(t, firstUpsert[10].Confirmed)
 			}
@@ -1717,8 +1728,8 @@ func TestERCOT(t *testing.T) {
 			// HE 10 settles via fallback and HE 11 (0x0f) immediately chains contiguously to 11:00 CT.
 			currentNow = dayStart.Add(10*time.Hour + 45*time.Minute)
 			var secondUpsert []types.PriceState
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(firstUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 				Run(func(args mock.Arguments) {
 					secondUpsert = args.Get(2).([]types.PriceState)
 				}).Return(nil).Once()
@@ -1726,15 +1737,15 @@ func TestERCOT(t *testing.T) {
 			_, confirmedEnd2, err := base.getPricesForDate(ctx, dayStart, "LZ_HOUSTON")
 			require.NoError(t, err)
 			assert.Equal(t, dayStart.Add(11*time.Hour), confirmedEnd2, "both HE 10 and HE 11 must advance latestPublishedEnd contiguously after 45m grace window")
-			if assert.Len(t, secondUpsert, 24) {
+			if assert.Len(t, secondUpsert, 11) {
 				assert.True(t, secondUpsert[9].Confirmed, "HE 10 must settle after 45m grace window")
 			}
 
 			// At 11:00 CT, GetConfirmedPrices returns all 11 hours contiguously and DB marks both HE 10 and HE 11 Confirmed=true.
 			currentNow = dayStart.Add(11 * time.Hour)
 			var thirdUpsert []types.PriceState
-			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
-			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_lz_houston", mock.Anything, 0).
+			mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).Return(secondUpsert, nil).Once()
+			mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
 				Run(func(args mock.Arguments) {
 					thirdUpsert = args.Get(2).([]types.PriceState)
 				}).Return(nil).Once()
@@ -1745,10 +1756,9 @@ func TestERCOT(t *testing.T) {
 				assert.InDelta(t, 0.040, confirmed[9].DollarsPerKWH, 1e-6)
 				assert.InDelta(t, 0.050, confirmed[10].DollarsPerKWH, 1e-6)
 			}
-			if assert.Len(t, thirdUpsert, 24) {
+			if assert.Len(t, thirdUpsert, 11) {
 				assert.True(t, thirdUpsert[9].Confirmed)
 				assert.True(t, thirdUpsert[10].Confirmed)
-				assert.False(t, thirdUpsert[11].Confirmed)
 			}
 
 			mockDB.AssertExpectations(t)
@@ -2006,5 +2016,131 @@ func TestERCOT(t *testing.T) {
 		inProgress, err := base.GetConfirmedPrices(ctx, "LZ_HOUSTON", h14Today, h14Today.Add(15*time.Minute))
 		require.NoError(t, err)
 		assert.Empty(t, inProgress)
+	})
+
+	t.Run("Cold Start Isolates RTM And DAM Streams And Falls Back For Unpublished Hours", func(t *testing.T) {
+		ctx := context.Background()
+		mockDB := &storagemock.MockDatabase{}
+		dayStart := time.Date(2026, time.October, 7, 0, 0, 0, 0, ctLocation)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		dayStr := dayStart.Format("2006-01-02")
+		currentNow := dayStart.Add(10*time.Hour + 5*time.Minute) // 10:05 CT (HE 11 10:00-11:00 not yet published in RTM)
+
+		var publishHE11RTM atomic.Bool
+		var damAPICalls, rtmAPICalls atomic.Int32
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(r.URL.Path, "np4-190-cd") {
+				damAPICalls.Add(1)
+				var entries []ercotDAMEntry
+				for h := 1; h <= 24; h++ {
+					priceMWh := 45.0
+					if h == 19 {
+						priceMWh = 2500.0 // $2.50/kWh evening DAM spike
+					}
+					entries = append(entries, ercotDAMEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         h,
+						HourEnding:           h,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: priceMWh,
+					})
+				}
+				_ = json.NewEncoder(w).Encode(ercotDAMAPIResponse{Data: entries})
+				return
+			}
+			if strings.Contains(r.URL.Path, "np6-905-cd") {
+				rtmAPICalls.Add(1)
+				var entries []ercotSPPEntry
+				for h := 1; h <= 10; h++ {
+					for interval := 1; interval <= 4; interval++ {
+						entries = append(entries, ercotSPPEntry{
+							DeliveryDate:         dayStr,
+							DeliveryHour:         h,
+							DeliveryInterval:     interval,
+							SettlementPoint:      "LZ_HOUSTON",
+							SettlementPointPrice: 0.0, // $0.00/MWh morning RTM
+						})
+					}
+				}
+				if publishHE11RTM.Load() {
+					entries = append(entries, ercotSPPEntry{
+						DeliveryDate:         dayStr,
+						DeliveryHour:         11,
+						DeliveryInterval:     1,
+						SettlementPoint:      "LZ_HOUSTON",
+						SettlementPointPrice: 120.0, // $0.120/kWh published RTM for HE 11
+					})
+				}
+				_ = json.NewEncoder(w).Encode(ercotAPIResponse{Data: entries})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer apiServer.Close()
+
+		var damStored, rtmStored []types.PriceState
+		damCall := mockDB.On("GetUtilityPrices", mock.Anything, "ercot_dam_lz_houston", dayStart, dayEnd).
+			Return([]types.PriceState(nil), nil)
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_dam_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				damStored = append([]types.PriceState(nil), args.Get(2).([]types.PriceState)...)
+				damCall.Return(damStored, nil)
+			}).Return(nil)
+		rtmCall := mockDB.On("GetUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", dayStart, dayEnd).
+			Return([]types.PriceState(nil), nil)
+		mockDB.On("UpsertUtilityPrices", mock.Anything, "ercot_rtm_lz_houston", mock.Anything, 0).
+			Run(func(args mock.Arguments) {
+				rtmStored = append([]types.PriceState(nil), args.Get(2).([]types.PriceState)...)
+				rtmCall.Return(rtmStored, nil)
+			}).Return(nil)
+
+		// Instance 1 populates DAM (24 hours) and RTM (10 hours) before Cloud Run scales to zero.
+		inst1 := configuredERCOT(mockDB)
+		inst1.apiURL = apiServer.URL
+		inst1.client = apiServer.Client()
+		inst1.token = "mock-token"
+		inst1.nowFunc = func() time.Time { return currentNow }
+
+		future1, err := inst1.GetFuturePrices(ctx, "LZ_HOUSTON")
+		require.NoError(t, err)
+		assert.Len(t, future1, 13) // 11:00..24:00 CT
+		require.Len(t, damStored, 24)
+
+		curr1, err := inst1.GetCurrentPrice(ctx, "LZ_HOUSTON")
+		require.NoError(t, err)
+		assert.InDelta(t, 0.045, curr1.DollarsPerKWH, 1e-6, "unpublished HE 11 at 10:05 CT must fall back to DAM instead of HE 10 RTM")
+		require.Len(t, rtmStored, 10, "RTM upsert must only contain the 10 published hours")
+		assert.Equal(t, int32(1), damAPICalls.Load())
+		assert.Equal(t, int32(1), rtmAPICalls.Load())
+
+		// Instance 2 cold-starts after RTM writes: loads intact 24h DAM curve from ercot_dam_lz_houston without re-fetching DAM API.
+		inst2 := configuredERCOT(mockDB)
+		inst2.apiURL = apiServer.URL
+		inst2.client = apiServer.Client()
+		inst2.token = "mock-token"
+		inst2.nowFunc = func() time.Time { return currentNow }
+
+		future2, err := inst2.GetFuturePrices(ctx, "LZ_HOUSTON")
+		require.NoError(t, err)
+		if assert.Len(t, future2, 13) {
+			// Index 7 of future2 (11:00 + 7h = 18:00..19:00, HE 19) must retain the $2.50/kWh DAM spike!
+			assert.Equal(t, dayStart.Add(18*time.Hour), future2[7].TSStart)
+			assert.InDelta(t, 2.50, future2[7].DollarsPerKWH, 1e-6, "cold-start instance must preserve 24h DAM spike after RTM writes")
+		}
+		assert.Equal(t, int32(1), damAPICalls.Load(), "cold-start DAM lookup must hit ercot_dam_lz_houston in DB without extra DAM API calls")
+
+		// At 10:05 CT, cold-start GetCurrentPrice also falls back to intact DAM for unpublished HE 11.
+		curr2Fallback, err := inst2.GetCurrentPrice(ctx, "LZ_HOUSTON")
+		require.NoError(t, err)
+		assert.InDelta(t, 0.045, curr2Fallback.DollarsPerKWH, 1e-6)
+
+		// Once HE 11 interval 1 is published at 10:20 CT (after 5m RTM TTL), GetCurrentPrice uses published RTM.
+		publishHE11RTM.Store(true)
+		currentNow = dayStart.Add(10*time.Hour + 20*time.Minute)
+		curr2RTM, err := inst2.GetCurrentPrice(ctx, "LZ_HOUSTON")
+		require.NoError(t, err)
+		assert.InDelta(t, 0.120, curr2RTM.DollarsPerKWH, 1e-6)
 	})
 }

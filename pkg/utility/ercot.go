@@ -495,12 +495,12 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		}
 		c.mu.Unlock()
 
-		// 1. Check Firestore database cache first (unified ercot_<loadZone> ID)
+		// 1. Check Firestore database cache first (ercot_rtm_<loadZone> ID)
 		if c.db != nil {
 			start := dayStart
 			end := dayEnd
 			expectedHours := hoursInDay(start)
-			dbUtilityID := "ercot_" + strings.ToLower(loadZone)
+			dbUtilityID := "ercot_rtm_" + strings.ToLower(loadZone)
 			dbPrices, err := c.db.GetUtilityPrices(ctx, dbUtilityID, start, end)
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to get ercot rtm prices from database",
@@ -579,7 +579,7 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 		}
 		c.mu.Unlock()
 
-		// 3. Persist confirmed RTM prices to Firestore database cache under unified ercot_<loadZone> ID
+		// 3. Persist published RTM prices to Firestore database cache under ercot_rtm_<loadZone> ID
 		if c.db != nil {
 			for z, prices := range byZone {
 				confirmedEnd := fetched.confirmedEndByZone[z]
@@ -594,7 +594,7 @@ func (c *baseERCOT) getPricesForDate(ctx context.Context, date time.Time, loadZo
 					})
 				}
 				if len(toUpsert) > 0 {
-					dbUtilityID := "ercot_" + strings.ToLower(z)
+					dbUtilityID := "ercot_rtm_" + strings.ToLower(z)
 					if err := c.db.UpsertUtilityPrices(ctx, dbUtilityID, toUpsert, 0); err != nil {
 						log.Ctx(ctx).WarnContext(ctx, "failed to upsert ercot rtm prices to database",
 							slog.String("zone", z),
@@ -855,41 +855,42 @@ func (c *baseERCOT) fetchERCOTRTM(ctx context.Context, date time.Time) (map[stri
 	confirmedEndByZone := make(map[string]time.Time)
 
 	for zone, hourlyMap := range hourlyByZone {
-		var lastWholesaleDollarsPerKWH float64
-		for h := 0; h < numHours; h++ {
-			if avg, ok := avgMWh(hourlyMap[h]); ok {
-				lastWholesaleDollarsPerKWH = avg / 1000.0
-				break
-			}
-		}
-
 		latestPublishedEnd := dayStart
 		var prices []types.Price
 		for h := 0; h < numHours; h++ {
 			start := dayStart.Add(time.Duration(h) * time.Hour)
 			end := start.Add(time.Hour)
 
-			if acc, ok := hourlyMap[h]; ok {
-				avg, hasAvg := avgMWh(acc)
-				if hasAvg {
-					lastWholesaleDollarsPerKWH = avg / 1000.0
-				}
-				if latestPublishedEnd.Equal(start) && (acc.intervalMask == 0x0f || (hasAvg && !end.After(nowCT.Add(-45*time.Minute)))) {
-					latestPublishedEnd = end
-				}
+			acc, ok := hourlyMap[h]
+			if !ok {
+				continue
+			}
+			avg, hasAvg := avgMWh(acc)
+			if !hasAvg {
+				continue
+			}
+			wholesaleDollarsPerKWH := avg / 1000.0
+			if latestPublishedEnd.Equal(start) && (acc.intervalMask == 0x0f || !end.After(nowCT.Add(-45*time.Minute))) {
+				latestPublishedEnd = end
 			}
 
 			prices = append(prices, types.Price{
 				Provider:                      "ercot",
 				TSStart:                       start,
 				TSEnd:                         end,
-				DollarsPerKWH:                 lastWholesaleDollarsPerKWH,
+				DollarsPerKWH:                 wholesaleDollarsPerKWH,
 				SeparateGenerationCredit:      true,
-				GenerationCreditDollarsPerKWH: lastWholesaleDollarsPerKWH,
+				GenerationCreditDollarsPerKWH: wholesaleDollarsPerKWH,
 			})
 		}
-		byZone[zone] = prices
-		confirmedEndByZone[zone] = latestPublishedEnd
+		if len(prices) > 0 {
+			byZone[zone] = prices
+			confirmedEndByZone[zone] = latestPublishedEnd
+		}
+	}
+
+	if len(byZone) == 0 {
+		return nil, nil, fmt.Errorf("no ercot rtm data available for %s", dateFormatted)
 	}
 
 	return byZone, confirmedEndByZone, nil
@@ -981,7 +982,7 @@ func parseDAMHour(raw any, deliveryHour int) (int, bool) {
 }
 
 // getDAMPricesForDate returns 24 hourly Day-Ahead Market prices for a given date in Central Time,
-// caching results in memory and in Google Cloud Firestore under unified ercot_<loadZone> ID.
+// caching results in memory and in Google Cloud Firestore under ercot_dam_<loadZone> ID.
 func (c *baseERCOT) getDAMPricesForDate(ctx context.Context, date time.Time, loadZone string) ([]types.Price, error) {
 	if loadZone == "" {
 		return nil, fmt.Errorf("ercot load zone is required")
@@ -1007,12 +1008,12 @@ func (c *baseERCOT) getDAMPricesForDate(ctx context.Context, date time.Time, loa
 		}
 		c.mu.Unlock()
 
-		// 1. Check Firestore database cache first (unified ercot_<loadZone> ID)
+		// 1. Check Firestore database cache first (ercot_dam_<loadZone> ID)
 		if c.db != nil {
 			start := truncateDay(dateCT)
 			end := start.AddDate(0, 0, 1)
 			expectedHours := hoursInDay(start)
-			dbUtilityID := "ercot_" + strings.ToLower(loadZone)
+			dbUtilityID := "ercot_dam_" + strings.ToLower(loadZone)
 			dbPrices, err := c.db.GetUtilityPrices(ctx, dbUtilityID, start, end)
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to get ercot dam prices from database",
@@ -1047,7 +1048,7 @@ func (c *baseERCOT) getDAMPricesForDate(ctx context.Context, date time.Time, loa
 		}
 		c.mu.Unlock()
 
-		// 3. Persist unconfirmed DAM prices for each load zone to Firestore DB (unified ercot_<loadZone> ID)
+		// 3. Persist unconfirmed DAM prices for each load zone to Firestore DB (ercot_dam_<loadZone> ID)
 		if c.db != nil {
 			nowTime := c.now()
 			expectedHours := hoursInDay(truncateDay(dateCT))
@@ -1061,7 +1062,7 @@ func (c *baseERCOT) getDAMPricesForDate(ctx context.Context, date time.Time, loa
 							TSUpdated: nowTime,
 						})
 					}
-					dbUtilityID := "ercot_" + strings.ToLower(z)
+					dbUtilityID := "ercot_dam_" + strings.ToLower(z)
 					if err := c.db.UpsertUtilityPrices(ctx, dbUtilityID, toUpsert, 0); err != nil {
 						log.Ctx(ctx).WarnContext(ctx, "failed to upsert ercot dam prices to database",
 							slog.String("zone", z),
@@ -1234,14 +1235,18 @@ func (c *baseERCOT) GetCurrentPrice(ctx context.Context, loadZone string) (types
 	}
 	now := c.now().In(ctLocation)
 
-	// 1. Try Real-Time Market (RTM) first
+	// 1. Try Real-Time Market (RTM) first (restricted to published RTM hours)
 	prices, _, err := c.getPricesForDate(ctx, now, loadZone)
 	if err == nil {
 		for _, p := range prices {
-			if p.Contains(now) {
+			if !p.TSStart.After(now) && p.Contains(now) {
 				return p, nil
 			}
 		}
+		log.Ctx(ctx).DebugContext(ctx, "ercot rtm price not yet published for current hour, falling back to dam",
+			slog.String("loadZone", loadZone),
+			slog.Time("now", now),
+		)
 	} else {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get ercot rtm price for current date, falling back to dam",
 			slog.String("loadZone", loadZone),
@@ -1266,6 +1271,9 @@ func (c *baseERCOT) GetCurrentPrice(ctx context.Context, loadZone string) (types
 
 	if err != nil {
 		return types.Price{}, fmt.Errorf("failed to get current ercot price for %s: %w", loadZone, err)
+	}
+	if damErr != nil {
+		return types.Price{}, fmt.Errorf("failed to get current ercot price for %s: %w", loadZone, damErr)
 	}
 	return types.Price{}, fmt.Errorf("no current ercot price found for zone %s", loadZone)
 }

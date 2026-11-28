@@ -41,9 +41,10 @@ type baseAmerenSmart struct {
 	db         storage.Database
 	nowFunc    func() time.Time
 
-	mu           sync.Mutex
-	cachedPrices map[string][]types.Price
-	sfGroup      singleflight.Group
+	mu              sync.Mutex
+	cachedPrices    map[string][]types.Price
+	lastFutureFetch time.Time
+	sfGroup         singleflight.Group
 }
 
 func (c *baseAmerenSmart) now() time.Time {
@@ -159,7 +160,7 @@ func (c *baseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		return nil, err
 	}
 
-	pricesTomorrow, err := c.getPricesForDate(ctx, tomorrow)
+	pricesTomorrow, err := c.getPricesForDateWithCooldown(ctx, tomorrow, true)
 	if err != nil {
 		log.Ctx(ctx).DebugContext(ctx, "tomorrow ameren prices not yet available", slog.Any("error", err))
 		// it's fine if tomorrow isn't available yet
@@ -179,25 +180,49 @@ func (c *baseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, e
 }
 
 func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) ([]types.Price, error) {
+	return c.getPricesForDateWithCooldown(ctx, date, false)
+}
+
+func (c *baseAmerenSmart) getPricesForDateWithCooldown(ctx context.Context, date time.Time, futureCooldown bool) ([]types.Price, error) {
 	// MISO operates in fixed EST (UTC-5)
 	dateEST := date.In(estLocation)
 	dateStr := dateEST.Format("20060102")
 
 	c.mu.Lock()
 	if prices, ok := c.cachedPrices[dateStr]; ok && len(prices) > 0 {
+		copied := make([]types.Price, len(prices))
+		copy(copied, prices)
 		c.mu.Unlock()
-		return prices, nil
+		return copied, nil
+	}
+	if futureCooldown && !c.lastFutureFetch.IsZero() && c.now().Sub(c.lastFutureFetch) < 5*time.Minute {
+		lastFetch := c.lastFutureFetch
+		c.mu.Unlock()
+		return nil, fmt.Errorf("ameren future fetch in cooldown since %s", lastFetch.Format(time.RFC3339))
 	}
 	c.mu.Unlock()
 
 	res, err, _ := c.sfGroup.Do(dateStr, func() (interface{}, error) {
-		// Recheck the cache inside the singleflight block
+		// Recheck the cache and cooldown inside the singleflight block
 		c.mu.Lock()
 		if prices, ok := c.cachedPrices[dateStr]; ok && len(prices) > 0 {
 			c.mu.Unlock()
 			return prices, nil
 		}
+		if futureCooldown && !c.lastFutureFetch.IsZero() && c.now().Sub(c.lastFutureFetch) < 5*time.Minute {
+			lastFetch := c.lastFutureFetch
+			c.mu.Unlock()
+			return nil, fmt.Errorf("ameren future fetch in cooldown since %s", lastFetch.Format(time.RFC3339))
+		}
 		c.mu.Unlock()
+
+		if futureCooldown {
+			defer func() {
+				c.mu.Lock()
+				c.lastFutureFetch = c.now()
+				c.mu.Unlock()
+			}()
+		}
 
 		// Then check database
 		if c.db != nil {
