@@ -856,33 +856,10 @@ func findBestBatteryRateWindowsInto(dst []int, timeline []planInterval, startIdx
 	return tiedPositions
 }
 
-// findBestBatteryRateWindows scans all contiguous K-interval windows in [startIdx .. endIdx] and returns
-// the start indices of all windows whose average import rate (when importRate is true) or average
-// battery export rate (when importRate is false) is within priceEpsilonForEquality of the block's best K-window rate.
-func findBestBatteryRateWindows(timeline []planInterval, startIdx, endIdx, K int, importRate bool) []int {
-	return findBestBatteryRateWindowsInto(nil, timeline, startIdx, endIdx, K, importRate)
-}
-
 // expandBlockAction expands a single canonical blockActionChoice for a timeline block into concrete
-// interval actionCandidates, enforcing strictly contiguous charging or exporting windows.
+// interval actionCandidates (reusing dst's backing array when cap(dst) >= L and reusing *tiedBuf
+// for contiguous K-window rate scans), enforcing strictly contiguous charging or exporting windows.
 func expandBlockAction(
-	block timelineBlock,
-	choice blockActionChoice,
-	startState planState,
-	timeline []planInterval,
-	vppEvents []vppAnchor,
-	settings types.Settings,
-	currentStatus types.SystemStatus,
-	lastAction *types.Action,
-	history []types.EnergyStats,
-) []actionCandidate {
-	var tiedBuf []int
-	return expandBlockActionInto(nil, &tiedBuf, block, choice, startState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-}
-
-// expandBlockActionInto expands a single canonical blockActionChoice into dst (reusing dst's backing
-// array when cap(dst) >= L and reusing *tiedBuf for contiguous K-window rate scans).
-func expandBlockActionInto(
 	dst []actionCandidate,
 	tiedBuf *[]int,
 	block timelineBlock,
@@ -1263,7 +1240,7 @@ func expandAndStepBlockPlanInto(
 		if L <= 0 {
 			continue
 		}
-		expanded := expandBlockActionInto(actions[pos:pos+L:pos+L], &scratch.tiedPositions, blocks[b], choices[b], states[pos], timeline, vppEvents, settings, currentStatus, lastAction, history)
+		expanded := expandBlockAction(actions[pos:pos+L:pos+L], &scratch.tiedPositions, blocks[b], choices[b], states[pos], timeline, vppEvents, settings, currentStatus, lastAction, history)
 		for i := 0; i < L; i++ {
 			states[pos+i+1], metrics[pos+i] = stepPhysics(states[pos+i], expanded[i], timeline[pos+i], settings, roundTripEff)
 		}
@@ -1305,7 +1282,7 @@ func expandBlockPlan(
 			full = grown
 		}
 		full = full[:offset+L]
-		expanded := expandBlockActionInto(full[offset:offset+L:offset+L], &tiedBuf, blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction, history)
+		expanded := expandBlockAction(full[offset:offset+L:offset+L], &tiedBuf, blocks[b], choices[b], st, timeline, vppEvents, settings, currentStatus, lastAction, history)
 		for i, act := range expanded {
 			st, _ = stepPhysics(st, act, timeline[offset+i], settings, roundTripEff)
 		}
@@ -2169,35 +2146,6 @@ func critiqueBlockPlan(
 	lastAction *types.Action,
 	initialDeficitWait time.Duration,
 	history []types.EnergyStats,
-) ([]blockActionChoice, float64) {
-	return critiqueBlockPlanWithScratch(
-		ctx,
-		blocks,
-		timeline,
-		initialState,
-		vppEvents,
-		postHorizon,
-		settings,
-		currentStatus,
-		lastAction,
-		initialDeficitWait,
-		history,
-		newPlanSearchScratch(len(timeline), len(blocks)),
-	)
-}
-
-func critiqueBlockPlanWithScratch(
-	ctx context.Context,
-	blocks []timelineBlock,
-	timeline []planInterval,
-	initialState planState,
-	vppEvents []vppAnchor,
-	postHorizon postHorizonValuation,
-	settings types.Settings,
-	currentStatus types.SystemStatus,
-	lastAction *types.Action,
-	initialDeficitWait time.Duration,
-	history []types.EnergyStats,
 	scratch *planSearchScratch,
 ) ([]blockActionChoice, float64) {
 	if scratch == nil {
@@ -2304,7 +2252,7 @@ func critiqueBlockPlanWithScratch(
 				expanded = tcActs[blocks[k].startIdx : blocks[k].endIdx+1]
 				stepStates = tcStates[blocks[k].startIdx : blocks[k].endIdx+2]
 			} else {
-				expanded = expandBlockActionInto(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+				expanded = expandBlockAction(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
 				scratch.blockActs = expanded
 				stepStates = scratch.stepStatesBuf[:len(expanded)+1]
 				stepStates[0] = blockStartState
@@ -2343,7 +2291,7 @@ func critiqueBlockPlanWithScratch(
 							if timeline[blocks[nextB].startIdx].startTime.Sub(peekStartTime)+peekWait > chargeCompletionBufferDuration+time.Minute {
 								break
 							}
-							nextExp := expandBlockActionInto(scratch.nextBlockActs, &scratch.tiedPositions, blocks[nextB], tcRec[nextB], peekState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							nextExp := expandBlockAction(scratch.nextBlockActs, &scratch.tiedPositions, blocks[nextB], tcRec[nextB], peekState, timeline, vppEvents, settings, currentStatus, lastAction, history)
 							scratch.nextBlockActs = nextExp
 							for idx, act := range nextExp {
 								tIdx := blocks[nextB].startIdx + idx
@@ -2397,7 +2345,7 @@ func critiqueBlockPlanWithScratch(
 							}
 						} else {
 							diverged = true
-							expanded = expandBlockActionInto(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+							expanded = expandBlockAction(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
 							scratch.blockActs = expanded
 							endState = blockStartState
 							blockDeficitStartIdx = deficitStartIdx
@@ -3187,47 +3135,9 @@ func coarseSOCGridInto(dst []float64, minSOC, maxSOC float64) []float64 {
 	return grid
 }
 
-// coarseSOCGrid returns coarse SOC candidates from minSOC to maxSOC, including minSOC and
-// every multiple of 10% in (minSOC, maxSOC] so standard reserve boundaries (20%, 40%, 50%, etc.)
-// are always evaluated even when minSOC is not a multiple of 10% (e.g. 5% or 25%).
-func coarseSOCGrid(minSOC, maxSOC float64) []float64 {
-	return coarseSOCGridInto(nil, minSOC, maxSOC)
-}
-
 // optimizeBlockTargets executes Pass 2 of the solver: it refines the continuous targetSOC on winning
 // Charge blocks and floorSOC on winning Export blocks via a coarse (10%) to fine (2%/5%) search.
 func optimizeBlockTargets(
-	ctx context.Context,
-	winningChoices []blockActionChoice,
-	blocks []timelineBlock,
-	timeline []planInterval,
-	initial planState,
-	vppEvents []vppAnchor,
-	postHorizon postHorizonValuation,
-	settings types.Settings,
-	currentStatus types.SystemStatus,
-	lastAction *types.Action,
-	initialDeficitWait time.Duration,
-	history []types.EnergyStats,
-) *planPath {
-	return optimizeBlockTargetsWithScratch(
-		ctx,
-		winningChoices,
-		blocks,
-		timeline,
-		initial,
-		vppEvents,
-		postHorizon,
-		settings,
-		currentStatus,
-		lastAction,
-		initialDeficitWait,
-		history,
-		newPlanSearchScratch(len(timeline), len(blocks)),
-	)
-}
-
-func optimizeBlockTargetsWithScratch(
 	ctx context.Context,
 	winningChoices []blockActionChoice,
 	blocks []timelineBlock,
@@ -3762,8 +3672,8 @@ func (c *Controller) searchOptimalPlanBlocks(
 	scratch := newPlanSearchScratch(len(timeline), len(blocks))
 
 	// 2. Pass 1: Critique loop
-	winningChoices, _ := critiqueBlockPlanWithScratch(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
+	winningChoices, _ := critiqueBlockPlan(ctx, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
 
 	// 3. Pass 2: Target SOC line search
-	return optimizeBlockTargetsWithScratch(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
+	return optimizeBlockTargets(ctx, winningChoices, blocks, timeline, initial, vppEvents, postHorizon, settings, currentStatus, lastAction, initialDeficitWait, history, scratch)
 }
