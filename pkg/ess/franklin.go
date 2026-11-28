@@ -41,7 +41,6 @@ type Franklin struct {
 	userType             string
 	gatewayID            string
 	tokenStr             string
-	credMu               sync.RWMutex
 	mu                   sync.Mutex
 	settings             types.Settings
 	deviceInfoCache      franklinDeviceInfoV2Result
@@ -215,9 +214,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		f.username = creds.Franklin.Username
 		f.md5Password = currentMD5
 		f.userType = resolvedUserType
-		f.credMu.Lock()
 		f.tokenStr = token
-		f.credMu.Unlock()
 		// Persist the new token so we can skip login next time.
 		creds.Franklin.Token = token
 		if creds.Franklin.UserType != resolvedUserType {
@@ -240,22 +237,17 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		f.username = creds.Franklin.Username
 		f.md5Password = currentMD5
 		f.userType = creds.Franklin.UserType
-		f.credMu.Lock()
 		f.tokenStr = creds.Franklin.Token
-		f.credMu.Unlock()
 	}
 
 	if creds.Franklin.GatewayID == "" {
 		return creds, false, fmt.Errorf("missing gateway ID: %w", ErrCredentialsMissing)
 	}
 
-	f.credMu.Lock()
-	gatewayChanged := f.gatewayID != creds.Franklin.GatewayID
-	f.gatewayID = creds.Franklin.GatewayID
-	f.credMu.Unlock()
-	if gatewayChanged {
+	if f.gatewayID != creds.Franklin.GatewayID {
 		f.powerControlExpiry = time.Time{}
 	}
+	f.gatewayID = creds.Franklin.GatewayID
 
 	refreshExpiredToken := func(origErr error) error {
 		log.Ctx(ctx).DebugContext(ctx, "franklin token expired", slog.Any("error", origErr))
@@ -263,9 +255,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		if err != nil {
 			return err
 		}
-		f.credMu.Lock()
 		f.tokenStr = token
-		f.credMu.Unlock()
 		f.userType = resolvedUserType
 		// Persist the new token so we can skip login next time.
 		creds.Franklin.Token = token
@@ -484,10 +474,7 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 	if strings.HasSuffix(req.URL.Path, franklinLoginPath) {
 		isLogin = true
 	} else {
-		f.credMu.RLock()
-		tokenStr := f.tokenStr
-		f.credMu.RUnlock()
-		req.Header.Set("logintoken", tokenStr)
+		req.Header.Set("logintoken", f.tokenStr)
 	}
 
 	// TODO: should we set softwareversion, optsystemversion, opttime, optdevicename, optsource, optdevice
@@ -720,12 +707,8 @@ func (f *Franklin) getDefaultGatewayID(ctx context.Context) (string, error) {
 }
 
 func (f *Franklin) getDeviceInfo(ctx context.Context) (franklinDeviceInfoV2Result, error) {
-	f.credMu.RLock()
-	gatewayID := f.gatewayID
-	f.credMu.RUnlock()
-
 	params := url.Values{}
-	params.Set("gatewayId", gatewayID)
+	params.Set("gatewayId", f.gatewayID)
 	params.Set("lang", "en_US")
 
 	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceInfoV2", params)
@@ -2038,28 +2021,20 @@ func (f *Franklin) postFranklinModeUpdate(ctx context.Context, targetMode frankl
 // It aggregates 5-minute intervals into hourly EnergyStats.
 func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting franklin energy history", slog.String("start", start.String()), slog.String("end", end.String()))
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
 	f.mu.Lock()
-	var di franklinDeviceInfoV2Result
-	hasCachedDeviceInfo := time.Now().Before(f.deviceInfoExpiry)
-	if hasCachedDeviceInfo {
-		di = f.deviceInfoCache
-	}
-	f.mu.Unlock()
+	defer f.mu.Unlock()
 
-	if !hasCachedDeviceInfo {
+	var di franklinDeviceInfoV2Result
+	if time.Now().Before(f.deviceInfoExpiry) {
+		di = f.deviceInfoCache
+	} else {
 		var err error
 		di, err = f.getDeviceInfo(ctx)
 		if err != nil {
 			return nil, err
 		}
-		f.mu.Lock()
 		f.deviceInfoCache = di
 		f.deviceInfoExpiry = time.Now().Add(time.Minute)
-		f.mu.Unlock()
 	}
 
 	startInLoc := start.In(di.location)
@@ -2156,13 +2131,9 @@ func (f *Franklin) getStormList(ctx context.Context) ([]franklinStormListResult,
 }
 
 func (f *Franklin) getEnergyPointsForDay(ctx context.Context, day time.Time, loc *time.Location) ([]franklinEnergyPoint, error) {
-	f.credMu.RLock()
-	gatewayID := f.gatewayID
-	f.credMu.RUnlock()
-
 	day = day.In(loc)
 	params := url.Values{}
-	params.Set("gatewayId", gatewayID)
+	params.Set("gatewayId", f.gatewayID)
 	params.Set("dayTime", day.Format("2006-01-02"))
 
 	req, err := f.newGetRequest(ctx, "api-energy/power/getFhpPowerByDay", params)
