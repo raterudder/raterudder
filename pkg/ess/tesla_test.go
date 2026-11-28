@@ -267,6 +267,9 @@ func TestTesla(t *testing.T) {
 			m := teslaMap(ts)
 			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
 			require.NoError(t, err)
+			teslaSys := sys.(*Tesla)
+			teslaSys.retryDelay1 = time.Millisecond
+			teslaSys.retryDelay2 = time.Millisecond
 
 			creds := types.Credentials{
 				Tesla: &types.TeslaCredentials{
@@ -279,7 +282,7 @@ func TestTesla(t *testing.T) {
 			_, _, err = sys.Authenticate(ctx, creds)
 			assert.Error(t, err)
 			assert.ErrorContains(t, err, "credential validation failed")
-			assert.ErrorContains(t, err, "cannot unmarshal string into Go value of type ess.teslaLiveStatusResponse")
+			assert.ErrorIs(t, err, errTeslaEmptyResponse)
 		})
 
 		t.Run("Fail when live_status fails with server error", func(t *testing.T) {
@@ -2860,10 +2863,54 @@ func TestTesla(t *testing.T) {
 			assert.ErrorContains(t, err, "failed to decode tesla envelope")
 		})
 
-		t.Run("Target unmarshal failure (empty/string response)", func(t *testing.T) {
+		t.Run("Empty string response returns errTeslaEmptyResponse", func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"response": ""}`))
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			var res teslaSiteInfoResponse
+			err = teslaSys.doGETRequest(ctx, "api/1/energy_sites/1234/site_info", nil, &res)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errTeslaEmptyResponse)
+		})
+
+		t.Run("Null response returns errTeslaEmptyResponse", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"response": null}`))
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			var res teslaSiteInfoResponse
+			err = teslaSys.doGETRequest(ctx, "api/1/energy_sites/1234/site_info", nil, &res)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errTeslaEmptyResponse)
+		})
+
+		t.Run("Target unmarshal failure (unexpected non-empty string)", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"response": "unexpected"}`))
 			}))
 			defer ts.Close()
 
@@ -3055,6 +3102,181 @@ func TestTesla(t *testing.T) {
 
 		_, err = teslaSys.getSiteInfo(ctx)
 		require.Error(t, err)
+		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("GetStatus Empty Response Retry Success", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"nameplate_energy":       27000.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				calls++
+				if calls < 3 {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"response":""}`))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"solar_power":        1200.0,
+						"battery_power":      -500.0,
+						"grid_power":         700.0,
+						"load_power":         1400.0,
+						"percentage_charged": 55.4,
+						"grid_status":        "Active",
+						"island_status":      "on_grid",
+					},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.retryDelay1 = 1 * time.Millisecond
+		teslaSys.retryDelay2 = 1 * time.Millisecond
+
+		status, err := sys.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 55.4, status.BatterySOC)
+		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("GetStatus Empty Response Retry Failure", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"nameplate_energy":       27000.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				calls++
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"response":""}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.retryDelay1 = 1 * time.Millisecond
+		teslaSys.retryDelay2 = 1 * time.Millisecond
+
+		_, err = sys.GetStatus(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errTeslaEmptyResponse)
+		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("getSiteInfo Empty Response Retry Success", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+				calls++
+				if calls < 3 {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"response":""}`))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"nameplate_energy":       27000.0,
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.retryDelay1 = 1 * time.Millisecond
+		teslaSys.retryDelay2 = 1 * time.Millisecond
+
+		res, err := teslaSys.getSiteInfo(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 20.0, res.BackupReservePercent)
+		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("getSiteInfo Empty Response Retry Failure", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+				calls++
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"response":""}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.retryDelay1 = 1 * time.Millisecond
+		teslaSys.retryDelay2 = 1 * time.Millisecond
+
+		_, err = teslaSys.getSiteInfo(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errTeslaEmptyResponse)
 		assert.Equal(t, 3, calls)
 	})
 

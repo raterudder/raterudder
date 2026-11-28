@@ -271,6 +271,10 @@ func (b *baseTesla) newPOSTRequest(ctx context.Context, method, path, token, bas
 	return req, nil
 }
 
+// errTeslaEmptyResponse is returned when a Tesla GET endpoint returns an empty,
+// empty-string, or null "response" field (e.g. {"response":""}).
+var errTeslaEmptyResponse = errors.New("tesla API returned empty response")
+
 // teslaHTTPError wraps an error from the Tesla API with its HTTP status code.
 type teslaHTTPError struct {
 	StatusCode int
@@ -663,10 +667,13 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 	}
 
 	if dest != nil {
+		trimmed := bytes.TrimSpace(response.Response)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte(`""`)) || bytes.Equal(trimmed, []byte("null")) {
+			return errTeslaEmptyResponse
+		}
 		if err := json.Unmarshal(response.Response, dest); err != nil {
-			// We encountered cases where the response field is a string like ""
-			// rather than the expected struct object. Log up to 512 characters of the raw envelope
-			// to help debug why the API returned this shape instead of the expected struct/slice.
+			// Log up to 512 characters of the raw envelope to help debug why the API
+			// returned an unexpected shape instead of the expected struct/slice.
 			body := raw
 			if len(body) > 512 {
 				body = body[:512]
@@ -711,13 +718,13 @@ func (b *Tesla) getSiteInfo(ctx context.Context) (teslaSiteInfoResponse, error) 
 		}
 
 		var httpErr *teslaHTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 500 {
+		if (errors.As(err, &httpErr) && httpErr.StatusCode == 500) || errors.Is(err, errTeslaEmptyResponse) {
 			delay := b.retryDelay1
 			if attempt == 2 {
 				delay = b.retryDelay2
 			}
 			if attempt < 3 {
-				log.Ctx(ctx).WarnContext(ctx, "tesla site_info failed with 500, retrying", slog.Any("error", err), slog.Duration("delay", delay))
+				log.Ctx(ctx).WarnContext(ctx, "tesla site_info failed, retrying", slog.Any("error", err), slog.Duration("delay", delay))
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
@@ -754,13 +761,13 @@ func (b *Tesla) getLiveStatus(ctx context.Context) (teslaLiveStatusResponse, err
 		}
 
 		var httpErr *teslaHTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 424 {
+		if (errors.As(err, &httpErr) && httpErr.StatusCode == 424) || errors.Is(err, errTeslaEmptyResponse) {
 			delay := b.retryDelay1
 			if attempt == 2 {
 				delay = b.retryDelay2
 			}
 			if attempt < 3 {
-				log.Ctx(ctx).WarnContext(ctx, "tesla live_status failed with 424, retrying", slog.Any("error", err), slog.Duration("delay", delay))
+				log.Ctx(ctx).WarnContext(ctx, "tesla live_status failed, retrying", slog.Any("error", err), slog.Duration("delay", delay))
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
@@ -1127,7 +1134,7 @@ func (b *Tesla) updateTOUSettings(ctx context.Context, sched *types.TOUSchedule)
 	}
 	if err := b.base.doRequest(req, nil); err != nil {
 		if !errors.Is(err, ErrUnauthorized) {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla time_of_use_settings", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to update tesla time_of_use_settings", slog.Any("error", err))
 		}
 		return err
 	}
@@ -1513,7 +1520,7 @@ func (b *Tesla) handleStormMode(ctx context.Context, bat types.BatteryMode, site
 
 	if err := b.postGridImportExport(ctx, targetAllowGridCharge, siteInfo.Components.CustomerPreferredExportRule); err != nil {
 		if !errors.Is(err, ErrUnauthorized) {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
 		}
 		return false, err
 	}
@@ -1877,7 +1884,7 @@ func (b *Tesla) applyTeslaModeUpdates(
 		log.Ctx(ctx).InfoContext(ctx, "updating tesla grid import export", slog.Bool("allowGridCharge", plan.allowGridCharge), slog.String("exportRule", plan.exportRule))
 		if err := b.postGridImportExport(ctx, plan.allowGridCharge, plan.exportRule); err != nil {
 			if !errors.Is(err, ErrUnauthorized) {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
+				log.Ctx(ctx).WarnContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
 			}
 			return false, err
 		}
@@ -1902,7 +1909,7 @@ func (b *Tesla) applyTeslaModeUpdates(
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			if !errors.Is(err, ErrUnauthorized) {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
+				log.Ctx(ctx).WarnContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
 			}
 			return false, err
 		}
@@ -1924,7 +1931,7 @@ func (b *Tesla) applyTeslaModeUpdates(
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			if !errors.Is(err, ErrUnauthorized) {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
+				log.Ctx(ctx).WarnContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
 			}
 			return false, err
 		}

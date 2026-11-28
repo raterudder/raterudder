@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"slices"
@@ -34,9 +35,11 @@ type updateResult struct {
 }
 
 const (
-	energyBackfillWindowDays = 5
-	siteUpdateControlReserve = 30 * time.Second
-	defaultWeatherRetryDelay = 3 * time.Second
+	energyBackfillWindowDays  = 5
+	siteUpdateControlReserve  = 30 * time.Second
+	defaultWeatherRetryDelay  = 3 * time.Second
+	defaultSetModesRetryDelay = 2 * time.Second
+	setModesMaxAttempts       = 3
 )
 
 func (s *Server) getWeatherRetryDelay() time.Duration {
@@ -44,6 +47,13 @@ func (s *Server) getWeatherRetryDelay() time.Duration {
 		return s.weatherRetryDelay
 	}
 	return defaultWeatherRetryDelay
+}
+
+func (s *Server) getSetModesRetryDelay() time.Duration {
+	if s.setModesRetryDelay > 0 {
+		return s.setModesRetryDelay
+	}
+	return defaultSetModesRetryDelay
 }
 
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -511,7 +521,7 @@ func (s *Server) performSiteUpdate(
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
 		minSOC := int(math.Round(configuredReserveSOC))
-		if _, err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
+		if _, err := s.setModesWithRetry(ctx, essSystem, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
 			if errors.Is(err, ess.ErrUnauthorized) {
 				log.Ctx(ctx).WarnContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
 			} else {
@@ -1434,6 +1444,55 @@ func (s *Server) canSetModes(settings settingsWithVersion) error {
 	return nil
 }
 
+func isRetryableSetModesError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, ess.ErrUnauthorized) || errors.Is(err, errESSRateLimited) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func (s *Server) setModesWithRetry(
+	ctx context.Context,
+	essSystem ess.System,
+	batteryMode types.BatteryMode,
+	solarMode types.SolarMode,
+	opts types.ModesOptions,
+) (bool, error) {
+	var lastErr error
+	for attempt := 1; attempt <= setModesMaxAttempts; attempt++ {
+		changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
+		if err == nil {
+			return changed, nil
+		}
+		lastErr = err
+		if attempt == setModesMaxAttempts || !isRetryableSetModesError(ctx, err) {
+			return false, err
+		}
+		delay := s.getSetModesRetryDelay() * time.Duration(attempt)
+		log.Ctx(ctx).WarnContext(
+			ctx,
+			"set modes timed out, retrying",
+			slog.Int("attempt", attempt),
+			slog.Int("maxAttempts", setModesMaxAttempts),
+			slog.Duration("delay", delay),
+			slog.Any("error", err),
+		)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return false, lastErr
+		}
+	}
+	return false, lastErr
+}
+
 func (s *Server) setESSModes(
 	ctx context.Context,
 	siteID string,
@@ -1451,7 +1510,7 @@ func (s *Server) setESSModes(
 		solarMode = types.SolarModeAny
 	}
 
-	changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
+	changed, err := s.setModesWithRetry(ctx, essSystem, batteryMode, solarMode, opts)
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
 			settings.ESSAuthStatus.ConsecutiveSetFailures = nextESSFailureCount(settings.ESSAuthStatus.ConsecutiveSetFailures, err)

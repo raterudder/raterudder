@@ -112,6 +112,7 @@ type Server struct {
 	gridOutageDelay     time.Duration
 	settingsSyncTimeout time.Duration
 	weatherRetryDelay   time.Duration
+	setModesRetryDelay  time.Duration
 
 	featsMu           sync.RWMutex
 	featsFetchMu      sync.Mutex

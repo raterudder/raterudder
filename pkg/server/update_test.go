@@ -4494,6 +4494,101 @@ func TestSetESSModes(t *testing.T) {
 		assert.True(t, changed2)
 		mockES.AssertExpectations(t)
 	})
+
+	t.Run("Retries on client timeout and succeeds", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		timeoutErr := &url.Error{
+			Op:  "Post",
+			URL: "https://energy.franklinwh.com/hes-gateway/terminal/tou/updateSocV2",
+			Err: context.DeadlineExceeded,
+		}
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, timeoutErr).Once()
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(true, nil).Once()
+
+		srv := &Server{
+			storage:            mockS,
+			setModesRetryDelay: time.Millisecond,
+		}
+		settings := settingsWithVersion{Settings: types.Settings{ESS: "franklin"}, version: 1}
+
+		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Exhausts max attempts on persistent client timeout", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		timeoutErr := &url.Error{
+			Op:  "Post",
+			URL: "https://energy.franklinwh.com/hes-gateway/terminal/tou/updateTouModeV2",
+			Err: context.DeadlineExceeded,
+		}
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, timeoutErr).Times(setModesMaxAttempts)
+
+		srv := &Server{
+			storage:            mockS,
+			setModesRetryDelay: time.Millisecond,
+		}
+		settings := settingsWithVersion{Settings: types.Settings{ESS: "franklin"}, version: 1}
+
+		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		assert.ErrorIs(t, err, timeoutErr)
+		assert.False(t, changed)
+		mockES.AssertExpectations(t)
+		mockS.AssertNotCalled(t, "SetSettings")
+	})
+
+	t.Run("Does not retry when parent context is canceled", func(t *testing.T) {
+		mockES := &mockESS{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, context.DeadlineExceeded).Once()
+
+		srv := &Server{
+			setModesRetryDelay: time.Millisecond,
+		}
+		settings := settingsWithVersion{Settings: types.Settings{ESS: "franklin"}, version: 1}
+
+		changed, err := srv.setESSModes(ctx, "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.False(t, changed)
+		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Stops retry wait immediately when context is canceled during backoff", func(t *testing.T) {
+		mockES := &mockESS{}
+		ctx, cancel := context.WithCancel(context.Background())
+		timeoutErr := &url.Error{
+			Op:  "Post",
+			URL: "https://energy.franklinwh.com/hes-gateway/terminal/tou/updateSocV2",
+			Err: context.DeadlineExceeded,
+		}
+
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Run(func(args mock.Arguments) {
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				cancel()
+			}()
+		}).Return(false, timeoutErr).Once()
+
+		srv := &Server{
+			setModesRetryDelay: 5 * time.Second,
+		}
+		settings := settingsWithVersion{Settings: types.Settings{ESS: "franklin"}, version: 1}
+
+		start := time.Now()
+		changed, err := srv.setESSModes(ctx, "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		assert.Less(t, time.Since(start), time.Second, "should abort backoff immediately on context cancellation")
+		assert.ErrorIs(t, err, timeoutErr)
+		assert.False(t, changed)
+		mockES.AssertExpectations(t)
+	})
 }
 
 func TestGetCronGroups(t *testing.T) {

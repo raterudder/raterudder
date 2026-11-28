@@ -922,7 +922,7 @@ func (e *Enphase) applyEnphaseProfileUpdate(ctx context.Context, currentProfile,
 		BatteryBackupPercentage: backupPercent,
 	}
 	if err := e.updateBatteryProfile(ctx, payload); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
+		log.Ctx(ctx).WarnContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
 		return false, err
 	}
 	return true, nil
@@ -965,7 +965,9 @@ func (e *Enphase) applyEnphaseSettingsUpdate(
 		slog.Bool("dtgEnabled", plan.wantDTG),
 	)
 	if err := e.updateBatterySettings(ctx, payload); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+		if !errors.Is(err, ErrUnauthorized) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+		}
 		return false, err
 	}
 	return true, nil

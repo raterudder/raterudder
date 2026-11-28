@@ -1339,7 +1339,7 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 	}
 	if err := f.doRequest(req, nil); err != nil {
 		if !errors.Is(err, ErrUnauthorized) {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to save tou dispatch", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to save tou dispatch", slog.Any("error", err))
 		}
 		return err
 	}
@@ -1872,7 +1872,7 @@ func (f *Franklin) provisionMissingTOUMode(
 		)
 		refreshedModes, err := f.getAvailableModes(ctx, rd)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
 			return err
 		}
 		*modes = refreshedModes
@@ -1979,7 +1979,7 @@ func (f *Franklin) postFranklinSOCUpdate(ctx context.Context, targetMode frankli
 	}
 	if err := f.doRequest(req, nil); err != nil {
 		if !errors.Is(err, ErrUnauthorized) {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to update soc", slog.Any("error", err))
 		}
 		return err
 	}
@@ -2010,7 +2010,7 @@ func (f *Franklin) postFranklinModeUpdate(ctx context.Context, targetMode frankl
 	}
 	if err := f.doRequest(req, nil); err != nil {
 		if !errors.Is(err, ErrUnauthorized) {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
+			log.Ctx(ctx).WarnContext(ctx, "failed to update tou mode", slog.Any("error", err))
 		}
 		return err
 	}
