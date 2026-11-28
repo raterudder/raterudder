@@ -95,6 +95,9 @@ describe('LandingPage Component', () => {
 
     it('does not call fetchAuthStatus on initial landing page load', async () => {
         render(<App />);
+        expect(
+            await screen.findByRole('heading', { level: 1, name: /Maximize Battery Savings.*Zero Effort/i })
+        ).toBeInTheDocument();
         expect(fetchAuthStatus).not.toHaveBeenCalled();
     });
 

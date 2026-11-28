@@ -100,14 +100,24 @@ export default defineConfig({
           groups: [
             {
               name: 'vendor-react',
-              test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store|@base-ui|@floating-ui)[\\/]/,
+              test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store)[\\/]/,
+              priority: 40,
+            },
+            {
+              name: 'vendor-base-ui',
+              test: /node_modules[\\/](@base-ui|@floating-ui)[\\/]/,
               tags: ['$initial'],
               priority: 30,
             },
             {
               name: 'vendor-charts',
-              test: /node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor|@reduxjs[\\/]toolkit|redux|reselect|immer|decimal\.js-light|es-toolkit|eventemitter3|tiny-invariant|clsx)[\\/]/,
+              test: /node_modules[\\/](recharts|react-redux|d3-[^\\/]+|victory-vendor|@reduxjs[\\/]toolkit|redux|reselect|immer|decimal\.js-light|es-toolkit|eventemitter3|tiny-invariant|clsx)[\\/]/,
               priority: 20,
+            },
+            {
+              name: 'vendor-accordion',
+              test: /node_modules[\\/]@base-ui[\\/]react[\\/]accordion[\\/]/,
+              priority: 15,
             },
             {
               name: 'vendor-ui',

@@ -7,12 +7,12 @@ import Footer from './components/Footer';
 import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
-import LandingPage from './pages/LandingPage';
 import { routeImporters } from './utils/routePreload';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
 import { FeaturesProvider } from './utils/features';
 import './utils/pwaUtils';
 
+const LandingPage = React.lazy(routeImporters['/']);
 const Dashboard = React.lazy(routeImporters['/dashboard']);
 const Settings = React.lazy(routeImporters['/settings']);
 const Forecast = React.lazy(routeImporters['/forecast']);
@@ -458,7 +458,9 @@ function AppContent() {
                             }
                         >
                             <Switch>
-                                <Route path="/" component={LandingPage} />
+                                <Route path="/">
+                                    <LandingPage />
+                                </Route>
                                 <Route path="/how-it-works">
                                     <HowItWorksPage />
                                 </Route>

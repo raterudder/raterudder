@@ -172,10 +172,15 @@ describe('Header Component', () => {
     });
 
     it('preloads route chunks on pointer hover and focus', () => {
+        const homeSpy = vi.spyOn(routePreload.routeImporters, '/');
         const forecastSpy = vi.spyOn(routePreload.routeImporters, '/forecast');
         const settingsSpy = vi.spyOn(routePreload.routeImporters, '/settings');
 
         renderHeader('/dashboard', true);
+
+        const brandLink = screen.getByRole('link', { name: /RateRudder/i });
+        fireEvent.pointerEnter(brandLink);
+        expect(homeSpy).toHaveBeenCalled();
 
         const forecastLinks = screen.getAllByRole('link', { name: 'Forecast' });
         fireEvent.pointerEnter(forecastLinks[0]);
