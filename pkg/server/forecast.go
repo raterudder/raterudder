@@ -183,7 +183,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	now := s.now().In(loc)
 
 	if latestAction != nil && latestAction.Fault {
-		s.writeFaultedForecast(ctx, w, siteID, settings, now, latestAction, "private, max-age=300")
+		s.writeFaultedForecast(ctx, w, siteID, now, latestAction, "private, max-age=300")
 		return
 	}
 
@@ -262,7 +262,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 				faultAction.SystemStatus = latestAction.SystemStatus
 				faultAction.CurrentPrice = latestAction.CurrentPrice
 			}
-			s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "no-store")
+			s.writeFaultedForecast(ctx, w, siteID, now, faultAction, "no-store")
 			return
 		}
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
@@ -302,7 +302,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 					faultAction.SystemStatus = latestAction.SystemStatus
 					faultAction.CurrentPrice = latestAction.CurrentPrice
 				}
-				s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "no-store")
+				s.writeFaultedForecast(ctx, w, siteID, now, faultAction, "no-store")
 				return
 			}
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get ess status", slog.Any("error", err))
@@ -331,7 +331,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			SystemStatus: status,
 			Fault:        true,
 		}
-		s.writeFaultedForecast(ctx, w, siteID, settings, now, faultAction, "private, max-age=300")
+		s.writeFaultedForecast(ctx, w, siteID, now, faultAction, "private, max-age=300")
 		return
 	}
 
@@ -451,7 +451,6 @@ func (s *Server) writeFaultedForecast(
 	ctx context.Context,
 	w http.ResponseWriter,
 	siteID string,
-	_ settingsWithVersion,
 	now time.Time,
 	faultAction *types.Action,
 	cacheControl string,

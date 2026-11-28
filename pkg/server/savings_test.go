@@ -1432,59 +1432,65 @@ func TestGetCombinedEnergyHistory(t *testing.T) {
 	})
 
 	t.Run("PositiveOffsetTimezonesAlignSummaryAndTrailingBounds", func(t *testing.T) {
-		for _, tz := range []string{"Europe/London", "Australia/Sydney"} {
-			t.Run(tz, func(t *testing.T) {
-				loc, err := time.LoadLocation(tz)
-				require.NoError(t, err)
+		assertPositiveOffsetCombinedEnergy := func(t *testing.T, tz string) {
+			t.Helper()
+			loc, err := time.LoadLocation(tz)
+			require.NoError(t, err)
 
-				jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
-				jun30 := time.Date(2026, 6, 30, 0, 0, 0, 0, loc)
-				jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
-				now := jul01.Add(10 * time.Hour)
-				historyEnd := jul01.AddDate(0, 0, 1)
+			jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+			jun30 := time.Date(2026, 6, 30, 0, 0, 0, 0, loc)
+			jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+			now := jul01.Add(10 * time.Hour)
+			historyEnd := jul01.AddDate(0, 0, 1)
 
-				mockS := &mockStorage{}
-				mockS.On("GetHistorySummaries", mock.Anything, "site1", jun01, historyEnd).Return([]types.HistorySummary{
-					{
-						Energy: []types.DailyEnergyStats{
-							// Simulate JSON-unmarshaled UTC TSDayStart for positive-UTC-offset local midnight
-							{
-								TSDayStart:   jun01.UTC(),
-								TimeLocation: tz,
-								Hourly:       []types.EnergyStats{{TSHourStart: jun01.Add(12 * time.Hour).UTC(), SolarKWH: 6}},
-							},
-							{
-								TSDayStart:   jun30.UTC(),
-								TimeLocation: tz,
-								Hourly:       []types.EnergyStats{{TSHourStart: jun30.Add(12 * time.Hour).UTC(), SolarKWH: 7}},
-							},
+			mockS := &mockStorage{}
+			mockS.On("GetHistorySummaries", mock.Anything, "site1", jun01, historyEnd).Return([]types.HistorySummary{
+				{
+					Energy: []types.DailyEnergyStats{
+						// Simulate JSON-unmarshaled UTC TSDayStart for positive-UTC-offset local midnight
+						{
+							TSDayStart:   jun01.UTC(),
+							TimeLocation: tz,
+							Hourly:       []types.EnergyStats{{TSHourStart: jun01.Add(12 * time.Hour).UTC(), SolarKWH: 6}},
+						},
+						{
+							TSDayStart:   jun30.UTC(),
+							TimeLocation: tz,
+							Hourly:       []types.EnergyStats{{TSHourStart: jun30.Add(12 * time.Hour).UTC(), SolarKWH: 7}},
 						},
 					},
-				}, nil).Once()
+				},
+			}, nil).Once()
 
-				// No leading gap because jun01 == historyStart; trailing fetch starts at jul01 local midnight
-				mockS.On("GetEnergyHistory", mock.Anything, "site1", jul01, historyEnd).Return([]types.DailyEnergyStats{
-					{
-						TSDayStart:   jul01,
-						TimeLocation: tz,
-						Hourly:       []types.EnergyStats{{TSHourStart: jul01.Add(8 * time.Hour), SolarKWH: 3}},
-					},
-				}, nil).Once()
+			// No leading gap because jun01 == historyStart; trailing fetch starts at jul01 local midnight
+			mockS.On("GetEnergyHistory", mock.Anything, "site1", jul01, historyEnd).Return([]types.DailyEnergyStats{
+				{
+					TSDayStart:   jul01,
+					TimeLocation: tz,
+					Hourly:       []types.EnergyStats{{TSHourStart: jul01.Add(8 * time.Hour), SolarKWH: 3}},
+				},
+			}, nil).Once()
 
-				srv := &Server{
-					storage: mockS,
-					nowFunc: func() time.Time { return now },
-				}
+			srv := &Server{
+				storage: mockS,
+				nowFunc: func() time.Time { return now },
+			}
 
-				got, err := srv.getCombinedEnergyHistory(context.Background(), "site1", jun01, historyEnd)
-				require.NoError(t, err)
-				if assert.Len(t, got, 3) {
-					assert.Equal(t, "2026-06-01", got[0].TSDayStart.In(loc).Format("2006-01-02"))
-					assert.Equal(t, "2026-06-30", got[1].TSDayStart.In(loc).Format("2006-01-02"))
-					assert.Equal(t, "2026-07-01", got[2].TSDayStart.In(loc).Format("2006-01-02"))
-				}
-				mockS.AssertExpectations(t)
-			})
+			got, err := srv.getCombinedEnergyHistory(context.Background(), "site1", jun01, historyEnd)
+			require.NoError(t, err)
+			if assert.Len(t, got, 3) {
+				assert.Equal(t, "2026-06-01", got[0].TSDayStart.In(loc).Format("2006-01-02"))
+				assert.Equal(t, "2026-06-30", got[1].TSDayStart.In(loc).Format("2006-01-02"))
+				assert.Equal(t, "2026-07-01", got[2].TSDayStart.In(loc).Format("2006-01-02"))
+			}
+			mockS.AssertExpectations(t)
 		}
+
+		t.Run("EuropeLondon", func(t *testing.T) {
+			assertPositiveOffsetCombinedEnergy(t, "Europe/London")
+		})
+		t.Run("AustraliaSydney", func(t *testing.T) {
+			assertPositiveOffsetCombinedEnergy(t, "Australia/Sydney")
+		})
 	})
 }

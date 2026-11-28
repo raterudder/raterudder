@@ -1801,66 +1801,106 @@ func TestFirestoreProvider(t *testing.T) {
 			sydneyLoc, err := time.LoadLocation("Australia/Sydney")
 			require.NoError(t, err)
 
-			for _, tc := range []struct {
-				name   string
-				siteID string
-				loc    *time.Location
-			}{
-				{name: "EuropeLondonBST", siteID: "test-site-london-summaries", loc: londonLoc},
-				{name: "AustraliaSydneyAEST", siteID: "test-site-sydney-summaries", loc: sydneyLoc},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					may31 := time.Date(2026, 5, 31, 0, 0, 0, 0, tc.loc)
-					jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, tc.loc)
-					jun15 := time.Date(2026, 6, 15, 0, 0, 0, 0, tc.loc)
-					jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, tc.loc)
-					jul05 := time.Date(2026, 7, 5, 0, 0, 0, 0, tc.loc)
+			assertPositiveOffsetSummaries := func(t *testing.T, siteID string, loc *time.Location) {
+				t.Helper()
+				may31 := time.Date(2026, 5, 31, 0, 0, 0, 0, loc)
+				jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+				jun15 := time.Date(2026, 6, 15, 0, 0, 0, 0, loc)
+				jul01 := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+				jul05 := time.Date(2026, 7, 5, 0, 0, 0, 0, loc)
 
-					_, err := f.UpdateHistorySummary(ctx, tc.siteID, "2026-05", types.HistorySummary{
-						Energy: []types.DailyEnergyStats{
-							{TSDayStart: may31, TimeLocation: tc.loc.String()},
-						},
-					})
-					require.NoError(t, err)
-
-					_, err = f.UpdateHistorySummary(ctx, tc.siteID, "2026-06", types.HistorySummary{
-						Energy: []types.DailyEnergyStats{
-							{TSDayStart: jun01, TimeLocation: tc.loc.String()},
-							{TSDayStart: jun15, TimeLocation: tc.loc.String()},
-						},
-					})
-					require.NoError(t, err)
-
-					_, err = f.UpdateHistorySummary(ctx, tc.siteID, "2026-07", types.HistorySummary{
-						Energy: []types.DailyEnergyStats{
-							{TSDayStart: jul01, TimeLocation: tc.loc.String()},
-							{TSDayStart: jul05, TimeLocation: tc.loc.String()},
-						},
-					})
-					require.NoError(t, err)
-
-					// Mid-June through July query (both localized and UTC) must include 2026-06 even though
-					// jun01 in UTC falls on 2026-05-31 (23:00Z in London, 14:00Z in Sydney).
-					resMidLocal, err := f.GetHistorySummaries(ctx, tc.siteID, jun15, jul05.AddDate(0, 0, 1))
-					require.NoError(t, err)
-					if assert.Len(t, resMidLocal, 2) {
-						assert.Equal(t, "2026-06-01", resMidLocal[0].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
-						assert.Equal(t, "2026-07-01", resMidLocal[1].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
-					}
-
-					resMidUTC, err := f.GetHistorySummaries(ctx, tc.siteID, jun15.UTC(), jul05.AddDate(0, 0, 1).UTC())
-					require.NoError(t, err)
-					assert.Len(t, resMidUTC, 2)
-
-					// Query starting on local day 1 of June spanning into July must return only June and July
-					// (2 months), without stepping back and loading May (a 3rd month).
-					resDay1Local, err := f.GetHistorySummaries(ctx, tc.siteID, jun01, jul05.AddDate(0, 0, 1))
-					require.NoError(t, err)
-					if assert.Len(t, resDay1Local, 2) {
-						assert.Equal(t, "2026-06-01", resDay1Local[0].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
-						assert.Equal(t, "2026-07-01", resDay1Local[1].Energy[0].TSDayStart.In(tc.loc).Format("2006-01-02"))
-					}
+				_, err := f.UpdateHistorySummary(ctx, siteID, "2026-05", types.HistorySummary{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: may31, TimeLocation: loc.String()},
+					},
 				})
+				require.NoError(t, err)
+
+				_, err = f.UpdateHistorySummary(ctx, siteID, "2026-06", types.HistorySummary{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: jun01, TimeLocation: loc.String()},
+						{TSDayStart: jun15, TimeLocation: loc.String()},
+					},
+				})
+				require.NoError(t, err)
+
+				_, err = f.UpdateHistorySummary(ctx, siteID, "2026-07", types.HistorySummary{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: jul01, TimeLocation: loc.String()},
+						{TSDayStart: jul05, TimeLocation: loc.String()},
+					},
+				})
+				require.NoError(t, err)
+
+				// Mid-June through July query (both localized and UTC) must include 2026-06 even though
+				// jun01 in UTC falls on 2026-05-31 (23:00Z in London, 14:00Z in Sydney).
+				resMidLocal, err := f.GetHistorySummaries(ctx, siteID, jun15, jul05.AddDate(0, 0, 1))
+				require.NoError(t, err)
+				if assert.Len(t, resMidLocal, 2) {
+					assert.Equal(t, "2026-06-01", resMidLocal[0].Energy[0].TSDayStart.In(loc).Format("2006-01-02"))
+					assert.Equal(t, "2026-07-01", resMidLocal[1].Energy[0].TSDayStart.In(loc).Format("2006-01-02"))
+				}
+
+				resMidUTC, err := f.GetHistorySummaries(ctx, siteID, jun15.UTC(), jul05.AddDate(0, 0, 1).UTC())
+				require.NoError(t, err)
+				assert.Len(t, resMidUTC, 2)
+
+				// Query starting on local day 1 of June spanning into July must return only June and July
+				// (2 months), without stepping back and loading May (a 3rd month).
+				resDay1Local, err := f.GetHistorySummaries(ctx, siteID, jun01, jul05.AddDate(0, 0, 1))
+				require.NoError(t, err)
+				if assert.Len(t, resDay1Local, 2) {
+					assert.Equal(t, "2026-06-01", resDay1Local[0].Energy[0].TSDayStart.In(loc).Format("2006-01-02"))
+					assert.Equal(t, "2026-07-01", resDay1Local[1].Energy[0].TSDayStart.In(loc).Format("2006-01-02"))
+				}
+			}
+
+			t.Run("EuropeLondonBST", func(t *testing.T) {
+				assertPositiveOffsetSummaries(t, "test-site-london-summaries", londonLoc)
+			})
+			t.Run("AustraliaSydneyAEST", func(t *testing.T) {
+				assertPositiveOffsetSummaries(t, "test-site-sydney-summaries", sydneyLoc)
+			})
+		})
+
+		t.Run("UTCDay1QueryIncludesPriorMonthForNegativeOffsetSite", func(t *testing.T) {
+			chicagoLoc, err := time.LoadLocation("America/Chicago")
+			require.NoError(t, err)
+
+			chicagoSiteID := "test-site-chicago-utc-day1"
+			may01 := time.Date(2026, 5, 1, 0, 0, 0, 0, chicagoLoc)
+			may31 := time.Date(2026, 5, 31, 0, 0, 0, 0, chicagoLoc)
+			jun01 := time.Date(2026, 6, 1, 0, 0, 0, 0, chicagoLoc)
+
+			_, err = f.UpdateHistorySummary(ctx, chicagoSiteID, "2026-05", types.HistorySummary{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: may01, TimeLocation: chicagoLoc.String()},
+					{TSDayStart: may31, TimeLocation: chicagoLoc.String()},
+				},
+			})
+			require.NoError(t, err)
+
+			_, err = f.UpdateHistorySummary(ctx, chicagoSiteID, "2026-06", types.HistorySummary{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: jun01, TimeLocation: chicagoLoc.String()},
+				},
+			})
+			require.NoError(t, err)
+
+			// 2026-06-01T02:00:00Z is 2026-05-31 21:00 CDT in America/Chicago; within the first
+			// 12 hours of a UTC month, GetHistorySummaries must step back to 2026-05 so May 31 CDT
+			// is included alongside June 1 CDT.
+			resUTCDay1, err := f.GetHistorySummaries(
+				ctx,
+				chicagoSiteID,
+				time.Date(2026, 6, 1, 2, 0, 0, 0, time.UTC),
+				time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+			)
+			require.NoError(t, err)
+			if assert.Len(t, resUTCDay1, 2) {
+				assert.Equal(t, "2026-05-01", resUTCDay1[0].Energy[0].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
+				assert.Equal(t, "2026-05-31", resUTCDay1[0].Energy[1].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
+				assert.Equal(t, "2026-06-01", resUTCDay1[1].Energy[0].TSDayStart.In(chicagoLoc).Format("2006-01-02"))
 			}
 		})
 	})

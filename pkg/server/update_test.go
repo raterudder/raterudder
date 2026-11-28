@@ -5491,7 +5491,7 @@ func TestGetFuturePrices(t *testing.T) {
 	})
 }
 
-func TestSyncHistorySummaryRange(t *testing.T) {
+func TestSyncHistorySummaryWindow(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 
@@ -5576,7 +5576,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			nowFunc: func() time.Time { return now },
 		}
 
-		_, err := srv.syncHistorySummaryRange(context.Background(), "site1", yesterday, now, false)
+		_, err := srv.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, now, false, nil)
 		require.NoError(t, err)
 		mockS.AssertExpectations(t)
 
@@ -5637,7 +5637,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockDefer,
 			nowFunc: func() time.Time { return earlyNow },
 		}
-		updated, err := srvDefer.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		updated, err := srvDefer.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockDefer.AssertNotCalled(t, "GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -5666,7 +5666,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockFresh,
 			nowFunc: func() time.Time { return earlyNow },
 		}
-		updated, err = srvFresh.syncHistorySummaryRange(context.Background(), "site1", yesterday, earlyNow, false)
+		updated, err = srvFresh.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Len(t, updated, 1)
 		if assert.Len(t, archivedFresh.Weather, 1) {
@@ -5690,7 +5690,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			storage: mockFallback,
 			nowFunc: func() time.Time { return sixHourNow },
 		}
-		updated, err = srvFallback.syncHistorySummaryRange(context.Background(), "site1", yesterday, sixHourNow, false)
+		updated, err = srvFallback.syncHistorySummaryWindow(context.Background(), "site1", yesterday, true, yesterday, true, sixHourNow, false, nil)
 		require.NoError(t, err)
 		assert.Len(t, updated, 1)
 		if assert.Len(t, archivedFallback.Weather, 1) {
@@ -5736,7 +5736,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 			nowFunc: func() time.Time { return earlyNow },
 		}
 
-		updated, err := srv.syncHistorySummaryRange(context.Background(), "site1", dstDay, earlyNow, false)
+		updated, err := srv.syncHistorySummaryWindow(context.Background(), "site1", dstDay, true, dstDay, true, earlyNow, false, nil)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockS.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -5754,7 +5754,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 		mockEmpty.On("GetWeather", mock.Anything, "site1", day1, truncateDay(now)).Return([]types.Weather{}, nil).Once()
 		srvEmpty := &Server{storage: mockEmpty, nowFunc: func() time.Time { return now }}
 
-		updated, err := srvEmpty.syncHistorySummaryRange(context.Background(), "site1", day1, now, true)
+		updated, err := srvEmpty.syncHistorySummaryWindow(context.Background(), "site1", day1, true, day1, true, now, true, nil)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockEmpty.AssertNotCalled(t, "UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -5773,7 +5773,7 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 		mockArchived.On("GetEnergyHistory", mock.Anything, "site1", day1, truncateDay(now)).Return([]types.DailyEnergyStats{}, nil).Once()
 		srvArchived := &Server{storage: mockArchived, nowFunc: func() time.Time { return now }}
 
-		updated, err = srvArchived.syncHistorySummaryUpdate(context.Background(), "site1", day1, true, day2.AddDate(0, 0, 1), true, now, existing)
+		updated, err = srvArchived.syncHistorySummaryWindow(context.Background(), "site1", day1, true, day2.AddDate(0, 0, 1), true, now, false, existing)
 		require.NoError(t, err)
 		assert.Empty(t, updated)
 		mockArchived.AssertNotCalled(t, "GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything)

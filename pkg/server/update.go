@@ -432,7 +432,7 @@ func (s *Server) performSiteUpdate(
 	latestEnergyDay, latestWeatherDay := getSummaryLatestDates(existingSummaries, siteLoc)
 	if len(existingSummaries) == 0 || (latestEnergyDay.IsZero() && latestWeatherDay.IsZero()) {
 		// Trigger initial backfill only when no summarized energy or weather exists yet
-		newSummaries, err = s.backfillHistorySummariesWithExisting(ctx, siteID, now, settings.Location != nil, existingSummaries)
+		newSummaries, err = s.backfillHistorySummaries(ctx, siteID, now, settings.Location != nil, existingSummaries)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to backfill summaries", slog.Any("error", err))
 		} else if len(newSummaries) > 0 {
@@ -454,7 +454,7 @@ func (s *Server) performSiteUpdate(
 		}
 
 		if (needEnergy && !energyStart.After(yesterdayStart)) || (needWeather && !weatherStart.After(yesterdayStart)) {
-			newSummaries, err = s.syncHistorySummaryUpdate(
+			newSummaries, err = s.syncHistorySummaryWindow(
 				ctx,
 				siteID,
 				energyStart,
@@ -462,6 +462,7 @@ func (s *Server) performSiteUpdate(
 				weatherStart,
 				needWeather,
 				now,
+				false,
 				existingSummaries,
 			)
 			if err != nil {
@@ -1684,7 +1685,7 @@ func (s *Server) getCombinedHistory(
 
 	// Callers like handleHistoryEnergy may pass targetDate+1d as now, so cap
 	// expectedLatestDay at the real expected latest day. Defer behind-schedule warnings
-	// for yesterday until 6 hours after local midnight to match syncHistorySummaryRange.
+	// for yesterday until 6 hours after local midnight to match syncHistorySummaryWindow.
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
 	realNowLocal := s.now().In(siteLoc)
 	realTodayStart := truncateDay(realNowLocal)
@@ -1873,67 +1874,26 @@ func getSummaryLatestDates(summaries []types.HistorySummary, loc *time.Location)
 	return latestEnergy, latestWeather
 }
 
-func (s *Server) backfillStartForTime(now time.Time) time.Time {
-	loc := now.Location()
-	todayStart := truncateDay(now)
-	if now.Day() < 15 {
-		prevMonth := todayStart.AddDate(0, -1, 0)
-		return time.Date(prevMonth.Year(), prevMonth.Month(), 1, 0, 0, 0, 0, loc)
-	}
-	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-}
-
 // backfillHistorySummaries compiles and stores historical summaries for the current month,
 // and optionally the previous month if today is less than 15 days into the current month.
-func (s *Server) backfillHistorySummaries(ctx context.Context, siteID string, now time.Time) ([]types.HistorySummary, error) {
-	backfillStart := s.backfillStartForTime(now)
-	return s.syncHistorySummaryRange(ctx, siteID, backfillStart, now, true)
-}
-
-func (s *Server) backfillHistorySummariesWithExisting(
+func (s *Server) backfillHistorySummaries(
 	ctx context.Context,
 	siteID string,
 	now time.Time,
 	fetchWeather bool,
 	existing []types.HistorySummary,
 ) ([]types.HistorySummary, error) {
-	backfillStart := s.backfillStartForTime(now)
+	loc := now.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
+	todayStart := truncateDay(now)
+	backfillStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+	if now.Day() < 15 {
+		prevMonth := todayStart.AddDate(0, -1, 0)
+		backfillStart = time.Date(prevMonth.Year(), prevMonth.Month(), 1, 0, 0, 0, 0, loc)
+	}
 	return s.syncHistorySummaryWindow(ctx, siteID, backfillStart, true, backfillStart, fetchWeather, now, true, existing)
-}
-
-// updateHistorySummary checks and commits completed days since latestDayStart
-// up to yesterday.
-func (s *Server) updateHistorySummary(
-	ctx context.Context,
-	siteID string,
-	latestDayStart,
-	now time.Time,
-) ([]types.HistorySummary, error) {
-	candidateStart := latestDayStart.AddDate(0, 0, 1)
-	return s.syncHistorySummaryRange(ctx, siteID, candidateStart, now, false)
-}
-
-func (s *Server) syncHistorySummaryRange(
-	ctx context.Context,
-	siteID string,
-	startDay,
-	now time.Time,
-	isBackfill bool,
-) ([]types.HistorySummary, error) {
-	return s.syncHistorySummaryWindow(ctx, siteID, startDay, true, startDay, true, now, isBackfill, nil)
-}
-
-func (s *Server) syncHistorySummaryUpdate(
-	ctx context.Context,
-	siteID string,
-	energyStart time.Time,
-	fetchEnergy bool,
-	weatherStart time.Time,
-	fetchWeather bool,
-	now time.Time,
-	existing []types.HistorySummary,
-) ([]types.HistorySummary, error) {
-	return s.syncHistorySummaryWindow(ctx, siteID, energyStart, fetchEnergy, weatherStart, fetchWeather, now, false, existing)
 }
 
 func (s *Server) syncHistorySummaryWindow(
@@ -2039,7 +1999,7 @@ func (s *Server) syncHistorySummaryWindow(
 
 	weatherStatsByDate := make(map[string]types.Weather)
 	for _, stat := range weatherStats {
-		wLoc := getLocation(stat.TimeLocation, stat.TSDayStart.Location())
+		wLoc := getLocation(stat.TimeLocation, loc)
 		weatherStatsByDate[stat.TSDayStart.In(wLoc).Format("2006-01-02")] = stat
 	}
 

@@ -804,7 +804,7 @@ func (s *Server) getSiteSavingsWithSettings(
 	}
 
 	baselineReserveForTime := inferDailyBaselineReserve(
-		lookbackStart,
+		energyLookbackStart,
 		maxEnd,
 		periods,
 		siteLoc,
@@ -812,7 +812,7 @@ func (s *Server) getSiteSavingsWithSettings(
 		settings.MinBatterySOC,
 	)
 
-	initialSOC := max(baselineReserveForTime(lookbackStart), minDefaultInitialSOC)
+	initialSOC := max(baselineReserveForTime(energyLookbackStart), minDefaultInitialSOC)
 	for _, stat := range energyStats {
 		if stat.MinBatterySOC > 0 || stat.MaxBatterySOC > 0 {
 			// Hourly EnergyStats only records the min and max SOC reached during the hour, not the

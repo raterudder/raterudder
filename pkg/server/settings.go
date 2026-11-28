@@ -698,7 +698,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		log.Ctx(ctx).InfoContext(ctx, "triggering history summary update after settings backfill")
 		ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer done()
-		if _, err := s.backfillHistorySummaries(ctx, siteID, s.now()); err != nil {
+		now := s.now()
+		if newSettings.Location != nil && newSettings.Location.TimeZone != "" {
+			if loc, err := time.LoadLocation(newSettings.Location.TimeZone); err == nil {
+				now = now.In(loc)
+			}
+		}
+		if _, err := s.backfillHistorySummaries(ctx, siteID, now, newSettings.Location != nil, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to backfill history summaries after settings update", slog.Any("error", err))
 		}
 	}

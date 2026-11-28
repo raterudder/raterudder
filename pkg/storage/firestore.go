@@ -2206,18 +2206,27 @@ func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID stri
 	// Each summary document covers at most one calendar month. Any summary with data overlapping
 	// [start, end) must have earliestDate < end. To avoid scanning all prior history, we bound the
 	// lower end to the 1st of start's month minus 14 hours (the maximum positive UTC offset,
-	// covering Australia/Sydney +10/+11, Europe/London +1, and DST shifts when start is in UTC)
-	// without stepping back into the previous calendar month on local day 1.
+	// covering Australia/Sydney +10/+11, Europe/London +1, and DST shifts) without stepping back
+	// into the previous calendar month on localized day-1 queries. When a caller passes a UTC start
+	// within the first 12 hours of the month (the maximum negative UTC offset, e.g. 2026-06-01T02:00:00Z
+	// which is 2026-05-31 21:00 CDT in America/Chicago), we step back to the previous calendar month
+	// so negative-UTC-offset sites still match the prior month's summary.
 	// The alternative is calculating all of the months and then using GetAll but we would pay for
 	// a lookup for each month even if the site has no data. By doing a query that can return nothing
 	// we save Firestore reads.
-	const maxPositiveUTCOffset = 14 * time.Hour
+	const (
+		maxPositiveUTCOffset = 14 * time.Hour
+		maxNegativeUTCOffset = 12 * time.Hour
+	)
 	loc := start.Location()
 	if loc == nil {
 		loc = time.UTC
 	}
 	monthStart := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, loc)
 	queryStart := monthStart.Add(-maxPositiveUTCOffset)
+	if loc == time.UTC && start.Sub(monthStart) < maxNegativeUTCOffset {
+		queryStart = monthStart.AddDate(0, -1, 0)
+	}
 
 	iter := coll.
 		Where("earliestDate", ">=", queryStart).
