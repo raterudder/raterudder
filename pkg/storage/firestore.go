@@ -2475,6 +2475,8 @@ func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestor
 	return nil
 }
 
+const maxUserPushSubscriptions = MaxUserPushSubscriptions
+
 func buildSubscriptionIDs(subs []types.PushSubscription) []string {
 	subIDs := make([]string, 0, len(subs)*2)
 	for _, s := range subs {
@@ -2536,6 +2538,9 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 			}
 		}
 		if !found {
+			if len(user.Subscriptions) >= maxUserPushSubscriptions {
+				return nil, ErrMaxPushSubscriptionsExceeded
+			}
 			user.Subscriptions = append(user.Subscriptions, sub)
 		}
 
@@ -2660,100 +2665,167 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 	prevHash := sha256.Sum256([]byte(prevEndpoint))
 	prevID := hex.EncodeToString(prevHash[:])
 
-	// Query users collection by subscriptionIDs containing prevID
+	// Do not use Limit(1): multiple user documents can share a subscriptionIDs entry,
+	// for example when two accounts subscribe from the same browser profile or from
+	// legacy client-supplied subscription IDs.
 	iter := f.client.Collection("users").
 		Where("subscriptionIDs", "array-contains", prevID).
-		Limit(1).
 		Documents(ctx)
 	defer iter.Stop()
 
-	doc, err := iter.Next()
-	if errors.Is(err, iterator.Done) {
-		return fmt.Errorf("%w: subscription %s", ErrUserNotFound, prevID)
+	type cleanupTarget struct {
+		userID string
+		sites  []types.UserSite
 	}
-	if err != nil {
-		return fmt.Errorf("failed to query subscription by ID: %w", err)
-	}
+	var candidateRefs []*firestore.DocumentRef
+	sawAuthMismatch := false
 
-	docRef := doc.Ref
-
-	var cleanupUserID string
-	var userSites []types.UserSite
-	noRemainingSubscriptions := false
-
-	_, err = f.readModifyWriteDoc(ctx, docRef, func(docSnap *firestore.DocumentSnapshot) (map[string]any, error) {
-		if docSnap == nil {
-			return nil, fmt.Errorf("%w: subscription %s", ErrUserNotFound, prevID)
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to query subscription by ID: %w", err)
 		}
 
-		val, err := docSnap.DataAt("json")
+		val, err := doc.DataAt("json")
 		if err != nil {
-			return nil, fmt.Errorf("missing user json: %w", err)
+			continue
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return nil, fmt.Errorf("user json is not a string")
+			continue
 		}
-
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user: %w", err)
+			continue
 		}
 
-		targetIndex := -1
-		for i, existing := range user.Subscriptions {
-			if existing.ID == prevID || existing.Endpoint == prevEndpoint {
-				if subtle.ConstantTimeCompare([]byte(existing.Keys.Auth), []byte(prevAuth)) != 1 {
-					return nil, fmt.Errorf("invalid subscription authentication secret")
+		matchedDoc := false
+		for _, existing := range user.Subscriptions {
+			if existing.Endpoint == prevEndpoint {
+				if subtle.ConstantTimeCompare([]byte(existing.Keys.Auth), []byte(prevAuth)) == 1 {
+					matchedDoc = true
+					break
 				}
-				targetIndex = i
-				break
+				sawAuthMismatch = true
 			}
 		}
-		if targetIndex == -1 {
-			return nil, fmt.Errorf("subscription not found on user")
+		if matchedDoc {
+			candidateRefs = append(candidateRefs, doc.Ref)
 		}
+	}
+	iter.Stop()
 
-		if newSub != nil && newSub.Endpoint != "" {
-			if newSub.ID == "" {
-				h := sha256.Sum256([]byte(newSub.Endpoint))
-				newSub.ID = hex.EncodeToString(h[:])
-			}
-			user.Subscriptions[targetIndex] = *newSub
-		} else {
-			user.Subscriptions = append(user.Subscriptions[:targetIndex], user.Subscriptions[targetIndex+1:]...)
-		}
+	var cleanups []cleanupTarget
+	updatedCount := 0
 
-		noRemainingSubscriptions = len(user.Subscriptions) == 0
-		if noRemainingSubscriptions {
-			cleanupUserID = user.ID
-			if cleanupUserID == "" {
-				cleanupUserID = docSnap.Ref.ID
-			}
-			userSites = slices.Clone(user.Sites)
-		} else {
+	for _, docRef := range candidateRefs {
+		var cleanupUserID string
+		var userSites []types.UserSite
+		noRemainingSubscriptions := false
+		docUpdated := false
+
+		_, err := f.readModifyWriteDoc(ctx, docRef, func(docSnap *firestore.DocumentSnapshot) (map[string]any, error) {
+			docUpdated = false
+			noRemainingSubscriptions = false
 			cleanupUserID = ""
 			userSites = nil
-		}
 
-		subIDs := buildSubscriptionIDs(user.Subscriptions)
+			if docSnap == nil {
+				return nil, nil
+			}
 
-		userJSON, err := json.Marshal(user)
+			val, err := docSnap.DataAt("json")
+			if err != nil {
+				return nil, fmt.Errorf("missing user json: %w", err)
+			}
+			jsonStr, ok := val.(string)
+			if !ok {
+				return nil, fmt.Errorf("user json is not a string")
+			}
+
+			var user types.User
+			if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal user: %w", err)
+			}
+
+			targetIndex := -1
+			for i, existing := range user.Subscriptions {
+				if existing.Endpoint == prevEndpoint {
+					if subtle.ConstantTimeCompare([]byte(existing.Keys.Auth), []byte(prevAuth)) == 1 {
+						targetIndex = i
+						break
+					}
+					sawAuthMismatch = true
+				}
+			}
+			if targetIndex == -1 {
+				return nil, nil
+			}
+
+			if newSub != nil && newSub.Endpoint != "" {
+				subCopy := *newSub
+				if subCopy.ID == "" {
+					h := sha256.Sum256([]byte(subCopy.Endpoint))
+					subCopy.ID = hex.EncodeToString(h[:])
+				}
+				user.Subscriptions[targetIndex] = subCopy
+				deduped := make([]types.PushSubscription, 0, len(user.Subscriptions))
+				for i, s := range user.Subscriptions {
+					if i != targetIndex && s.Endpoint == subCopy.Endpoint {
+						continue
+					}
+					deduped = append(deduped, s)
+				}
+				user.Subscriptions = deduped
+			} else {
+				user.Subscriptions = append(user.Subscriptions[:targetIndex], user.Subscriptions[targetIndex+1:]...)
+			}
+
+			docUpdated = true
+			noRemainingSubscriptions = len(user.Subscriptions) == 0
+			if noRemainingSubscriptions {
+				cleanupUserID = user.ID
+				if cleanupUserID == "" {
+					cleanupUserID = docSnap.Ref.ID
+				}
+				userSites = slices.Clone(user.Sites)
+			}
+
+			subIDs := buildSubscriptionIDs(user.Subscriptions)
+
+			userJSON, err := json.Marshal(user)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal user: %w", err)
+			}
+
+			return map[string]any{
+				"json":            string(userJSON),
+				"subscriptionIDs": subIDs,
+			}, nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal user: %w", err)
+			return err
 		}
-
-		return map[string]any{
-			"json":            string(userJSON),
-			"subscriptionIDs": subIDs,
-		}, nil
-	})
-	if err != nil {
-		return err
+		if docUpdated {
+			updatedCount++
+			if noRemainingSubscriptions {
+				cleanups = append(cleanups, cleanupTarget{userID: cleanupUserID, sites: userSites})
+			}
+		}
 	}
 
-	if noRemainingSubscriptions {
-		f.cleanupUserSiteNotifications(ctx, cleanupUserID, userSites)
+	if updatedCount == 0 {
+		if sawAuthMismatch {
+			return errors.New("invalid subscription authentication secret")
+		}
+		return fmt.Errorf("%w: subscription %s", ErrUserNotFound, prevID)
+	}
+
+	for _, c := range cleanups {
+		f.cleanupUserSiteNotifications(ctx, c.userID, c.sites)
 	}
 
 	return nil

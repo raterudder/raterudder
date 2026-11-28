@@ -110,6 +110,7 @@ type Server struct {
 	vapidPublicKey      string
 	vapidSubject        string
 	gridOutageDelay     time.Duration
+	pushDispatchTimeout time.Duration
 	settingsSyncTimeout time.Duration
 	weatherRetryDelay   time.Duration
 
