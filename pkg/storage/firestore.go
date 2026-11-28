@@ -61,17 +61,9 @@ func withActionHistoryTimeout(ctx context.Context) (context.Context, context.Can
 // FirestoreProvider implements the Provider interface using Google Cloud Firestore.
 // It persists settings, prices, and actions to Firestore collections.
 type FirestoreProvider struct {
-	client         *firestore.Client
-	projectID      string
-	database       string
-	attemptTimeout time.Duration
-}
-
-func (f *FirestoreProvider) getAttemptTimeout() time.Duration {
-	if f.attemptTimeout > 0 {
-		return f.attemptTimeout
-	}
-	return defaultAttemptTimeout
+	client    *firestore.Client
+	projectID string
+	database  string
 }
 
 // configuredFirestore sets up the Firestore provider.
@@ -682,6 +674,120 @@ func decodeRawStoredPlan(p *rawStoredPlan, loc *time.Location, expandPeriods boo
 	return plan, nil
 }
 
+type actionBucketJSON struct {
+	id   string
+	json string
+}
+
+type actionHistoryDecoder struct {
+	start, end            time.Time
+	planWindow            ActionPlanWindow
+	selectivePlans        bool
+	locCache              types.LocationCache
+	rollup                rawSiteActionBucket
+	actions               []types.Action
+	latestUnexpandedIdx   int
+	latestUnexpandedDocID string
+	latestUnexpandedPlan  rawStoredPlan
+	latestPlanTimestamp   time.Time
+}
+
+func newActionHistoryDecoder(ctx context.Context, start, end time.Time) actionHistoryDecoder {
+	planWindow, selectivePlans := ActionPlanWindowFromContext(ctx)
+	return actionHistoryDecoder{
+		start:               start,
+		end:                 end,
+		planWindow:          planWindow,
+		selectivePlans:      selectivePlans,
+		latestUnexpandedIdx: -1,
+	}
+}
+
+func (d *actionHistoryDecoder) decodeBucket(ctx context.Context, siteID, docID, jsonStr string) error {
+	clear(d.rollup.Actions)
+	d.rollup.Actions = d.rollup.Actions[:0]
+	d.rollup.TSBucketStart = time.Time{}
+	if err := json.Unmarshal(stringAsReadOnlyBytes(jsonStr), &d.rollup); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action rollup", slog.String("actionID", docID), slog.String("siteID", siteID), slog.Any("err", err))
+		return fmt.Errorf("failed to unmarshal action rollup (id=%s): %w", docID, err)
+	}
+
+	updatedLatestUnexpanded := false
+	for i := range d.rollup.Actions {
+		rawAct := &d.rollup.Actions[i]
+		if rawAct.Timestamp.Before(d.start) || !rawAct.Timestamp.Before(d.end) {
+			continue
+		}
+		act := rawAct.Action
+		loc := act.RestoreLocations(d.locCache.Load)
+
+		planPresent := rawAct.Plan.isPresent()
+		hasPlanPeriods := planPresent && (hasJSONArrayElements(rawAct.Plan.ShortPeriods) || hasJSONArrayElements(rawAct.Plan.Periods))
+		expandThis := !d.selectivePlans || (!act.Timestamp.Before(d.planWindow.ExpandStart) && act.Timestamp.Before(d.planWindow.ExpandEnd))
+
+		if expandThis {
+			if planPresent {
+				expandedPlan, err := decodeRawStoredPlan(&rawAct.Plan, loc, true)
+				if err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action plan", slog.String("actionID", docID), slog.String("siteID", siteID), slog.Any("err", err))
+					return fmt.Errorf("failed to unmarshal action plan (id=%s): %w", docID, err)
+				}
+				act.Plan = expandedPlan
+				if hasPlanPeriods && (d.latestPlanTimestamp.IsZero() || !act.Timestamp.Before(d.latestPlanTimestamp)) {
+					d.latestPlanTimestamp = act.Timestamp
+					d.latestUnexpandedIdx = -1
+					d.latestUnexpandedDocID = ""
+					d.latestUnexpandedPlan = rawStoredPlan{}
+					updatedLatestUnexpanded = false
+				}
+			}
+		} else if planPresent {
+			if act.ReserveSOC == 0 {
+				if rs := firstRawPeriodReserveSOC(&rawAct.Plan); rs > 0 {
+					act.ReserveSOC = rs
+				}
+			}
+			if hasPlanPeriods && (d.latestPlanTimestamp.IsZero() || !act.Timestamp.Before(d.latestPlanTimestamp)) {
+				d.latestPlanTimestamp = act.Timestamp
+				if d.planWindow.IncludeLatestPlan {
+					d.latestUnexpandedIdx = len(d.actions)
+					d.latestUnexpandedDocID = docID
+					d.latestUnexpandedPlan = rawAct.Plan
+					updatedLatestUnexpanded = true
+				}
+			}
+		}
+
+		d.actions = append(d.actions, act)
+	}
+	if updatedLatestUnexpanded && d.latestUnexpandedIdx >= 0 {
+		d.latestUnexpandedPlan = cloneRawStoredPlan(d.latestUnexpandedPlan)
+	}
+	return nil
+}
+
+func (d *actionHistoryDecoder) finish(ctx context.Context, siteID string) ([]types.Action, error) {
+	if d.planWindow.IncludeLatestPlan && d.latestUnexpandedIdx >= 0 && d.latestUnexpandedIdx < len(d.actions) {
+		latestPlan, err := decodeRawStoredPlan(&d.latestUnexpandedPlan, nil, false)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action plan", slog.String("actionID", d.latestUnexpandedDocID), slog.String("siteID", siteID), slog.Any("err", err))
+			return nil, fmt.Errorf("failed to unmarshal latest action plan: %w", err)
+		}
+		d.actions[d.latestUnexpandedIdx].Plan = latestPlan
+	}
+	return d.actions, nil
+}
+
+func decodeActionHistoryBuckets(ctx context.Context, siteID string, start, end time.Time, buckets []actionBucketJSON) ([]types.Action, error) {
+	dec := newActionHistoryDecoder(ctx, start, end)
+	for _, b := range buckets {
+		if err := dec.decodeBucket(ctx, siteID, b.id, b.json); err != nil {
+			return nil, err
+		}
+	}
+	return dec.finish(ctx, siteID)
+}
+
 // GetActionHistory retrieves action records within the specified time range from 12-hour rollup buckets.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
 	ctx, cancel := withActionHistoryTimeout(ctx)
@@ -696,21 +802,14 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 	}
 
 	_, queryStart := actionBucket(start)
-	planWindow, selectivePlans := ActionPlanWindowFromContext(ctx)
-
-	var actions []types.Action
-	var locCache types.LocationCache
+	dec := newActionHistoryDecoder(ctx, start, end)
 	var lastDoc *firestore.DocumentSnapshot
-
-	latestUnexpandedIdx := -1
-	var latestUnexpandedPlan rawStoredPlan
-	var latestPlanTimestamp time.Time
 
 	backoff := 50 * time.Millisecond
 	consecutiveFailures := 0
 
 	for totalAttempt := 0; totalAttempt < maxStreamTotalAttempts; totalAttempt++ {
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, f.getAttemptTimeout())
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
 		q := coll.
 			Where("earliestDate", ">=", queryStart).
 			Where("earliestDate", "<", end.UTC()).
@@ -722,7 +821,6 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 		iter := q.Documents(attemptCtx)
 		progressed := false
 		var iterErr error
-		var rollup rawSiteActionBucket
 
 		for {
 			doc, err := iter.Next()
@@ -738,7 +836,7 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 			if err != nil {
 				iter.Stop()
 				attemptCancel()
-				log.Ctx(ctx).WarnContext(ctx, "action doc missing json", slog.String("actionID", doc.Ref.ID), slog.Any("err", err))
+				log.Ctx(ctx).WarnContext(ctx, "action doc missing json", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
 				return nil, fmt.Errorf("action document %s missing 'json' field: %w", doc.Ref.ID, err)
 			}
 
@@ -746,64 +844,14 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 			if !ok {
 				iter.Stop()
 				attemptCancel()
-				log.Ctx(ctx).WarnContext(ctx, "action doc json not string", slog.String("actionID", doc.Ref.ID))
+				log.Ctx(ctx).WarnContext(ctx, "action doc json not string", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID))
 				return nil, fmt.Errorf("action document %s 'json' field is not string", doc.Ref.ID)
 			}
 
-			clear(rollup.Actions)
-			rollup.Actions = rollup.Actions[:0]
-			rollup.TSBucketStart = time.Time{}
-			if err := json.Unmarshal(stringAsReadOnlyBytes(jsonStr), &rollup); err != nil {
+			if err := dec.decodeBucket(ctx, siteID, doc.Ref.ID, jsonStr); err != nil {
 				iter.Stop()
 				attemptCancel()
-				log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action rollup", slog.String("actionID", doc.Ref.ID), slog.Any("err", err))
-				return nil, fmt.Errorf("failed to unmarshal action rollup (id=%s): %w", doc.Ref.ID, err)
-			}
-
-			for i := range rollup.Actions {
-				rawAct := &rollup.Actions[i]
-				if rawAct.Timestamp.Before(start) || !rawAct.Timestamp.Before(end) {
-					continue
-				}
-				act := rawAct.Action
-				loc := act.RestoreLocations(locCache.Load)
-
-				planPresent := rawAct.Plan.isPresent()
-				hasPlanPeriods := planPresent && (hasJSONArrayElements(rawAct.Plan.ShortPeriods) || hasJSONArrayElements(rawAct.Plan.Periods))
-				expandThis := !selectivePlans || (!act.Timestamp.Before(planWindow.ExpandStart) && act.Timestamp.Before(planWindow.ExpandEnd))
-
-				if expandThis {
-					if planPresent {
-						expandedPlan, err := decodeRawStoredPlan(&rawAct.Plan, loc, true)
-						if err != nil {
-							iter.Stop()
-							attemptCancel()
-							log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action plan", slog.String("actionID", doc.Ref.ID), slog.Any("err", err))
-							return nil, fmt.Errorf("failed to unmarshal action plan (id=%s): %w", doc.Ref.ID, err)
-						}
-						act.Plan = expandedPlan
-						if hasPlanPeriods && (latestPlanTimestamp.IsZero() || !act.Timestamp.Before(latestPlanTimestamp)) {
-							latestPlanTimestamp = act.Timestamp
-							latestUnexpandedIdx = -1
-							latestUnexpandedPlan = rawStoredPlan{}
-						}
-					}
-				} else if planPresent {
-					if act.ReserveSOC == 0 {
-						if rs := firstRawPeriodReserveSOC(&rawAct.Plan); rs > 0 {
-							act.ReserveSOC = rs
-						}
-					}
-					if hasPlanPeriods && (latestPlanTimestamp.IsZero() || !act.Timestamp.Before(latestPlanTimestamp)) {
-						latestPlanTimestamp = act.Timestamp
-						if planWindow.IncludeLatestPlan {
-							latestUnexpandedIdx = len(actions)
-							latestUnexpandedPlan = cloneRawStoredPlan(rawAct.Plan)
-						}
-					}
-				}
-
-				actions = append(actions, act)
+				return nil, err
 			}
 
 			lastDoc = doc
@@ -815,14 +863,7 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 		attemptCancel()
 
 		if iterErr == nil {
-			if planWindow.IncludeLatestPlan && latestUnexpandedIdx >= 0 && latestUnexpandedIdx < len(actions) {
-				latestPlan, err := decodeRawStoredPlan(&latestUnexpandedPlan, nil, false)
-				if err != nil {
-					return nil, fmt.Errorf("failed to unmarshal latest action plan: %w", err)
-				}
-				actions[latestUnexpandedIdx].Plan = latestPlan
-			}
-			return actions, nil
+			return dec.finish(ctx, siteID)
 		}
 
 		if progressed {
@@ -838,6 +879,7 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 				lastBucketID = lastDoc.Ref.ID
 			}
 			log.Ctx(ctx).WarnContext(ctx, "firestore action history stream failed with retryable error, resuming",
+				slog.String("siteID", siteID),
 				slog.String("lastBucket", lastBucketID),
 				slog.Int("attempt", totalAttempt+1),
 				slog.Any("error", iterErr),
@@ -872,7 +914,7 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 
 	var doc *firestore.DocumentSnapshot
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, f.getAttemptTimeout())
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, defaultAttemptTimeout)
 		iter := coll.
 			OrderBy("latestDate", firestore.Desc).
 			Limit(1).
@@ -891,6 +933,7 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 		}
 		if (isRetryableFirestoreErr(iterErr) || attemptTimedOut) && ctx.Err() == nil && attempt < maxAttempts-1 {
 			log.Ctx(ctx).WarnContext(ctx, "firestore latest action read failed with retryable error, retrying",
+				slog.String("siteID", siteID),
 				slog.Int("attempt", attempt+1),
 				slog.Any("error", iterErr),
 			)

@@ -265,7 +265,7 @@ func TestActionStorageCompaction(t *testing.T) {
 
 		var restored Action
 		require.NoError(t, json.Unmarshal(data, &restored))
-		restored.ExpandFromStorage()
+		restored.ExpandFromStorage(nil)
 		assert.Empty(t, restored.Location)
 		assert.True(t, reflect.DeepEqual(act, restored))
 		assert.Equal(t, act, restored)
@@ -365,7 +365,7 @@ func TestActionStorageCompaction(t *testing.T) {
 
 		var restored Action
 		require.NoError(t, json.Unmarshal(data, &restored))
-		restored.ExpandFromStorage()
+		restored.ExpandFromStorage(nil)
 
 		assert.Empty(t, restored.Location)
 		if assert.NotNil(t, restored.Plan) {
@@ -586,6 +586,17 @@ func TestActionStorageCompaction(t *testing.T) {
 			assert.Nil(t, expandedCopy.Plan.ShortPeriods)
 			assert.Equal(t, 25.0, expandedCopy.Plan.Periods[0].ReserveSOC)
 			assert.Equal(t, "America/Chicago", expandedCopy.Plan.Periods[0].TSStart.Location().String())
+		}
+
+		// ExpandFromStorage with custom loader reuses cached location without extra loads
+		var fullRestored Action
+		require.NoError(t, json.Unmarshal(rawBytes, &fullRestored))
+		fullRestored.ExpandFromStorage(countingLoader)
+		assert.Equal(t, 1, loadCalls)
+		assert.Same(t, sharedReqLoc, fullRestored.SystemTimestamp.Location())
+		if assert.NotNil(t, fullRestored.Plan) && assert.Len(t, fullRestored.Plan.Periods, 1) {
+			assert.Nil(t, fullRestored.Plan.ShortPeriods)
+			assert.Same(t, sharedReqLoc, fullRestored.Plan.Periods[0].TSStart.Location())
 		}
 	})
 }

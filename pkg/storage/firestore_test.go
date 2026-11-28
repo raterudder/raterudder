@@ -9,28 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
-	"runtime"
-	"runtime/debug"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"cloud.google.com/go/firestore"
-	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/api/option"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func ctxWithCapturedWarnLogger(buf *bytes.Buffer) context.Context {
@@ -497,6 +486,406 @@ func TestFirestoreProvider(t *testing.T) {
 				assert.Equal(t, types.BatteryModeStandby, gotAfterUpdate[0].BatteryMode)
 				assert.Equal(t, "Second sub-second action", gotAfterUpdate[1].Description)
 			}
+		})
+
+		buildMultiBucketFixtureActions := func(t *testing.T, startUTC time.Time, numBuckets, actionsPerBucket, periodsPerPlan int, reserveSOC float64) []types.Action {
+			t.Helper()
+			loc, err := time.LoadLocation("America/Chicago")
+			require.NoError(t, err)
+
+			out := make([]types.Action, 0, numBuckets*actionsPerBucket)
+			for bIdx := 0; bIdx < numBuckets; bIdx++ {
+				bucketStart := startUTC.Add(time.Duration(bIdx) * 12 * time.Hour)
+				for aIdx := 0; aIdx < actionsPerBucket; aIdx++ {
+					actUTC := bucketStart.Add(time.Duration(aIdx) * 20 * time.Minute)
+					actLocal := actUTC.In(loc)
+
+					periods := make([]types.PlanPeriod, periodsPerPlan)
+					for pIdx := 0; pIdx < periodsPerPlan; pIdx++ {
+						pStart := actLocal.Add(time.Duration(pIdx) * 20 * time.Minute)
+						pEnd := pStart.Add(20 * time.Minute)
+						periods[pIdx] = types.PlanPeriod{
+							TSStart:       pStart,
+							TSEnd:         pEnd,
+							DurationHours: pEnd.Sub(pStart).Hours(),
+							ImportDollars: 0.09 + float64(pIdx)*0.01,
+							ExportDollars: 0.03,
+							BatteryMode:   types.BatteryModeLoad,
+							SolarMode:     types.SolarModeAny,
+							Reason:        types.ActionReasonSufficientBatteryTillCharge,
+							StartSOC:      80.0,
+							EndSOC:        77.0,
+							ReserveSOC:    reserveSOC,
+							LoadKWH:       0.6,
+							SolarKWH:      0.2,
+							GridImportKWH: 0.4,
+							CostDollars:   0.036,
+						}
+					}
+
+					var alarms []types.SystemAlarm
+					if aIdx == 0 {
+						alarms = []types.SystemAlarm{
+							{Code: "E42", Name: "TestAlarm", Description: "Synthetic", Timestamp: actLocal},
+						}
+					}
+
+					out = append(out, types.Action{
+						Timestamp:       actUTC,
+						SystemTimestamp: actLocal,
+						BatteryMode:     types.BatteryModeLoad,
+						SolarMode:       types.SolarModeNoExport,
+						Reason:          types.ActionReasonPreventSolarCurtailment,
+						Description:     fmt.Sprintf("bucket-%d-action-%d", bIdx, aIdx),
+						ReserveSOC:      reserveSOC,
+						SystemStatus: types.SystemStatus{
+							Timestamp:          actLocal,
+							TimeLocation:       loc.String(),
+							BatterySOC:         80.0,
+							BatteryCapacityKWH: 27.2,
+							BatteryHeating:     aIdx == 1,
+							VPPActive:          aIdx == 2,
+							GridUnavailable:    aIdx == 3,
+							EmergencyMode:      aIdx == 3,
+							Alarms:             alarms,
+						},
+						Plan: &types.Plan{
+							TSCreated:          actUTC,
+							HorizonHours:       24,
+							TotalProjectedCost: 3.75,
+							Periods:            periods,
+						},
+					})
+				}
+			}
+			return out
+		}
+
+		t.Run("WithoutActionPlans", func(t *testing.T) {
+			siteID := "test-site-without-action-plans"
+			startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+			endUTC := startUTC.Add(4 * 12 * time.Hour)
+
+			fixture := buildMultiBucketFixtureActions(t, startUTC, 4, 4, 6, 22.0)
+			require.NoError(t, f.upsertActions(ctx, siteID, fixture, types.CurrentActionHistoryVersion))
+
+			got, err := f.GetActionHistory(WithoutActionPlans(ctx), siteID, startUTC, endUTC)
+			require.NoError(t, err)
+			require.Len(t, got, 16)
+
+			firstLoc := got[0].SystemTimestamp.Location()
+			require.NotNil(t, firstLoc)
+			assert.Equal(t, "America/Chicago", firstLoc.String())
+
+			sawHeating, sawVPP, sawGridOutage, sawEmergency, sawAlarm := false, false, false, false, false
+			for _, a := range got {
+				assert.Nil(t, a.Plan)
+				assert.Same(t, firstLoc, a.SystemTimestamp.Location())
+				assert.Equal(t, 27.2, a.SystemStatus.BatteryCapacityKWH)
+				assert.Equal(t, 22.0, a.ReserveSOC)
+				if a.SystemStatus.BatteryHeating {
+					sawHeating = true
+				}
+				if a.SystemStatus.VPPActive {
+					sawVPP = true
+				}
+				if a.SystemStatus.GridUnavailable {
+					sawGridOutage = true
+				}
+				if a.SystemStatus.EmergencyMode {
+					sawEmergency = true
+				}
+				if len(a.SystemStatus.Alarms) > 0 {
+					sawAlarm = true
+					assert.Same(t, firstLoc, a.SystemStatus.Alarms[0].Timestamp.Location())
+				}
+			}
+			assert.True(t, sawHeating && sawVPP && sawGridOutage && sawEmergency && sawAlarm)
+		})
+
+		t.Run("WithActionPlanWindow", func(t *testing.T) {
+			siteID := "test-site-action-plan-window"
+			startUTC := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+			bucket1Start := startUTC.Add(12 * time.Hour)
+			bucket2Start := startUTC.Add(24 * time.Hour)
+			bucket3Start := startUTC.Add(36 * time.Hour)
+			endUTC := startUTC.Add(48 * time.Hour)
+
+			fixture := buildMultiBucketFixtureActions(t, startUTC, 4, 4, 6, 24.0)
+			require.NoError(t, f.upsertActions(ctx, siteID, fixture, types.CurrentActionHistoryVersion))
+
+			// Case 1: Latest action with a plan lies outside [ExpandStart, ExpandEnd) -> retains compact ShortPeriods.
+			winCtx := WithActionPlanWindow(ctx, ActionPlanWindow{
+				ExpandStart:       bucket1Start,
+				ExpandEnd:         bucket2Start,
+				IncludeLatestPlan: true,
+			})
+			got, err := f.GetActionHistory(winCtx, siteID, startUTC, endUTC)
+			require.NoError(t, err)
+			require.Len(t, got, 16)
+
+			winLoc := got[0].SystemTimestamp.Location()
+			require.NotNil(t, winLoc)
+			assert.Equal(t, "America/Chicago", winLoc.String())
+
+			expandedCount := 0
+			shortRetainedCount := 0
+			for idx, a := range got {
+				inWindow := !a.Timestamp.Before(bucket1Start) && a.Timestamp.Before(bucket2Start)
+				isLatest := idx == len(got)-1
+				if inWindow {
+					expandedCount++
+					if assert.NotNil(t, a.Plan) {
+						assert.Len(t, a.Plan.Periods, 6)
+						assert.Nil(t, a.Plan.ShortPeriods)
+						assert.Same(t, winLoc, a.Plan.Periods[0].TSStart.Location())
+					}
+				} else if isLatest {
+					shortRetainedCount++
+					if assert.NotNil(t, a.Plan) {
+						assert.Nil(t, a.Plan.Periods)
+						assert.Len(t, a.Plan.ShortPeriods, 6)
+					}
+				} else {
+					assert.Nil(t, a.Plan)
+					assert.Equal(t, 24.0, a.ReserveSOC)
+				}
+			}
+			assert.Equal(t, 4, expandedCount)
+			assert.Equal(t, 1, shortRetainedCount)
+
+			// Case 2: Latest action with a plan is already inside [ExpandStart, ExpandEnd)
+			// (even when followed by a trailing planless action outside the window) -> no out-of-window action retains ShortPeriods.
+			trailingPlanless := types.Action{
+				Timestamp:   endUTC.Add(20 * time.Minute),
+				BatteryMode: types.BatteryModeStandby,
+				SolarMode:   types.SolarModeAny,
+				Description: "trailing-planless-action",
+				ReserveSOC:  24.0,
+			}
+			require.NoError(t, f.InsertAction(ctx, siteID, trailingPlanless))
+
+			inWinLatestCtx := WithActionPlanWindow(ctx, ActionPlanWindow{
+				ExpandStart:       bucket3Start,
+				ExpandEnd:         endUTC,
+				IncludeLatestPlan: true,
+			})
+			gotInWin, err := f.GetActionHistory(inWinLatestCtx, siteID, startUTC, endUTC.Add(time.Hour))
+			require.NoError(t, err)
+			require.Len(t, gotInWin, 17)
+
+			expandedInWin := 0
+			for _, a := range gotInWin {
+				inWindow := !a.Timestamp.Before(bucket3Start) && a.Timestamp.Before(endUTC)
+				if inWindow {
+					expandedInWin++
+					if assert.NotNil(t, a.Plan) {
+						assert.Len(t, a.Plan.Periods, 6)
+						assert.Nil(t, a.Plan.ShortPeriods)
+					}
+				} else {
+					assert.Nil(t, a.Plan)
+					assert.Equal(t, 24.0, a.ReserveSOC)
+				}
+			}
+			assert.Equal(t, 4, expandedInWin)
+		})
+
+		t.Run("LegacyReserveSOCFallback", func(t *testing.T) {
+			siteID := "test-site-legacy-reserve-soc"
+			loc, err := time.LoadLocation("America/Chicago")
+			require.NoError(t, err)
+
+			t0 := time.Date(2026, 6, 10, 2, 0, 0, 0, time.UTC)
+			t1 := t0.Add(12 * time.Hour)
+
+			// Bucket 0: compacted ShortPeriods[0].ReserveSOC when Action.ReserveSOC == 0
+			compactedLegacy := types.Action{
+				Timestamp:       t0,
+				SystemTimestamp: t0.In(loc),
+				BatteryMode:     types.BatteryModeLoad,
+				SolarMode:       types.SolarModeAny,
+				ReserveSOC:      0,
+				SystemStatus:    types.SystemStatus{Timestamp: t0.In(loc), TimeLocation: loc.String()},
+				Plan: &types.Plan{
+					TSCreated:    t0,
+					HorizonHours: 24,
+					Periods: []types.PlanPeriod{
+						{
+							TSStart:       t0.In(loc),
+							TSEnd:         t0.Add(time.Hour).In(loc),
+							DurationHours: 1.0,
+							ReserveSOC:    28.0,
+						},
+					},
+				},
+			}
+			require.NoError(t, f.InsertAction(ctx, siteID, compactedLegacy))
+
+			// Bucket 1: legacy uncompacted Periods[0].ReserveSOC written directly to daily_actions
+			bucket1ID, bucket1Start := actionBucket(t1)
+			uncompactedRollup := types.SiteActionBucket{
+				TSBucketStart: bucket1Start,
+				Actions: []types.Action{
+					{
+						Timestamp:       t1,
+						SystemTimestamp: t1.In(loc),
+						BatteryMode:     types.BatteryModeLoad,
+						SolarMode:       types.SolarModeAny,
+						ReserveSOC:      0,
+						SystemStatus:    types.SystemStatus{Timestamp: t1.In(loc), TimeLocation: loc.String()},
+						Plan: &types.Plan{
+							TSCreated:    t1,
+							HorizonHours: 24,
+							Periods: []types.PlanPeriod{
+								{
+									TSStart:       t1.In(loc),
+									TSEnd:         t1.Add(time.Hour).In(loc),
+									DurationHours: 1.0,
+									ReserveSOC:    33.5,
+								},
+							},
+						},
+					},
+				},
+			}
+			rawLegacyBytes, err := json.Marshal(uncompactedRollup)
+			require.NoError(t, err)
+			assert.Contains(t, string(rawLegacyBytes), `"periods":[`)
+			assert.NotContains(t, string(rawLegacyBytes), `"shortPeriods"`)
+
+			coll, err := f.getCollection(siteID, "daily_actions")
+			require.NoError(t, err)
+			_, err = coll.Doc(bucket1ID).Set(ctx, map[string]any{
+				"json":         string(rawLegacyBytes),
+				"earliestDate": t1,
+				"latestDate":   t1,
+				"version":      1,
+				"tsUpdated":    t1,
+			})
+			require.NoError(t, err)
+
+			// Check under WithoutActionPlans
+			gotNoPlans, err := f.GetActionHistory(WithoutActionPlans(ctx), siteID, t0.Add(-time.Minute), t1.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, gotNoPlans, 2) {
+				assert.Nil(t, gotNoPlans[0].Plan)
+				assert.Equal(t, 28.0, gotNoPlans[0].ReserveSOC)
+				assert.Nil(t, gotNoPlans[1].Plan)
+				assert.Equal(t, 33.5, gotNoPlans[1].ReserveSOC)
+			}
+
+			// Check under WithActionPlanWindow when both actions fall outside [ExpandStart, ExpandEnd)
+			winCtx := WithActionPlanWindow(ctx, ActionPlanWindow{
+				ExpandStart:       t1.Add(2 * time.Hour),
+				ExpandEnd:         t1.Add(3 * time.Hour),
+				IncludeLatestPlan: false,
+			})
+			gotWindowed, err := f.GetActionHistory(winCtx, siteID, t0.Add(-time.Minute), t1.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, gotWindowed, 2) {
+				assert.Nil(t, gotWindowed[0].Plan)
+				assert.Equal(t, 28.0, gotWindowed[0].ReserveSOC)
+				assert.Nil(t, gotWindowed[1].Plan)
+				assert.Equal(t, 33.5, gotWindowed[1].ReserveSOC)
+			}
+		})
+
+		t.Run("GetLatestActionMultipleInBucket", func(t *testing.T) {
+			siteID := "test-site-latest-multi-bucket"
+			startUTC := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+
+			// 2 buckets, 3 actions per bucket -> latest bucket has 3 actions
+			fixture := buildMultiBucketFixtureActions(t, startUTC, 2, 3, 4, 20.0)
+			require.NoError(t, f.upsertActions(ctx, siteID, fixture, types.CurrentActionHistoryVersion))
+
+			latest, err := f.GetLatestAction(ctx, siteID)
+			require.NoError(t, err)
+			require.NotNil(t, latest)
+
+			expectedLast := fixture[len(fixture)-1]
+			assert.Equal(t, expectedLast.Description, latest.Description)
+			assert.True(t, expectedLast.Timestamp.Equal(latest.Timestamp))
+			assert.Equal(t, "America/Chicago", latest.SystemTimestamp.Location().String())
+			assert.Equal(t, 27.2, latest.SystemStatus.BatteryCapacityKWH)
+			if assert.NotNil(t, latest.Plan) && assert.Len(t, latest.Plan.Periods, 4) {
+				assert.Nil(t, latest.Plan.ShortPeriods)
+				assert.Equal(t, "America/Chicago", latest.Plan.Periods[0].TSStart.Location().String())
+			}
+		})
+
+		t.Run("CorruptActionBucketsWarnWithSiteID", func(t *testing.T) {
+			tCorrupt := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
+			bucketID, _ := actionBucket(tCorrupt)
+
+			// 1. Missing "json" field
+			missingSite := "test-site-corrupt-missing"
+			missingColl, err := f.getCollection(missingSite, "daily_actions")
+			require.NoError(t, err)
+			_, err = missingColl.Doc(bucketID).Set(ctx, map[string]any{
+				"earliestDate": tCorrupt,
+				"latestDate":   tCorrupt,
+			})
+			require.NoError(t, err)
+
+			var missingBuf bytes.Buffer
+			_, err = f.GetActionHistory(ctxWithCapturedWarnLogger(&missingBuf), missingSite, tCorrupt.Add(-time.Hour), tCorrupt.Add(time.Hour))
+			assert.ErrorContains(t, err, "missing 'json' field")
+			assert.Contains(t, missingBuf.String(), "action doc missing json")
+			assert.Contains(t, missingBuf.String(), `"siteID":"`+missingSite+`"`)
+
+			// 2. Non-string "json" field
+			nonStrSite := "test-site-corrupt-not-str"
+			nonStrColl, err := f.getCollection(nonStrSite, "daily_actions")
+			require.NoError(t, err)
+			_, err = nonStrColl.Doc(bucketID).Set(ctx, map[string]any{
+				"earliestDate": tCorrupt,
+				"latestDate":   tCorrupt,
+				"json":         42,
+			})
+			require.NoError(t, err)
+
+			var nonStrBuf bytes.Buffer
+			_, err = f.GetActionHistory(ctxWithCapturedWarnLogger(&nonStrBuf), nonStrSite, tCorrupt.Add(-time.Hour), tCorrupt.Add(time.Hour))
+			assert.ErrorContains(t, err, "'json' field is not string")
+			assert.Contains(t, nonStrBuf.String(), "action doc json not string")
+			assert.Contains(t, nonStrBuf.String(), `"siteID":"`+nonStrSite+`"`)
+
+			// 3. Invalid rollup JSON
+			badRollupSite := "test-site-corrupt-bad-rollup"
+			badRollupColl, err := f.getCollection(badRollupSite, "daily_actions")
+			require.NoError(t, err)
+			_, err = badRollupColl.Doc(bucketID).Set(ctx, map[string]any{
+				"earliestDate": tCorrupt,
+				"latestDate":   tCorrupt,
+				"json":         "{corrupt",
+			})
+			require.NoError(t, err)
+
+			var badRollupBuf bytes.Buffer
+			_, err = f.GetActionHistory(ctxWithCapturedWarnLogger(&badRollupBuf), badRollupSite, tCorrupt.Add(-time.Hour), tCorrupt.Add(time.Hour))
+			assert.ErrorContains(t, err, "failed to unmarshal action rollup")
+			assert.Contains(t, badRollupBuf.String(), "failed to unmarshal action rollup")
+			assert.Contains(t, badRollupBuf.String(), `"siteID":"`+badRollupSite+`"`)
+
+			// 4. Invalid plan JSON inside otherwise valid rollup
+			badPlanSite := "test-site-corrupt-bad-plan"
+			badPlanColl, err := f.getCollection(badPlanSite, "daily_actions")
+			require.NoError(t, err)
+			badPlanJSON := fmt.Sprintf(`{"tsBucketStart":%q,"actions":[{"timestamp":%q,"plan":{"tsCreated":%q,"horizonHours":24,"shortPeriods":[{"us":"bad"}]}}]}`,
+				tCorrupt.Format(time.RFC3339), tCorrupt.Format(time.RFC3339), tCorrupt.Format(time.RFC3339))
+			_, err = badPlanColl.Doc(bucketID).Set(ctx, map[string]any{
+				"earliestDate": tCorrupt,
+				"latestDate":   tCorrupt,
+				"json":         badPlanJSON,
+			})
+			require.NoError(t, err)
+
+			var badPlanBuf bytes.Buffer
+			_, err = f.GetActionHistory(ctxWithCapturedWarnLogger(&badPlanBuf), badPlanSite, tCorrupt.Add(-time.Hour), tCorrupt.Add(time.Hour))
+			assert.ErrorContains(t, err, "failed to unmarshal action plan")
+			assert.Contains(t, badPlanBuf.String(), "failed to unmarshal action plan")
+			assert.Contains(t, badPlanBuf.String(), `"siteID":"`+badPlanSite+`"`)
 		})
 	})
 
@@ -2479,127 +2868,275 @@ func TestIsAttemptTimeout(t *testing.T) {
 	})
 }
 
-type fakeActionBucketDoc struct {
-	bucketID     string
-	earliestDate time.Time
-	latestDate   time.Time
-	doc          *firestorepb.Document
+func TestWithActionHistoryTimeout(t *testing.T) {
+	t.Run("AppliesDefaultWhenNoDeadline", func(t *testing.T) {
+		before := time.Now()
+		ctx, cancel := withActionHistoryTimeout(context.Background())
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		remaining := deadline.Sub(before)
+		assert.GreaterOrEqual(t, remaining, defaultActionHistoryTimeout)
+		assert.Less(t, remaining, defaultActionHistoryTimeout+5*time.Second)
+	})
+
+	t.Run("PreservesExistingShorterDeadline", func(t *testing.T) {
+		expected := time.Now().Add(2 * time.Second)
+		parentCtx, parentCancel := context.WithDeadline(context.Background(), expected)
+		defer parentCancel()
+
+		ctx, cancel := withActionHistoryTimeout(parentCtx)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.True(t, deadline.Equal(expected))
+	})
+
+	t.Run("PreservesExistingLongerDeadline", func(t *testing.T) {
+		expected := time.Now().Add(90 * time.Second)
+		parentCtx, parentCancel := context.WithDeadline(context.Background(), expected)
+		defer parentCancel()
+
+		ctx, cancel := withActionHistoryTimeout(parentCtx)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.True(t, deadline.Equal(expected))
+	})
 }
 
-type fakeActionFirestoreServer struct {
-	firestorepb.UnimplementedFirestoreServer
+func TestHasJSONArrayElements(t *testing.T) {
+	t.Run("EmptyAndWhitespace", func(t *testing.T) {
+		assert.False(t, hasJSONArrayElements(nil))
+		assert.False(t, hasJSONArrayElements([]byte("")))
+		assert.False(t, hasJSONArrayElements([]byte("  \t\n\r ")))
+	})
 
-	mu            sync.Mutex
-	buckets       []fakeActionBucketDoc
-	queryCalls    int
-	startAfterIDs []string
-	onRunQuery    func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error
+	t.Run("EmptyArray", func(t *testing.T) {
+		assert.False(t, hasJSONArrayElements([]byte("[]")))
+		assert.False(t, hasJSONArrayElements([]byte(" \n\t[ \r\n\t ] ")))
+	})
+
+	t.Run("NonEmptyArray", func(t *testing.T) {
+		assert.True(t, hasJSONArrayElements([]byte(`[{"a":1}]`)))
+		assert.True(t, hasJSONArrayElements([]byte(" \t [ {\"a\": 1} ]")))
+	})
+
+	t.Run("NonArray", func(t *testing.T) {
+		assert.False(t, hasJSONArrayElements([]byte(`{"a":1}`)))
+		assert.False(t, hasJSONArrayElements([]byte("null")))
+		assert.False(t, hasJSONArrayElements([]byte(`"[]"`)))
+		assert.False(t, hasJSONArrayElements([]byte("[")))
+	})
 }
 
-func (s *fakeActionFirestoreServer) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.Firestore_RunQueryServer) error {
-	s.mu.Lock()
-	callIdx := s.queryCalls
-	s.queryCalls++
-	hook := s.onRunQuery
-	buckets := s.buckets
-	s.mu.Unlock()
+func TestSliceFirstJSONArrayObject(t *testing.T) {
+	t.Run("LeadingWhitespaceAndMultipleObjects", func(t *testing.T) {
+		raw := []byte(" \n\t [ \r\n {\"a\":1,\"b\":2} , {\"a\":3} ]")
+		assert.Equal(t, `{"a":1,"b":2}`, string(sliceFirstJSONArrayObject(raw)))
+	})
 
-	sq := req.GetStructuredQuery()
-	desc := false
-	for _, ord := range sq.GetOrderBy() {
-		if ord.GetDirection() == firestorepb.StructuredQuery_DESCENDING {
-			desc = true
-			break
-		}
-	}
+	t.Run("NestedBraces", func(t *testing.T) {
+		raw := []byte(`[{"meta":{"inner":{"x":1},"y":2},"rs":22.5},{"rs":30}]`)
+		assert.Equal(t, `{"meta":{"inner":{"x":1},"y":2},"rs":22.5}`, string(sliceFirstJSONArrayObject(raw)))
+	})
 
-	var startAfterDocID string
-	var startAfterEarliest time.Time
-	hasStartAfter := false
-	if cur := sq.GetStartAt(); cur != nil && !cur.GetBefore() && len(cur.GetValues()) > 0 {
-		hasStartAfter = true
-		for _, v := range cur.GetValues() {
-			if ts := v.GetTimestampValue(); ts != nil {
-				startAfterEarliest = ts.AsTime()
-			}
-			if ref := v.GetReferenceValue(); ref != "" {
-				if idx := strings.LastIndex(ref, "/"); idx >= 0 {
-					startAfterDocID = ref[idx+1:]
-				}
-			}
-		}
-	}
+	t.Run("EscapedQuotesAndBracesInsideStrings", func(t *testing.T) {
+		raw := []byte(`[{"msg":"quote \" and braces } { and backslash \\\" end","rs":18},{"rs":99}]`)
+		got := sliceFirstJSONArrayObject(raw)
+		assert.Equal(t, `{"msg":"quote \" and braces } { and backslash \\\" end","rs":18}`, string(got))
+	})
 
-	s.mu.Lock()
-	s.startAfterIDs = append(s.startAfterIDs, startAfterDocID)
-	s.mu.Unlock()
-
-	var matched []*firestorepb.Document
-	if desc {
-		for i := len(buckets) - 1; i >= 0; i-- {
-			matched = append(matched, buckets[i].doc)
-		}
-	} else {
-		for _, b := range buckets {
-			if hasStartAfter {
-				if b.earliestDate.Before(startAfterEarliest) {
-					continue
-				}
-				if b.earliestDate.Equal(startAfterEarliest) && b.bucketID <= startAfterDocID {
-					continue
-				}
-			}
-			matched = append(matched, b.doc)
-		}
-	}
-
-	if lim := sq.GetLimit(); lim != nil && lim.GetValue() > 0 && int(lim.GetValue()) < len(matched) {
-		matched = matched[:lim.GetValue()]
-	}
-
-	if hook != nil {
-		return hook(callIdx, matched, stream)
-	}
-
-	readTime := timestamppb.Now()
-	for _, doc := range matched {
-		if err := stream.Send(&firestorepb.RunQueryResponse{
-			Document: doc,
-			ReadTime: readTime,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	t.Run("EmptyAndMalformedArrays", func(t *testing.T) {
+		assert.Nil(t, sliceFirstJSONArrayObject(nil))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte("")))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte("[]")))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte(" [ ] ")))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte("[123]")))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte(`{"a":1}`)))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte(`[{"unterminated":1`)))
+		assert.Nil(t, sliceFirstJSONArrayObject([]byte(`[{"str":"unterminated]`)))
+	})
 }
 
-func buildSyntheticActionBuckets(
-	tb testing.TB,
-	projectID, dbID, siteID string,
-	startUTC time.Time,
-	numBuckets int,
-	actionsPerBucket int,
-	periodsPerPlan int,
-) []fakeActionBucketDoc {
-	tb.Helper()
+func TestFirstRawPeriodReserveSOC(t *testing.T) {
+	t.Run("ShortPeriodsRS", func(t *testing.T) {
+		p := &rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"us":100,"rs":22.5},{"us":200,"rs":45}]`),
+		}
+		assert.Equal(t, 22.5, firstRawPeriodReserveSOC(p))
+	})
+
+	t.Run("LegacyPeriodsReserveSOC", func(t *testing.T) {
+		p := &rawStoredPlan{
+			Periods: zeroCopyJSON(`[{"reserveSOC":35.0},{"reserveSOC":50.0}]`),
+		}
+		assert.Equal(t, 35.0, firstRawPeriodReserveSOC(p))
+	})
+
+	t.Run("OutOfRangeValues", func(t *testing.T) {
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"rs":0}]`),
+		}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"rs":-5}]`),
+		}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"rs":100.1}]`),
+		}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			Periods: zeroCopyJSON(`[{"reserveSOC":0}]`),
+		}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			Periods: zeroCopyJSON(`[{"reserveSOC":150}]`),
+		}))
+	})
+
+	t.Run("InvalidJSONAndNil", func(t *testing.T) {
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(nil))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"rs":"bad"}]`),
+		}))
+		assert.Equal(t, 0.0, firstRawPeriodReserveSOC(&rawStoredPlan{
+			Periods: zeroCopyJSON(`[{invalid`),
+		}))
+	})
+}
+
+func TestDecodeRawStoredPlan(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	shortRaw, err := json.Marshal([]types.ShortPlanPeriod{
+		{
+			UnixStart:     ts.Unix(),
+			UnixEnd:       ts.Add(20 * time.Minute).Unix(),
+			ImportDollars: 0.12,
+			ExportDollars: 0.04,
+			BatteryMode:   types.BatteryModeLoad,
+			SolarMode:     types.SolarModeAny,
+			Reason:        types.ActionReasonSufficientBattery,
+			StartSOC:      75,
+			EndSOC:        72,
+			ReserveSOC:    20,
+		},
+	})
+	require.NoError(t, err)
+
+	t.Run("NilPlan", func(t *testing.T) {
+		got, err := decodeRawStoredPlan(nil, loc, true)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("ShortPeriodsExpandedAndCompact", func(t *testing.T) {
+		raw := &rawStoredPlan{
+			TSCreated:          ts,
+			HorizonHours:       24,
+			TotalProjectedCost: 2.5,
+			TotalExportCredits: 0.8,
+			NetEconomicBenefit: 1.7,
+			ShortPeriods:       zeroCopyJSON(shortRaw),
+		}
+
+		expanded, err := decodeRawStoredPlan(raw, loc, true)
+		require.NoError(t, err)
+		if assert.NotNil(t, expanded) && assert.Len(t, expanded.Periods, 1) {
+			assert.Nil(t, expanded.ShortPeriods)
+			assert.Equal(t, "America/Chicago", expanded.Periods[0].TSStart.Location().String())
+			assert.Equal(t, 20.0, expanded.Periods[0].ReserveSOC)
+			assert.Equal(t, 2.5, expanded.TotalProjectedCost)
+		}
+
+		compact, err := decodeRawStoredPlan(raw, loc, false)
+		require.NoError(t, err)
+		if assert.NotNil(t, compact) && assert.Len(t, compact.ShortPeriods, 1) {
+			assert.Nil(t, compact.Periods)
+			assert.Equal(t, 20.0, compact.ShortPeriods[0].ReserveSOC)
+		}
+	})
+
+	t.Run("LegacyPeriods", func(t *testing.T) {
+		legacyRaw, err := json.Marshal([]types.PlanPeriod{
+			{
+				TSStart:       ts.In(loc),
+				TSEnd:         ts.Add(time.Hour).In(loc),
+				DurationHours: 1.0,
+				ImportDollars: 0.15,
+				ReserveSOC:    25.0,
+			},
+		})
+		require.NoError(t, err)
+
+		got, err := decodeRawStoredPlan(&rawStoredPlan{
+			TSCreated:    ts,
+			HorizonHours: 24,
+			Periods:      zeroCopyJSON(legacyRaw),
+		}, loc, true)
+		require.NoError(t, err)
+		if assert.NotNil(t, got) && assert.Len(t, got.Periods, 1) {
+			assert.Nil(t, got.ShortPeriods)
+			assert.Equal(t, 25.0, got.Periods[0].ReserveSOC)
+		}
+	})
+
+	t.Run("EmptyPlan", func(t *testing.T) {
+		got, err := decodeRawStoredPlan(&rawStoredPlan{
+			TSCreated:    ts,
+			HorizonHours: 24,
+			ShortPeriods: zeroCopyJSON("[]"),
+			Periods:      zeroCopyJSON("[]"),
+		}, loc, true)
+		require.NoError(t, err)
+		if assert.NotNil(t, got) {
+			assert.Equal(t, 24, got.HorizonHours)
+			assert.Nil(t, got.Periods)
+			assert.Nil(t, got.ShortPeriods)
+		}
+	})
+
+	t.Run("InvalidJSONError", func(t *testing.T) {
+		_, err := decodeRawStoredPlan(&rawStoredPlan{
+			ShortPeriods: zeroCopyJSON(`[{"us":"not-int"}]`),
+		}, loc, true)
+		assert.Error(t, err)
+
+		_, err = decodeRawStoredPlan(&rawStoredPlan{
+			Periods: zeroCopyJSON(`[{"reserveSOC":"not-float"}]`),
+		}, loc, true)
+		assert.Error(t, err)
+	})
+}
+
+func BenchmarkDecodeActionHistoryBuckets(b *testing.B) {
+	const (
+		numBuckets       = 88 // 44 days of 12-hour buckets
+		actionsPerBucket = 36 // 20-minute intervals
+		periodsPerPlan   = 73 // 24-hour horizon
+		expectedActions  = numBuckets * actionsPerBucket
+	)
 
 	loc, err := time.LoadLocation("America/Chicago")
-	require.NoError(tb, err)
+	if err != nil {
+		b.Fatal(err)
+	}
+	startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	endUTC := startUTC.Add(numBuckets * 12 * time.Hour)
 
-	docs := make([]fakeActionBucketDoc, 0, numBuckets)
+	buckets := make([]actionBucketJSON, 0, numBuckets)
 	for bIdx := 0; bIdx < numBuckets; bIdx++ {
 		bucketStartUTC := startUTC.Add(time.Duration(bIdx) * 12 * time.Hour)
 		bucketID, _ := actionBucket(bucketStartUTC)
 
 		actions := make([]types.Action, 0, actionsPerBucket)
-		var earliest, latest time.Time
 		for aIdx := 0; aIdx < actionsPerBucket; aIdx++ {
 			actUTC := bucketStartUTC.Add(time.Duration(aIdx) * 20 * time.Minute)
 			actLocal := actUTC.In(loc)
-			if aIdx == 0 {
-				earliest = actUTC
-			}
-			latest = actUTC
 
 			periods := make([]types.PlanPeriod, periodsPerPlan)
 			for pIdx := 0; pIdx < periodsPerPlan; pIdx++ {
@@ -2624,18 +3161,10 @@ func buildSyntheticActionBuckets(
 				}
 			}
 
-			var alarms []types.SystemAlarm
-			if aIdx == 0 {
-				alarms = []types.SystemAlarm{
-					{Code: "E42", Name: "SyntheticAlarm", Description: "Test", Timestamp: actLocal},
-				}
-			}
-			// Alternate explicit Action.ReserveSOC and legacy Plan-only ReserveSOC (0 on Action, 22.0 on Plan.Periods[0])
 			explicitReserve := 22.0
 			if aIdx%2 == 1 {
 				explicitReserve = 0
 			}
-
 			act := types.Action{
 				Timestamp:       actUTC,
 				SystemTimestamp: actLocal,
@@ -2644,25 +3173,12 @@ func buildSyntheticActionBuckets(
 				Reason:          types.ActionReasonPreventSolarCurtailment,
 				Description:     "Discharging battery to cover household load.",
 				ReserveSOC:      explicitReserve,
-				HitDeficitAt:    actLocal.Add(4 * time.Hour),
-				HitCapacityAt:   actLocal.Add(10 * time.Hour),
-				CurrentPrice: &types.Price{
-					Provider:             "comed",
-					TSStart:              actLocal.Truncate(time.Hour),
-					TSEnd:                actLocal.Truncate(time.Hour).Add(time.Hour),
-					DollarsPerKWH:        0.055,
-					GridUseDollarsPerKWH: 0.058,
-				},
 				SystemStatus: types.SystemStatus{
 					Timestamp:          actLocal,
 					TimeLocation:       loc.String(),
 					BatterySOC:         80.0,
 					BatteryCapacityKWH: 27.2,
 					BatteryHeating:     aIdx == 1,
-					VPPActive:          aIdx == 2,
-					GridUnavailable:    aIdx == 3,
-					EmergencyMode:      aIdx == 3,
-					Alarms:             alarms,
 				},
 				Plan: &types.Plan{
 					TSCreated:          actUTC,
@@ -2674,626 +3190,64 @@ func buildSyntheticActionBuckets(
 			actions = append(actions, act.CompactForStorage())
 		}
 
-		rollup := types.SiteActionBucket{
+		jsonBytes, err := json.Marshal(types.SiteActionBucket{
 			TSBucketStart: bucketStartUTC,
 			Actions:       actions,
+		})
+		if err != nil {
+			b.Fatal(err)
 		}
-		jsonBytes, err := json.Marshal(rollup)
-		require.NoError(tb, err)
-
-		docName := fmt.Sprintf("projects/%s/databases/%s/documents/sites/%s/daily_actions/%s", projectID, dbID, siteID, bucketID)
-		pbDoc := &firestorepb.Document{
-			Name: docName,
-			Fields: map[string]*firestorepb.Value{
-				"json":         {ValueType: &firestorepb.Value_StringValue{StringValue: string(jsonBytes)}},
-				"earliestDate": {ValueType: &firestorepb.Value_TimestampValue{TimestampValue: timestamppb.New(earliest)}},
-				"latestDate":   {ValueType: &firestorepb.Value_TimestampValue{TimestampValue: timestamppb.New(latest)}},
-			},
-			CreateTime: timestamppb.New(earliest),
-			UpdateTime: timestamppb.New(latest),
-		}
-		docs = append(docs, fakeActionBucketDoc{
-			bucketID:     bucketID,
-			earliestDate: earliest,
-			latestDate:   latest,
-			doc:          pbDoc,
+		buckets = append(buckets, actionBucketJSON{
+			id:   bucketID,
+			json: string(jsonBytes),
 		})
 	}
-	return docs
-}
 
-func newTestGRPCFirestoreProvider(
-	tb testing.TB,
-	srv *fakeActionFirestoreServer,
-	projectID, dbID string,
-	attemptTimeout time.Duration,
-) *FirestoreProvider {
-	tb.Helper()
-	tb.Setenv("FIRESTORE_EMULATOR_HOST", "")
-
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(tb, err)
-
-	grpcSrv := grpc.NewServer()
-	firestorepb.RegisterFirestoreServer(grpcSrv, srv)
-	go func() {
-		_ = grpcSrv.Serve(lis)
-	}()
-	tb.Cleanup(func() {
-		grpcSrv.Stop()
-		_ = lis.Close()
-	})
-
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(tb, err)
-	tb.Cleanup(func() {
-		_ = conn.Close()
-	})
-
-	client, err := firestore.NewClientWithDatabase(
-		context.Background(),
-		projectID,
-		dbID,
-		option.WithGRPCConn(conn),
-		option.WithoutAuthentication(),
-	)
-	require.NoError(tb, err)
-	tb.Cleanup(func() {
-		_ = client.Close()
-	})
-
-	return &FirestoreProvider{
-		client:         client,
-		projectID:      projectID,
-		database:       dbID,
-		attemptTimeout: attemptTimeout,
-	}
-}
-
-func TestGetActionHistory(t *testing.T) {
-	const (
-		projectID = "test-proj"
-		dbID      = "test-db"
-		siteID    = "site1"
-	)
-	startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-
-	t.Run("ResumesAfterLastBucketOnTransientErrorsWithoutDuplicates", func(t *testing.T) {
-		buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 6, 4, 12)
-		endUTC := startUTC.Add(6 * 12 * time.Hour)
-
-		srv := &fakeActionFirestoreServer{buckets: buckets}
-		srv.onRunQuery = func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-			readTime := timestamppb.Now()
-			switch callIdx {
-			case 0:
-				// Stream first 2 buckets, then fail with Unavailable
-				for i := 0; i < 2; i++ {
-					if err := stream.Send(&firestorepb.RunQueryResponse{Document: docs[i], ReadTime: readTime}); err != nil {
-						return err
-					}
-				}
-				return status.Error(codes.Unavailable, "connection reset by peer")
-			case 1:
-				// Stream next 2 buckets (buckets[2], buckets[3]), then fail with ResourceExhausted
-				for i := 0; i < 2; i++ {
-					if err := stream.Send(&firestorepb.RunQueryResponse{Document: docs[i], ReadTime: readTime}); err != nil {
-						return err
-					}
-				}
-				return status.Error(codes.ResourceExhausted, "quota exceeded")
-			default:
-				for _, doc := range docs {
-					if err := stream.Send(&firestorepb.RunQueryResponse{Document: doc, ReadTime: readTime}); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-		}
-
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, 2*time.Second)
-		actions, err := f.GetActionHistory(WithoutActionPlans(context.Background()), siteID, startUTC, endUTC)
-		require.NoError(t, err)
-		require.Len(t, actions, 6*4)
-
-		// Verify strictly increasing timestamps with zero duplicates
-		for i := 1; i < len(actions); i++ {
-			assert.True(t, actions[i].Timestamp.After(actions[i-1].Timestamp), "action %d (%v) must be strictly after %v", i, actions[i].Timestamp, actions[i-1].Timestamp)
-		}
-
-		srv.mu.Lock()
-		defer srv.mu.Unlock()
-		assert.Equal(t, 3, srv.queryCalls)
-		if assert.Len(t, srv.startAfterIDs, 3) {
-			assert.Equal(t, "", srv.startAfterIDs[0])
-			assert.Equal(t, buckets[1].bucketID, srv.startAfterIDs[1])
-			assert.Equal(t, buckets[3].bucketID, srv.startAfterIDs[2])
-		}
-	})
-
-	t.Run("ResumesAfterLastBucketOnAttemptTimeoutWithoutDuplicates", func(t *testing.T) {
-		buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 4, 3, 12)
-		endUTC := startUTC.Add(4 * 12 * time.Hour)
-
-		srv := &fakeActionFirestoreServer{buckets: buckets}
-		srv.onRunQuery = func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-			readTime := timestamppb.Now()
-			if callIdx == 0 {
-				if err := stream.Send(&firestorepb.RunQueryResponse{Document: docs[0], ReadTime: readTime}); err != nil {
-					return err
-				}
-				// Stall until the per-attempt timeout cancels this stream
-				<-stream.Context().Done()
-				return status.FromContextError(stream.Context().Err()).Err()
-			}
-			for _, doc := range docs {
-				if err := stream.Send(&firestorepb.RunQueryResponse{Document: doc, ReadTime: readTime}); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, 80*time.Millisecond)
-		actions, err := f.GetActionHistory(WithoutActionPlans(context.Background()), siteID, startUTC, endUTC)
-		require.NoError(t, err)
-		require.Len(t, actions, 4*3)
-		for i := 1; i < len(actions); i++ {
-			assert.True(t, actions[i].Timestamp.After(actions[i-1].Timestamp))
-		}
-
-		srv.mu.Lock()
-		defer srv.mu.Unlock()
-		assert.Equal(t, 2, srv.queryCalls)
-		assert.Equal(t, buckets[0].bucketID, srv.startAfterIDs[1])
-	})
-
-	t.Run("StopsOnExhaustedRetriesAndHonorsParentCancellation", func(t *testing.T) {
-		buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 2, 3, 6)
-		endUTC := startUTC.Add(2 * 12 * time.Hour)
-
-		// 1. Repeated Unavailable without progress stops at maxStreamConsecutiveFailures (3)
-		srvExhaust := &fakeActionFirestoreServer{
-			buckets: buckets,
-			onRunQuery: func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-				return status.Error(codes.Unavailable, "persistent outage")
-			},
-		}
-		fExhaust := newTestGRPCFirestoreProvider(t, srvExhaust, projectID, dbID, time.Second)
-		_, err := fExhaust.GetActionHistory(context.Background(), siteID, startUTC, endUTC)
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "persistent outage")
-		srvExhaust.mu.Lock()
-		assert.Equal(t, maxStreamConsecutiveFailures, srvExhaust.queryCalls)
-		srvExhaust.mu.Unlock()
-
-		// 2. Parent context cancellation aborts immediately without retrying
-		parentCtx, parentCancel := context.WithCancel(context.Background())
-		srvCancel := &fakeActionFirestoreServer{
-			buckets: buckets,
-			onRunQuery: func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-				parentCancel()
-				return status.Error(codes.Canceled, "caller canceled")
-			},
-		}
-		fCancel := newTestGRPCFirestoreProvider(t, srvCancel, projectID, dbID, time.Second)
-		_, err = fCancel.GetActionHistory(parentCtx, siteID, startUTC, endUTC)
-		require.Error(t, err)
-		srvCancel.mu.Lock()
-		assert.Equal(t, 1, srvCancel.queryCalls)
-		srvCancel.mu.Unlock()
-	})
-
-	t.Run("SelectivePlanDecodingPreservesMetadataAlarmsReserveAndSharesLocation", func(t *testing.T) {
-		// 8 buckets = 4 days (day0..day3), 6 actions per bucket
-		buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 8, 6, 73)
-		endUTC := startUTC.Add(8 * 12 * time.Hour)
-		day2Start := startUTC.Add(48 * time.Hour)
-		day3Start := startUTC.Add(72 * time.Hour)
-
-		srv := &fakeActionFirestoreServer{buckets: buckets}
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, 5*time.Second)
-
-		// Case A: WithoutActionPlans (used by syncHistorySummaryRange and get_daily_history)
-		unexpanded, err := f.GetActionHistory(WithoutActionPlans(context.Background()), siteID, startUTC, endUTC)
-		require.NoError(t, err)
-		require.Len(t, unexpanded, 48)
-
-		firstLoc := unexpanded[0].SystemTimestamp.Location()
-		require.NotNil(t, firstLoc)
-		assert.Equal(t, "America/Chicago", firstLoc.String())
-
-		sawHeating := false
-		sawVPP := false
-		sawGridOutage := false
-		sawEmergency := false
-		sawAlarm := false
-		for _, a := range unexpanded {
-			assert.Nil(t, a.Plan, "WithoutActionPlans must not allocate Plan or PlanPeriod slices")
-			assert.Same(t, firstLoc, a.SystemTimestamp.Location(), "all actions in request must share cached *time.Location")
-			assert.Equal(t, 27.2, a.SystemStatus.BatteryCapacityKWH)
-			assert.Equal(t, 22.0, a.ReserveSOC, "both explicit and legacy ShortPeriods[0].ReserveSOC must be retained")
-			if a.SystemStatus.BatteryHeating {
-				sawHeating = true
-			}
-			if a.SystemStatus.VPPActive {
-				sawVPP = true
-			}
-			if a.SystemStatus.GridUnavailable {
-				sawGridOutage = true
-			}
-			if a.SystemStatus.EmergencyMode {
-				sawEmergency = true
-			}
-			if len(a.SystemStatus.Alarms) > 0 {
-				sawAlarm = true
-				assert.Same(t, firstLoc, a.SystemStatus.Alarms[0].Timestamp.Location())
-			}
-		}
-		assert.True(t, sawHeating && sawVPP && sawGridOutage && sawEmergency && sawAlarm)
-
-		// Case B: WithActionPlanWindow [day2Start, day3Start) + IncludeLatestPlan: true
-		windowCtx := WithActionPlanWindow(context.Background(), ActionPlanWindow{
-			ExpandStart:       day2Start,
-			ExpandEnd:         day3Start,
-			IncludeLatestPlan: true,
-		})
-		windowed, err := f.GetActionHistory(windowCtx, siteID, startUTC, endUTC)
-		require.NoError(t, err)
-		require.Len(t, windowed, 48)
-		windowedLoc := windowed[0].SystemTimestamp.Location()
-		require.NotNil(t, windowedLoc)
-
-		expandedCount := 0
-		shortRetainedCount := 0
-		for idx, a := range windowed {
-			inDisplay := !a.Timestamp.Before(day2Start) && a.Timestamp.Before(day3Start)
-			isLatest := idx == len(windowed)-1
-			if inDisplay {
-				expandedCount++
-				if assert.NotNil(t, a.Plan) {
-					assert.Len(t, a.Plan.Periods, 73)
-					assert.Nil(t, a.Plan.ShortPeriods)
-					assert.Same(t, windowedLoc, a.Plan.Periods[0].TSStart.Location())
-				}
-			} else if isLatest {
-				shortRetainedCount++
-				if assert.NotNil(t, a.Plan) {
-					assert.Nil(t, a.Plan.Periods, "latest action outside display window keeps compact ShortPeriods until needed")
-					assert.Len(t, a.Plan.ShortPeriods, 73)
-				}
-			} else {
-				assert.Nil(t, a.Plan)
-				assert.Equal(t, 22.0, a.ReserveSOC)
-			}
-		}
-		assert.Equal(t, 12, expandedCount)
-		assert.Equal(t, 1, shortRetainedCount)
-	})
-
-	t.Run("FortyFourDayBackfillCutsRetainedHeapOver95PercentAndConcurrentLoadUnder128Mi", func(t *testing.T) {
-		// 44 days = 88 12-hour buckets * 36 actions/bucket = 3,168 actions, each with 102 ShortPlanPeriods (34h controller horizon at 20m intervals)
-		buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 88, 36, 102)
-		end44d := startUTC.Add(44 * 24 * time.Hour)
-
-		srv := &fakeActionFirestoreServer{buckets: buckets}
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, 30*time.Second)
-
-		// Warm up the gRPC client connection before measuring retained action slices
-		_, err := f.GetActionHistory(WithoutActionPlans(context.Background()), siteID, startUTC, startUTC.Add(12*time.Hour))
-		require.NoError(t, err)
-
-		measureRetainedHeap := func(ctx context.Context) ([]types.Action, uint64) {
-			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			defer cancel()
-			runtime.GC()
-			runtime.GC()
-			var before runtime.MemStats
-			runtime.ReadMemStats(&before)
-
-			res, err := f.GetActionHistory(ctx, siteID, startUTC, end44d)
-			require.NoError(t, err)
-
-			runtime.GC()
-			runtime.GC()
-			var after runtime.MemStats
-			runtime.ReadMemStats(&after)
-			var retained uint64
-			if after.HeapAlloc > before.HeapAlloc {
-				retained = after.HeapAlloc - before.HeapAlloc
-			}
-			runtime.KeepAlive(res)
-			return res, retained
-		}
-
-		fullActions, fullHeapBytes := measureRetainedHeap(context.Background())
-		require.Len(t, fullActions, 3168)
-		fullActions = nil
-
-		selectiveActions, selectiveHeapBytes := measureRetainedHeap(WithoutActionPlans(context.Background()))
-		require.Len(t, selectiveActions, 3168)
-		for _, a := range selectiveActions {
-			if a.Plan != nil {
-				t.Fatalf("expected nil Plan on backfill action, got non-nil")
-			}
-		}
-		selectiveActions = nil
-
-		reductionRatio := 1.0 - (float64(selectiveHeapBytes) / float64(fullHeapBytes))
-		assert.Greater(t, reductionRatio, 0.95,
-			"44-day backfill retained action heap must drop >95%% (full=%d bytes, selective=%d bytes, reduction=%.2f%%)",
-			fullHeapBytes, selectiveHeapBytes, reductionRatio*100,
-		)
-
-		// Concurrent load check: 5 summary backfill workers (44d) + 2 Dashboard 32d savings loads simultaneously.
-		// Subtract the in-process fake Firestore server's static buckets fixture (~56 MiB) and set a soft
-		// memory limit of fixture + 96 MiB so the in-process fixture does not inflate GOGC's 2x baseline.
-		runtime.GC()
-		runtime.GC()
-		var fixtureMem runtime.MemStats
-		runtime.ReadMemStats(&fixtureMem)
-		prevMemLimit := debug.SetMemoryLimit(int64(fixtureMem.HeapInuse) + 96*1024*1024)
-		defer debug.SetMemoryLimit(prevMemLimit)
-
-		concCtx, concCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer concCancel()
-		var wg sync.WaitGroup
-		var readyWg sync.WaitGroup
-		holdBarrier := make(chan struct{})
-		errCh := make(chan error, 7)
-
-		var peakClientInuse uint64
-		stopSampler := make(chan struct{})
-		samplerDone := make(chan struct{})
-		go func() {
-			defer close(samplerDone)
-			ticker := time.NewTicker(10 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-stopSampler:
-					return
-				case <-ticker.C:
-					var m runtime.MemStats
-					runtime.ReadMemStats(&m)
-					if m.HeapInuse > fixtureMem.HeapInuse {
-						delta := m.HeapInuse - fixtureMem.HeapInuse
-						if delta > peakClientInuse {
-							peakClientInuse = delta
-						}
-					}
-				}
-			}
-		}()
-
-		// 5 concurrent 44-day summary backfill workers
-		for w := 0; w < 5; w++ {
-			wg.Add(1)
-			readyWg.Add(1)
-			go func() {
-				defer wg.Done()
-				acts, err := f.GetActionHistory(WithoutActionPlans(concCtx), siteID, startUTC, end44d)
-				readyWg.Done()
-				if err != nil {
-					errCh <- err
-					return
-				}
-				if len(acts) != 3168 {
-					errCh <- fmt.Errorf("unexpected backfill action count %d", len(acts))
-				}
-				<-holdBarrier
-				runtime.KeepAlive(acts)
-			}()
-		}
-
-		// 2 concurrent 32-day Dashboard loads (1-day display window + IncludeLatestPlan)
-		dashStart := end44d.AddDate(0, 0, -32)
-		displayStart := end44d.Add(-24 * time.Hour)
-		for d := 0; d < 2; d++ {
-			wg.Add(1)
-			readyWg.Add(1)
-			go func() {
-				defer wg.Done()
-				dCtx := WithActionPlanWindow(concCtx, ActionPlanWindow{
-					ExpandStart:       displayStart,
-					ExpandEnd:         end44d,
-					IncludeLatestPlan: true,
-				})
-				acts, err := f.GetActionHistory(dCtx, siteID, dashStart, end44d)
-				readyWg.Done()
-				if err != nil {
-					errCh <- err
-					return
-				}
-				if len(acts) != 32*72 {
-					errCh <- fmt.Errorf("unexpected dashboard action count %d", len(acts))
-				}
-				<-holdBarrier
-				runtime.KeepAlive(acts)
-			}()
-		}
-
-		readyWg.Wait()
-		close(stopSampler)
-		<-samplerDone
-
-		runtime.GC()
-		runtime.GC()
-		var barrierMem runtime.MemStats
-		runtime.ReadMemStats(&barrierMem)
-		var simultaneousRetained uint64
-		if barrierMem.HeapAlloc > fixtureMem.HeapAlloc {
-			simultaneousRetained = barrierMem.HeapAlloc - fixtureMem.HeapAlloc
-		}
-
-		close(holdBarrier)
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			require.NoError(t, err)
-		}
-
-		const cloudRunLimitBytes = 128 * 1024 * 1024
-		assert.Less(t, simultaneousRetained, uint64(32*1024*1024),
-			"simultaneous retained heap across 5x 44d backfills + 2x 32d Dashboard loads (%d MiB) must stay under 32 MiB",
-			simultaneousRetained/(1024*1024),
-		)
-		assert.Less(t, peakClientInuse, uint64(cloudRunLimitBytes),
-			"concurrent 5-worker 44d backfill + Dashboard loads client HeapInuse (%d MiB) must stay below 128 MiB",
-			peakClientInuse/(1024*1024),
-		)
-	})
-}
-
-func TestGetLatestAction(t *testing.T) {
-	const (
-		projectID = "test-proj"
-		dbID      = "test-db"
-		siteID    = "site1"
-	)
-	startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	buckets := buildSyntheticActionBuckets(t, projectID, dbID, siteID, startUTC, 2, 36, 73)
-
-	t.Run("RetriesTransientFailureAndExpandsLatestAction", func(t *testing.T) {
-		srv := &fakeActionFirestoreServer{buckets: buckets}
-		srv.onRunQuery = func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-			if callIdx == 0 {
-				return status.Error(codes.Unavailable, "transient reset")
-			}
-			for _, doc := range docs {
-				if err := stream.Send(&firestorepb.RunQueryResponse{Document: doc, ReadTime: timestamppb.Now()}); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, time.Second)
-		latest, err := f.GetLatestAction(context.Background(), siteID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.Equal(t, buckets[len(buckets)-1].latestDate, latest.Timestamp)
-		assert.Equal(t, 27.2, latest.SystemStatus.BatteryCapacityKWH)
-		assert.Equal(t, "America/Chicago", latest.SystemTimestamp.Location().String())
-		if assert.NotNil(t, latest.Plan) {
-			assert.Len(t, latest.Plan.Periods, 73)
-			assert.Nil(t, latest.Plan.ShortPeriods)
-		}
-	})
-
-	t.Run("ReturnsErrorWhenRetriesExhausted", func(t *testing.T) {
-		srv := &fakeActionFirestoreServer{
-			buckets: buckets,
-			onRunQuery: func(callIdx int, docs []*firestorepb.Document, stream firestorepb.Firestore_RunQueryServer) error {
-				return status.Error(codes.Unavailable, "firestore down")
-			},
-		}
-		f := newTestGRPCFirestoreProvider(t, srv, projectID, dbID, time.Second)
-		latest, err := f.GetLatestAction(context.Background(), siteID)
-		assert.Nil(t, latest)
-		assert.ErrorContains(t, err, "firestore down")
-	})
-}
-
-func BenchmarkGetActionHistory44DaySummaryBackfill(b *testing.B) {
-	const (
-		projectID = "bench-proj"
-		dbID      = "bench-db"
-		siteID    = "site1"
-	)
-	startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	end44d := startUTC.Add(44 * 24 * time.Hour)
-	buckets := buildSyntheticActionBuckets(b, projectID, dbID, siteID, startUTC, 88, 36, 102)
-	srv := &fakeActionFirestoreServer{buckets: buckets}
-	f := newTestGRPCFirestoreProvider(b, srv, projectID, dbID, 10*time.Second)
-	_, _ = f.GetActionHistory(WithoutActionPlans(context.Background()), siteID, startUTC, startUTC.Add(12*time.Hour))
+	b.ResetTimer()
 
 	b.Run("FullDecode", func(b *testing.B) {
 		b.ReportAllocs()
-		var retained uint64
+		ctx := context.Background()
 		for i := 0; i < b.N; i++ {
-			runtime.GC()
-			runtime.GC()
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			acts, err := f.GetActionHistory(context.Background(), siteID, startUTC, end44d)
+			acts, err := decodeActionHistoryBuckets(ctx, "site1", startUTC, endUTC, buckets)
 			if err != nil {
 				b.Fatal(err)
 			}
-			runtime.GC()
-			runtime.GC()
-			runtime.ReadMemStats(&after)
-			if after.HeapAlloc > before.HeapAlloc {
-				retained = after.HeapAlloc - before.HeapAlloc
+			if len(acts) != expectedActions {
+				b.Fatalf("unexpected count %d", len(acts))
 			}
-			runtime.KeepAlive(acts)
 		}
-		b.ReportMetric(float64(retained), "retained_bytes")
 	})
 
-	b.Run("SelectiveWithoutPlans", func(b *testing.B) {
+	b.Run("WithoutActionPlans", func(b *testing.B) {
 		b.ReportAllocs()
 		ctx := WithoutActionPlans(context.Background())
-		var retained uint64
 		for i := 0; i < b.N; i++ {
-			runtime.GC()
-			runtime.GC()
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			acts, err := f.GetActionHistory(ctx, siteID, startUTC, end44d)
+			acts, err := decodeActionHistoryBuckets(ctx, "site1", startUTC, endUTC, buckets)
 			if err != nil {
 				b.Fatal(err)
 			}
-			runtime.GC()
-			runtime.GC()
-			runtime.ReadMemStats(&after)
-			if after.HeapAlloc > before.HeapAlloc {
-				retained = after.HeapAlloc - before.HeapAlloc
+			if len(acts) != expectedActions {
+				b.Fatalf("unexpected count %d", len(acts))
 			}
-			runtime.KeepAlive(acts)
-		}
-		b.ReportMetric(float64(retained), "retained_bytes")
-	})
-}
-
-func BenchmarkGetActionHistory32DayDashboardSavings(b *testing.B) {
-	const (
-		projectID = "bench-proj"
-		dbID      = "bench-db"
-		siteID    = "site1"
-	)
-	startUTC := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	end32d := startUTC.Add(32 * 24 * time.Hour)
-	displayStart := end32d.Add(-24 * time.Hour)
-	buckets := buildSyntheticActionBuckets(b, projectID, dbID, siteID, startUTC, 64, 36, 73)
-	srv := &fakeActionFirestoreServer{buckets: buckets}
-	f := newTestGRPCFirestoreProvider(b, srv, projectID, dbID, 10*time.Second)
-
-	b.Run("FullDecode", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			acts, err := f.GetActionHistory(context.Background(), siteID, startUTC, end32d)
-			if err != nil {
-				b.Fatal(err)
-			}
-			runtime.KeepAlive(acts)
 		}
 	})
 
-	b.Run("SelectiveWindowAndLatestPlan", func(b *testing.B) {
+	b.Run("WithActionPlanWindow", func(b *testing.B) {
 		b.ReportAllocs()
 		ctx := WithActionPlanWindow(context.Background(), ActionPlanWindow{
-			ExpandStart:       displayStart,
-			ExpandEnd:         end32d,
+			ExpandStart:       endUTC.Add(-48 * time.Hour),
+			ExpandEnd:         endUTC.Add(-24 * time.Hour),
 			IncludeLatestPlan: true,
 		})
 		for i := 0; i < b.N; i++ {
-			acts, err := f.GetActionHistory(ctx, siteID, startUTC, end32d)
+			acts, err := decodeActionHistoryBuckets(ctx, "site1", startUTC, endUTC, buckets)
 			if err != nil {
 				b.Fatal(err)
 			}
-			runtime.KeepAlive(acts)
+			if len(acts) != expectedActions {
+				b.Fatalf("unexpected count %d", len(acts))
+			}
 		}
 	})
 }

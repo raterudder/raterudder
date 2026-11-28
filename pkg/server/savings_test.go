@@ -1254,7 +1254,9 @@ func TestHandleHistorySavings(t *testing.T) {
 	})
 
 	t.Run("Zero ActionHistory Falls Back To GetLatestAction For Capacity", func(t *testing.T) {
+		var capturedStore *mockSavingsStorage
 		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			capturedStore = m
 			// Zero actions in the [lookbackStart, actionQueryEnd) window, but latestAction has capacity 10 kWh
 			m.actions = nil
 			m.latestAction = &types.Action{
@@ -1288,9 +1290,12 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 1.10, savings.RateRudderSavingsDollars, 0.001)
 		assert.InDelta(t, 1.10, savings.TotalSavingsDollars, 0.001)
 
-		planWindow, ok := storage.ActionPlanWindowFromContext(context.Background())
-		assert.False(t, ok)
-		_ = planWindow
+		require.NotNil(t, capturedStore)
+		planWindow, ok := storage.ActionPlanWindowFromContext(capturedStore.lastActionCtx)
+		if assert.True(t, ok) {
+			assert.True(t, planWindow.ExpandStart.Equal(planWindow.ExpandEnd))
+			assert.True(t, planWindow.IncludeLatestPlan)
+		}
 	})
 
 	t.Run("Zero ActionHistory Propagates GetLatestAction Error Without Cache-Control", func(t *testing.T) {

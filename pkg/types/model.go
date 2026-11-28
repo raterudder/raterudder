@@ -753,15 +753,9 @@ func (a *Action) ExpandPlan(loc *time.Location) {
 	a.Plan = &planCopy
 }
 
-// ExpandFromStorageWith restores the Action's time.Location on all local timestamps
-// using loadLoc and expands Plan.ShortPeriods back into Plan.Periods.
-func (a *Action) ExpandFromStorageWith(loadLoc func(string) *time.Location) {
+// ExpandFromStorage restores the Action's time.Location on all local timestamps
+// using loadLoc (or time.LoadLocation when nil) and expands Plan.ShortPeriods back into Plan.Periods.
+func (a *Action) ExpandFromStorage(loadLoc func(string) *time.Location) {
 	loc := a.RestoreLocations(loadLoc)
 	a.ExpandPlan(loc)
-}
-
-// ExpandFromStorage restores the Action's time.Location on all local timestamps
-// and expands Plan.ShortPeriods back into Plan.Periods in place.
-func (a *Action) ExpandFromStorage() {
-	a.ExpandFromStorageWith(nil)
 }

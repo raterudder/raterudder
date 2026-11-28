@@ -680,7 +680,7 @@ func (s *Server) getSiteSavingsWithSettings(
 		hasPlan := actions[i].HasPlan()
 		if inWindow {
 			act := actions[i]
-			act.ExpandFromStorageWith(locCache.Load)
+			act.ExpandFromStorage(locCache.Load)
 			filteredActions = append(filteredActions, act)
 			if hasPlan {
 				latestFilteredIdx = len(filteredActions) - 1
