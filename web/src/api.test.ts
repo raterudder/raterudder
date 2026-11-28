@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { fetchUtilityPeriods, updateSettings, UpdateSettingsError, type Settings } from './api';
+import { fetchUtilityPeriods, submitESSStage, updateSettings, UpdateSettingsError, type Settings } from './api';
 import { defaultSettings } from './test/apiMocks';
 
 const testSettings: Settings = {
@@ -71,6 +71,50 @@ describe('updateSettings', () => {
         expect(caught).toBeInstanceOf(UpdateSettingsError);
         expect((caught as Error).message).toBe('Failed to update settings');
         expect((caught as UpdateSettingsError).credentialsSaved).toBe(false);
+    });
+
+    it('includes stageToken in POST /api/settings body when provided', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+            new Response(null, { status: 200 })
+        );
+
+        await updateSettings(testSettings, 'site1', { enphase: { code: '123456' } }, 'mock-stage-token');
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const [, init] = fetchSpy.mock.calls[0];
+        const parsed = JSON.parse(String(init?.body));
+        expect(parsed.siteID).toBe('site1');
+        expect(parsed.credentials).toEqual({ enphase: { code: '123456' } });
+        expect(parsed.stageToken).toBe('mock-stage-token');
+    });
+});
+
+describe('submitESSStage', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('returns parsed stageToken from POST /api/ess/stage and forwards optional stageToken', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+            new Response(
+                JSON.stringify({ success: true, stageToken: 'mock-returned-stage-token' }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+        );
+
+        const res = await submitESSStage('enphase', { username: 'owner@example.com' }, 'site1', 'mock-prior-stage-token');
+        expect(res).toEqual({ success: true, stageToken: 'mock-returned-stage-token' });
+
+        const [url, init] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/api/ess/stage');
+        expect(JSON.parse(String(init?.body))).toEqual({
+            ess: 'enphase',
+            siteID: 'site1',
+            stageToken: 'mock-prior-stage-token',
+            credentials: {
+                enphase: { username: 'owner@example.com' },
+            },
+        });
     });
 });
 

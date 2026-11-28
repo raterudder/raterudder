@@ -188,108 +188,6 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 	return sv, creds, nil
 }
 
-func equalProviderCredentials(essName string, a, b types.Credentials) bool {
-	switch essName {
-	case "tesla":
-		if (a.Tesla == nil) != (b.Tesla == nil) {
-			return false
-		}
-		if a.Tesla == nil {
-			return true
-		}
-		return a.Tesla.AuthCode == b.Tesla.AuthCode &&
-			a.Tesla.Region == b.Tesla.Region &&
-			a.Tesla.AccessToken == b.Tesla.AccessToken &&
-			a.Tesla.RefreshToken == b.Tesla.RefreshToken &&
-			a.Tesla.Expiry.Equal(b.Tesla.Expiry) &&
-			a.Tesla.EnergySiteID == b.Tesla.EnergySiteID &&
-			a.Tesla.SerialNumber == b.Tesla.SerialNumber
-	case "franklin":
-		if (a.Franklin == nil) != (b.Franklin == nil) {
-			return false
-		}
-		if a.Franklin == nil {
-			return true
-		}
-		return *a.Franklin == *b.Franklin
-	case "enphase":
-		if (a.Enphase == nil) != (b.Enphase == nil) {
-			return false
-		}
-		if a.Enphase == nil {
-			return true
-		}
-		return *a.Enphase == *b.Enphase
-	case "mock":
-		if (a.Mock == nil) != (b.Mock == nil) {
-			return false
-		}
-		if a.Mock == nil {
-			return true
-		}
-		return *a.Mock == *b.Mock
-	default:
-		return reflect.DeepEqual(a, b)
-	}
-}
-
-func (s *Server) decryptCredentialsQuiet(ctx context.Context, siteID string, encrypted []byte) (types.Credentials, error) {
-	if len(s.encryptionKey) != 32 {
-		return types.Credentials{}, errors.New("encryption key not configured")
-	}
-	quietCtx := log.With(ctx, slog.New(slog.DiscardHandler))
-	creds, _, err := s.decryptCredentials(quietCtx, siteID, encrypted)
-	return creds, err
-}
-
-func (s *Server) areProviderCredentialsSuperseded(
-	ctx context.Context,
-	siteID string,
-	targetESS string,
-	origEncrypted []byte,
-	currentEncrypted []byte,
-	origCreds types.Credentials,
-	newCreds types.Credentials,
-) bool {
-	if bytes.Equal(origEncrypted, currentEncrypted) || (len(origEncrypted) == 0 && len(currentEncrypted) == 0) {
-		return false
-	}
-	if len(origEncrypted) > 0 && len(currentEncrypted) == 0 {
-		return true
-	}
-	curCreds, err := s.decryptCredentialsQuiet(ctx, siteID, currentEncrypted)
-	if err != nil {
-		return false
-	}
-	if !equalProviderCredentials(targetESS, origCreds, curCreds) {
-		return true
-	}
-	if targetESS == "tesla" && newCreds.Tesla != nil && curCreds.Tesla != nil && curCreds.Tesla.Expiry.After(newCreds.Tesla.Expiry) {
-		return true
-	}
-	return false
-}
-
-func (s *Server) mergeProviderCredsOntoEncrypted(
-	ctx context.Context,
-	siteID string,
-	currentEncrypted []byte,
-	fallbackCreds types.Credentials,
-	updatedCreds types.Credentials,
-	essName string,
-) ([]byte, error) {
-	baseCreds := fallbackCreds
-	if len(currentEncrypted) > 0 {
-		dec, _, err := s.decryptCredentials(ctx, siteID, currentEncrypted)
-		if err != nil {
-			return nil, err
-		}
-		baseCreds = dec
-	}
-	savedCreds := mergeUpdatedProviderCredentials(baseCreds, updatedCreds, essName)
-	return s.encryptCredentials(ctx, siteID, savedCreds)
-}
-
 func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (settingsWithVersion, types.Credentials, error) {
 	settings, version, updatedAt, err := s.storage.GetSettings(ctx, siteID)
 	if err != nil {
@@ -343,7 +241,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				)
 				return current, curVersion, false, nil
 			}
-			if s.areProviderCredentialsSuperseded(ctx, siteID, targetESS, origEncrypted, current.EncryptedCredentials, creds, newCreds) {
+			if !bytes.Equal(origEncrypted, current.EncryptedCredentials) {
 				log.Ctx(ctx).InfoContext(ctx, "aborting ess auth write-back because credentials changed concurrently",
 					slog.String("ess", targetESS),
 				)
@@ -353,13 +251,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 			next.ESSAuthStatus.ConsecutiveFailures = nextESSFailureCount(current.ESSAuthStatus.ConsecutiveFailures, err)
 			next.ESSAuthStatus.LastAttempt = now
 			if len(enc) > 0 {
-				if bytes.Equal(origEncrypted, current.EncryptedCredentials) {
-					next.EncryptedCredentials = enc
-				} else if mergedEnc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, creds, newCreds, targetESS); encErr != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt merged credentials", slog.Any("error", encErr))
-				} else {
-					next.EncryptedCredentials = mergedEnc
-				}
+				next.EncryptedCredentials = enc
 			}
 			ver := curVersion
 			if ver == 0 {
@@ -406,31 +298,11 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				)
 				return current, curVersion, false, nil
 			}
-			skipCredWrite := false
 			if !bytes.Equal(origEncrypted, current.EncryptedCredentials) {
-				if len(origEncrypted) > 0 && len(current.EncryptedCredentials) == 0 {
-					log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
-						slog.String("ess", targetESS),
-					)
-					return current, curVersion, false, nil
-				}
-				if curCreds, decErr := s.decryptCredentialsQuiet(ctx, siteID, current.EncryptedCredentials); decErr == nil {
-					if !equalProviderCredentials(targetESS, creds, curCreds) {
-						if updated && equalProviderCredentials(targetESS, newCreds, curCreds) {
-							skipCredWrite = true
-						} else {
-							log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
-								slog.String("ess", targetESS),
-							)
-							return current, curVersion, false, nil
-						}
-					} else if targetESS == "tesla" && newCreds.Tesla != nil && curCreds.Tesla != nil && curCreds.Tesla.Expiry.After(newCreds.Tesla.Expiry) {
-						log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
-							slog.String("ess", targetESS),
-						)
-						return current, curVersion, false, nil
-					}
-				}
+				log.Ctx(ctx).InfoContext(ctx, "aborting ess credential write-back because credentials changed concurrently",
+					slog.String("ess", targetESS),
+				)
+				return current, curVersion, false, nil
 			}
 			next := current
 			changed := false
@@ -439,16 +311,9 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 				next.ESSAuthStatus.LastAttempt = now
 				changed = true
 			}
-			if len(enc) > 0 && !skipCredWrite {
-				if bytes.Equal(origEncrypted, current.EncryptedCredentials) {
-					next.EncryptedCredentials = enc
-					changed = true
-				} else if mergedEnc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, creds, newCreds, targetESS); encErr != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt merged credentials", slog.Any("error", encErr))
-				} else {
-					next.EncryptedCredentials = mergedEnc
-					changed = true
-				}
+			if len(enc) > 0 {
+				next.EncryptedCredentials = enc
+				changed = true
 			}
 			if !changed {
 				return current, curVersion, false, nil
@@ -527,6 +392,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		types.Settings
 		Credentials *types.Credentials `json:"credentials,omitempty"`
+		StageToken  string             `json:"stageToken,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -674,7 +540,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var changedESS bool
 	var authCheckNow, authDoneNow time.Time
 	// Handle credentials or ESS update
-	if req.Credentials != nil || existing.ESS != newSettings.ESS {
+	if req.Credentials != nil || req.StageToken != "" || existing.ESS != newSettings.ESS {
 
 		// check if ESS changed
 		var shouldBackfillHistory bool
@@ -683,14 +549,33 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			shouldBackfillHistory = true
 		}
 		origCreds := existingCreds
-		candidateCreds, credChanged, credBackfill := mergeSettingsCredentials(existingCreds, newSettings.ESS, req.Credentials)
-		if credChanged {
+		if req.StageToken != "" {
+			stagedCreds, err := s.decryptStageCredentials(ctx, siteID, newSettings.ESS, req.StageToken, s.now().UTC())
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "invalid ess stage token", slog.String("ess", newSettings.ESS), slog.Any("error", err))
+				if errors.Is(err, errESSStageTokenExpired) {
+					writeJSONError(w, "ESS verification session expired. Please start verification again.", http.StatusBadRequest)
+				} else {
+					writeJSONError(w, "invalid ESS verification token", http.StatusBadRequest)
+				}
+				return
+			}
 			changedESS = true
+			if !origCreds.Has()[newSettings.ESS] {
+				shouldBackfillHistory = true
+			}
+			existingCreds = mergeUpdatedProviderCredentials(types.Credentials{}, stagedCreds, newSettings.ESS)
 		}
-		if credBackfill {
-			shouldBackfillHistory = true
+		if req.Credentials != nil || req.StageToken == "" {
+			candidateCreds, credChanged, credBackfill := mergeSettingsCredentials(existingCreds, newSettings.ESS, req.Credentials)
+			if credChanged {
+				changedESS = true
+			}
+			if credBackfill {
+				shouldBackfillHistory = true
+			}
+			existingCreds = candidateCreds
 		}
-		existingCreds = candidateCreds
 
 		// if the ess credentials changed, we need to verify them and potentially backfill history
 		log.Ctx(ctx).InfoContext(
@@ -723,25 +608,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				if errors.Is(err, ess.ErrNeedsNextStage) {
 					log.Ctx(ctx).InfoContext(ctx, "ess credentials require next stage verification", slog.String("ess", newSettings.ESS))
-					if credsUpdated {
-						_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
-							enc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, origCreds, existingCreds, newSettings.ESS)
-							if encErr != nil {
-								log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt stage credentials", slog.Any("error", encErr))
-								return current, curVersion, false, nil
-							}
-							next := current
-							next.EncryptedCredentials = enc
-							ver := curVersion
-							if ver == 0 {
-								ver = existingSV.version
-							}
-							return next, ver, true, nil
-						})
-						if dbErr != nil {
-							log.Ctx(ctx).ErrorContext(ctx, "failed to save stage credentials", slog.Any("error", dbErr))
-						}
-					}
 					writeJSONError(w, "A verification code was sent to your email. Please enter the code and try again.", http.StatusBadRequest)
 					return
 				}
@@ -756,7 +622,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					next := current
 					credsSaved = false
 					if credsUpdated {
-						if enc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, origCreds, existingCreds, newSettings.ESS); encErr != nil {
+						baseCreds := origCreds
+						if len(current.EncryptedCredentials) > 0 {
+							if dec, _, decErr := s.decryptCredentials(ctx, siteID, current.EncryptedCredentials); decErr == nil {
+								baseCreds = dec
+							}
+						}
+						savedCreds := mergeUpdatedProviderCredentials(baseCreds, existingCreds, newSettings.ESS)
+						if enc, encErr := s.encryptCredentials(ctx, siteID, savedCreds); encErr != nil {
 							log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated credentials", slog.Any("error", encErr))
 						} else {
 							next.EncryptedCredentials = enc
@@ -1118,6 +991,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ESS         string             `json:"ess"`
 		Credentials *types.Credentials `json:"credentials,omitempty"`
+		StageToken  string             `json:"stageToken,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to decode ess stage request", slog.Any("error", err))
@@ -1157,21 +1031,36 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	}
 	existing := existingSV.Settings
 
-	origCreds := existingCreds
+	var stageCreds types.Credentials
+	if req.StageToken != "" {
+		stageCreds, err = s.decryptStageCredentials(ctx, siteID, req.ESS, req.StageToken, now)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "invalid ess stage token", slog.String("ess", req.ESS), slog.Any("error", err))
+			if errors.Is(err, errESSStageTokenExpired) {
+				writeJSONError(w, "ESS verification session expired. Please start verification again.", http.StatusBadRequest)
+			} else {
+				writeJSONError(w, "invalid ESS verification token", http.StatusBadRequest)
+			}
+			return
+		}
+	} else if existing.ESS == req.ESS {
+		stageCreds = existingCreds
+	}
+
 	switch req.ESS {
 	case "enphase":
 		if req.Credentials != nil && req.Credentials.Enphase != nil {
-			existingCreds.Enphase = mergeEnphaseCredentials(existingCreds.Enphase, req.Credentials.Enphase)
+			stageCreds.Enphase = mergeEnphaseCredentials(stageCreds.Enphase, req.Credentials.Enphase)
 			// Stage 0 requests (no OTP code and no password) explicitly request a fresh OTP email;
 			// clear any previously cached session so expired OTP-only sessions don't fail with 401.
-			if req.Credentials.Enphase.Code == "" && req.Credentials.Enphase.Password == "" && existingCreds.Enphase != nil {
-				existingCreds.Enphase.SessionID = ""
-				existingCreds.Enphase.ManagerToken = ""
+			if req.Credentials.Enphase.Code == "" && req.Credentials.Enphase.Password == "" && stageCreds.Enphase != nil {
+				stageCreds.Enphase.SessionID = ""
+				stageCreds.Enphase.ManagerToken = ""
 			}
 		}
-		existingCreds.Franklin = nil
-		existingCreds.Mock = nil
-		existingCreds.Tesla = nil
+		stageCreds.Franklin = nil
+		stageCreds.Mock = nil
+		stageCreds.Tesla = nil
 	case "franklin":
 		log.Ctx(ctx).ErrorContext(ctx, "stages not supported for franklin")
 		writeJSONError(w, "Franklin does not support stages", http.StatusBadRequest)
@@ -1197,20 +1086,13 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newCreds, updated, err := essSystem.Authenticate(ctx, existingCreds)
+	newCreds, updated, err := essSystem.Authenticate(ctx, stageCreds)
 	now = s.now().UTC()
 
 	// its expected that this returns needs next stage if there is one
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
 			next := current
-			if updated {
-				if enc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, origCreds, newCreds, req.ESS); encErr != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated stage credentials", slog.Any("error", encErr))
-				} else {
-					next.EncryptedCredentials = enc
-				}
-			}
 			checkInteractiveESSRateLimit(&next.ESSAuthStatus, authCheckNow)
 			next.ESSAuthStatus.ConsecutiveFailures++
 			next.ESSAuthStatus.ConsecutiveUserFailures++
@@ -1231,35 +1113,32 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	credsToStage := stageCreds
+	if updated {
+		credsToStage = newCreds
+	}
+	stageToken, encErr := s.encryptStageCredentials(ctx, siteID, req.ESS, credsToStage, now.Add(essStageTokenTTL))
+	if encErr != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt stage credentials", slog.Any("error", encErr))
+		writeJSONError(w, "failed to encrypt stage credentials", http.StatusInternalServerError)
+		return
+	}
+
 	// Only reset failure counters when full stage authentication succeeds (err == nil),
 	// NOT when ErrNeedsNextStage is returned on stage 0 before OTP/password verification.
 	authReset := err == nil && (existing.ESSAuthStatus.ConsecutiveFailures > 0 || existing.ESSAuthStatus.ConsecutiveSetFailures > 0 || existing.ESSAuthStatus.ConsecutiveUserFailures > 0)
-	if authReset || updated {
+	if authReset {
 		_, _, _, dbErr := s.storage.UpdateSettings(ctx, siteID, func(current types.Settings, curVersion int) (types.Settings, int, bool, error) {
 			next := current
-			changed := false
-			if updated {
-				if enc, encErr := s.mergeProviderCredsOntoEncrypted(ctx, siteID, current.EncryptedCredentials, origCreds, newCreds, req.ESS); encErr != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt rotated stage credentials", slog.Any("error", encErr))
-				} else {
-					next.EncryptedCredentials = enc
-					changed = true
-				}
-			}
-			if err == nil {
-				checkInteractiveESSRateLimit(&next.ESSAuthStatus, authCheckNow)
-				if next.ESSAuthStatus.ConsecutiveFailures > 0 || next.ESSAuthStatus.ConsecutiveSetFailures > 0 || next.ESSAuthStatus.ConsecutiveUserFailures > 0 {
-					next.ESSAuthStatus.ConsecutiveFailures = 0
-					next.ESSAuthStatus.ConsecutiveSetFailures = 0
-					next.ESSAuthStatus.ConsecutiveUserFailures = 0
-					next.ESSAuthStatus.LastAttempt = now
-					next.ESSAuthStatus.LastUserAttempt = now
-					changed = true
-				}
-			}
-			if !changed {
+			checkInteractiveESSRateLimit(&next.ESSAuthStatus, authCheckNow)
+			if next.ESSAuthStatus.ConsecutiveFailures == 0 && next.ESSAuthStatus.ConsecutiveSetFailures == 0 && next.ESSAuthStatus.ConsecutiveUserFailures == 0 {
 				return current, curVersion, false, nil
 			}
+			next.ESSAuthStatus.ConsecutiveFailures = 0
+			next.ESSAuthStatus.ConsecutiveSetFailures = 0
+			next.ESSAuthStatus.ConsecutiveUserFailures = 0
+			next.ESSAuthStatus.LastAttempt = now
+			next.ESSAuthStatus.LastUserAttempt = now
 			ver := curVersion
 			if ver == 0 {
 				ver = existingSV.version
@@ -1273,7 +1152,13 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {
+	if encErr := json.NewEncoder(w).Encode(struct {
+		Success    bool   `json:"success"`
+		StageToken string `json:"stageToken"`
+	}{
+		Success:    true,
+		StageToken: stageToken,
+	}); encErr != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

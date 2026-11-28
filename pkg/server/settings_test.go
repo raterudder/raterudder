@@ -1897,9 +1897,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
 		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+		expectUpdateSettings(mockS, mock.Anything, types.SiteIDNone, types.Settings{}, types.CurrentSettingsVersion, func(s types.Settings) bool {
 			return s.Location != nil && s.Location.PostalCode == "SW1A 1AA" && s.Location.CountryCode == "GB"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		payload, err := json.Marshal(types.Settings{
 			CountryCode:        "GB",
@@ -1924,9 +1924,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockW.On("Location", mock.Anything, "CA", "K1A-0B1").Return(locHyphen, nil).Once()
 		mockW.On("Forecast", mock.Anything, locHyphen, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Once()
 		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, time.Time{}, 0, nil).Once()
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+		expectUpdateSettings(mockS, mock.Anything, types.SiteIDNone, types.Settings{}, types.CurrentSettingsVersion, func(s types.Settings) bool {
 			return s.Location != nil && s.Location.PostalCode == "K1A-0B1" && s.Location.CountryCode == "CA"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		payloadHyphen, err := json.Marshal(types.Settings{
 			CountryCode:        "CA",
@@ -2169,7 +2169,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetWeather", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
 		mockS.On("UpdateHistorySummary", mock.Anything, siteID, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
-		mockS.On("SetSettings", mock.Anything, siteID, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		expectUpdateSettings(mockS, mock.Anything, siteID, types.Settings{}, types.CurrentSettingsVersion, nil, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		srv.weather = &weather.GoogleGeocodingWrapper{
 			OpenMeteo:    omClosed,
@@ -5145,7 +5145,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 					}).Return(bgReturnedCreds, updatedBeforeErr, fmt.Errorf("session expired: %w", ess.ErrUnauthorized)).Once()
 
 					mockStageEnphase.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-					mockStageEnphase.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+					mockStageEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+						return c.Enphase != nil && c.Enphase.Username == "owner@example.com" && c.Enphase.Code == "" && c.Enphase.SessionID == ""
+					})).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
+					mockStageEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+						return c.Enphase != nil && c.Enphase.Username == "owner@example.com" && c.Enphase.Code == "123456"
+					})).Return(types.Credentials{
 						Enphase: &types.EnphaseCredentials{
 							Username:     "owner@example.com",
 							Password:     "",
@@ -5171,7 +5176,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 						"credentials": map[string]any{
 							"enphase": map[string]any{
 								"username": "owner@example.com",
-								"code":     "123456",
 							},
 						},
 					})
@@ -5182,6 +5186,40 @@ func TestHandleUpdateSettings(t *testing.T) {
 					stageW := httptest.NewRecorder()
 					srv.handleESSStage(stageW, stageReq)
 					require.Equal(t, http.StatusOK, stageW.Result().StatusCode, stageW.Body.String())
+
+					var stageResp struct {
+						Success    bool   `json:"success"`
+						StageToken string `json:"stageToken"`
+					}
+					require.NoError(t, json.NewDecoder(stageW.Body).Decode(&stageResp))
+					require.True(t, stageResp.Success)
+					require.NotEmpty(t, stageResp.StageToken)
+
+					// Staging must NOT have mutated persisted EncryptedCredentials yet
+					midSettings, _, _, _ := store.snapshot()
+					assert.Equal(t, encOrig, midSettings.EncryptedCredentials)
+
+					// Completing OTP via handleUpdateSettings with stageToken persists new Enphase credentials
+					saveBody, err := json.Marshal(map[string]any{
+						"ess":                      "enphase",
+						"minBatterySOC":            20,
+						"solarTrendRatioMax":       3,
+						"solarBellCurveMultiplier": 1,
+						"customGridSettings":       true,
+						"stageToken":               stageResp.StageToken,
+						"credentials": map[string]any{
+							"enphase": map[string]any{
+								"username": "owner@example.com",
+								"code":     "123456",
+							},
+						},
+					})
+					require.NoError(t, err)
+					saveReq := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(saveBody)), "admin@example.com", true)
+					saveReq = saveReq.WithContext(context.WithValue(saveReq.Context(), siteIDContextKey, siteID))
+					saveW := httptest.NewRecorder()
+					srv.handleUpdateSettings(saveW, saveReq)
+					require.Equal(t, http.StatusOK, saveW.Result().StatusCode, saveW.Body.String())
 					close(otpSaved)
 
 					wg.Wait()
@@ -5338,8 +5376,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		})
 	})
 
-	t.Run("getESSSystem Rotating Active Credentials Preserves Concurrent Stage Credentials For Another Provider", func(t *testing.T) {
-		fixedNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	t.Run("handleESSStage Returns Opaque StageToken Without Touching Active Credentials And handleUpdateSettings Completes Switch", func(t *testing.T) {
+		currentNow := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 
 		for _, bgErrCase := range []bool{false, true} {
 			name := "bg_success"
@@ -5347,18 +5385,30 @@ func TestHandleUpdateSettings(t *testing.T) {
 				name = "bg_error_after_rotation"
 			}
 			t.Run(name, func(t *testing.T) {
-				siteID := "site-stage-merge-" + name
+				siteID := "site-stage-token-" + name
 				mockS := &mockStorage{}
 				mockTesla := &mockESS{MockName: "tesla"}
 				mockEnphase := &mockESS{MockName: "enphase"}
 				essMap := ess.NewMap()
 				essMap.SetSystem(siteID, mockTesla)
+				mockS.On("GetLatestEnergyHistoryTime", mock.Anything, siteID).Return(currentNow, types.CurrentEnergyStatsVersion, nil).Maybe()
+				mockS.On("UpsertEnergyHistories", mock.Anything, siteID, mock.Anything, mock.Anything).Return(nil).Maybe()
+				mockS.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+				mockS.On("GetWeather", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+				mockS.On("UpdateHistorySummary", mock.Anything, siteID, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+				mockEnphase.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
 
+				nowVal := currentNow
+				var nowMu sync.Mutex
 				srv := &Server{
 					storage:       mockS,
 					ess:           essMap,
 					encryptionKey: "test-secret-key-1234567890123456",
-					nowFunc:       func() time.Time { return fixedNow },
+					nowFunc: func() time.Time {
+						nowMu.Lock()
+						defer nowMu.Unlock()
+						return nowVal
+					},
 				}
 
 				encOrig, err := srv.encryptCredentials(context.Background(), siteID, types.Credentials{
@@ -5366,17 +5416,20 @@ func TestHandleUpdateSettings(t *testing.T) {
 						Region:       "NA",
 						AccessToken:  "mock-old-tesla-access",
 						RefreshToken: "mock-old-tesla-refresh",
-						Expiry:       fixedNow.Add(-time.Minute),
+						Expiry:       currentNow.Add(-time.Minute),
 						EnergySiteID: 1234,
 					},
 				})
 				require.NoError(t, err)
 
 				store := attachAtomicSettingsStore(mockS, siteID, types.Settings{
-					ESS:                  "tesla",
-					MinBatterySOC:        20,
-					EncryptedCredentials: encOrig,
-				}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
+					ESS:                      "tesla",
+					MinBatterySOC:            20,
+					SolarTrendRatioMax:       3,
+					SolarBellCurveMultiplier: 1,
+					CustomGridSettings:       true,
+					EncryptedCredentials:     encOrig,
+				}, types.CurrentSettingsVersion, currentNow.Add(-time.Hour))
 
 				svBg, credsBg, err := srv.getSettingsWithMigration(context.Background(), siteID)
 				require.NoError(t, err)
@@ -5397,13 +5450,18 @@ func TestHandleUpdateSettings(t *testing.T) {
 						Region:       "NA",
 						AccessToken:  "mock-rotated-tesla-access",
 						RefreshToken: "mock-rotated-tesla-refresh",
-						Expiry:       fixedNow.Add(8 * time.Hour),
+						Expiry:       currentNow.Add(8 * time.Hour),
 						EnergySiteID: 1234,
 					},
 				}, true, authRetErr).Once()
 
 				mockEnphase.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-				mockEnphase.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+				mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+					return c.Enphase != nil && c.Enphase.Username == "owner@example.com" && c.Enphase.Password == "mock-enphase-pw" && c.Enphase.Code == ""
+				})).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
+				mockEnphase.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+					return c.Enphase != nil && c.Enphase.Username == "owner@example.com" && c.Enphase.Password == "mock-enphase-pw" && c.Enphase.Code == "654321"
+				})).Return(types.Credentials{
 					Enphase: &types.EnphaseCredentials{
 						Username:     "owner@example.com",
 						SessionID:    "mock-staged-enphase-sess",
@@ -5421,14 +5479,14 @@ func TestHandleUpdateSettings(t *testing.T) {
 				}()
 
 				<-authStarted
-				// Concurrently run handleESSStage for Enphase while active ESS remains "tesla"
+				// Concurrently run handleESSStage for Enphase Stage 0 while active ESS remains "tesla"
 				essMap.SetSystem(siteID, mockEnphase)
 				stageBody, err := json.Marshal(map[string]any{
 					"ess": "enphase",
 					"credentials": map[string]any{
 						"enphase": map[string]any{
 							"username": "owner@example.com",
-							"code":     "654321",
+							"password": "mock-enphase-pw",
 						},
 					},
 				})
@@ -5438,6 +5496,18 @@ func TestHandleUpdateSettings(t *testing.T) {
 				stageW := httptest.NewRecorder()
 				srv.handleESSStage(stageW, stageReq)
 				require.Equal(t, http.StatusOK, stageW.Result().StatusCode, stageW.Body.String())
+
+				var stageResp struct {
+					Success    bool   `json:"success"`
+					StageToken string `json:"stageToken"`
+				}
+				require.NoError(t, json.NewDecoder(stageW.Body).Decode(&stageResp))
+				require.True(t, stageResp.Success)
+				require.NotEmpty(t, stageResp.StageToken)
+
+				// Stored EncryptedCredentials was untouched during staging, so Tesla rotation still matches origEncrypted!
+				duringStage, _, _, _ := store.snapshot()
+				assert.Equal(t, encOrig, duringStage.EncryptedCredentials)
 				close(stageDone)
 
 				wg.Wait()
@@ -5447,16 +5517,71 @@ func TestHandleUpdateSettings(t *testing.T) {
 					require.NoError(t, bgErr)
 				}
 
+				afterBg, _, _, _ := store.snapshot()
+				assert.Equal(t, "tesla", afterBg.ESS)
+				decAfterBg, _, err := srv.decryptCredentials(context.Background(), siteID, afterBg.EncryptedCredentials)
+				require.NoError(t, err)
+				require.NotNil(t, decAfterBg.Tesla, "rotated active Tesla credentials must be saved without conflict")
+				assert.Equal(t, "mock-rotated-tesla-access", decAfterBg.Tesla.AccessToken)
+				assert.Equal(t, "mock-rotated-tesla-refresh", decAfterBg.Tesla.RefreshToken)
+				assert.Nil(t, decAfterBg.Enphase)
+
+				// Persisted EncryptedCredentials blob cannot be replayed as stageToken
+				persistedAsStageBody, err := json.Marshal(map[string]any{
+					"ess":                      "enphase",
+					"minBatterySOC":            20,
+					"solarTrendRatioMax":       3,
+					"solarBellCurveMultiplier": 1,
+					"customGridSettings":       true,
+					"stageToken":               afterBg.EncryptedCredentials,
+				})
+				require.NoError(t, err)
+				badReq := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(persistedAsStageBody)), "admin@example.com", true)
+				badReq = badReq.WithContext(context.WithValue(badReq.Context(), siteIDContextKey, siteID))
+				badW := httptest.NewRecorder()
+				srv.handleUpdateSettings(badW, badReq)
+				assert.Equal(t, http.StatusBadRequest, badW.Result().StatusCode)
+				assert.Contains(t, badW.Body.String(), "invalid ESS verification token")
+
+				// Completing OTP via handleUpdateSettings with stageToken switches ESS to Enphase
+				saveBody, err := json.Marshal(map[string]any{
+					"ess":                      "enphase",
+					"minBatterySOC":            20,
+					"solarTrendRatioMax":       3,
+					"solarBellCurveMultiplier": 1,
+					"customGridSettings":       true,
+					"stageToken":               stageResp.StageToken,
+					"credentials": map[string]any{
+						"enphase": map[string]any{
+							"code": "654321",
+						},
+					},
+				})
+				require.NoError(t, err)
+				saveReq := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(saveBody)), "admin@example.com", true)
+				saveReq = saveReq.WithContext(context.WithValue(saveReq.Context(), siteIDContextKey, siteID))
+				saveW := httptest.NewRecorder()
+				srv.handleUpdateSettings(saveW, saveReq)
+				require.Equal(t, http.StatusOK, saveW.Result().StatusCode, saveW.Body.String())
+
 				finalSettings, _, _, _ := store.snapshot()
-				assert.Equal(t, "tesla", finalSettings.ESS)
+				assert.Equal(t, "enphase", finalSettings.ESS)
 				decFinal, _, err := srv.decryptCredentials(context.Background(), siteID, finalSettings.EncryptedCredentials)
 				require.NoError(t, err)
-				require.NotNil(t, decFinal.Tesla, "rotated active Tesla credentials must be saved")
-				assert.Equal(t, "mock-rotated-tesla-access", decFinal.Tesla.AccessToken)
-				assert.Equal(t, "mock-rotated-tesla-refresh", decFinal.Tesla.RefreshToken)
-				require.NotNil(t, decFinal.Enphase, "concurrently staged Enphase credentials must not be wiped out")
+				require.NotNil(t, decFinal.Enphase)
 				assert.Equal(t, "mock-staged-enphase-sess", decFinal.Enphase.SessionID)
 				assert.Equal(t, "mock-staged-enphase-mgr", decFinal.Enphase.ManagerToken)
+
+				// Once 30m TTL expires, the old stageToken cannot be replayed
+				nowMu.Lock()
+				nowVal = currentNow.Add(essStageTokenTTL + time.Second)
+				nowMu.Unlock()
+				expiredReq := withUser(httptest.NewRequest("POST", "/api/settings", bytes.NewReader(saveBody)), "admin@example.com", true)
+				expiredReq = expiredReq.WithContext(context.WithValue(expiredReq.Context(), siteIDContextKey, siteID))
+				expiredW := httptest.NewRecorder()
+				srv.handleUpdateSettings(expiredW, expiredReq)
+				assert.Equal(t, http.StatusBadRequest, expiredW.Result().StatusCode)
+				assert.Contains(t, expiredW.Body.String(), "ESS verification session expired")
 			})
 		}
 	})
@@ -5907,10 +6032,19 @@ func TestHandleESSStage(t *testing.T) {
 		srv.handleESSStage(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
-		var resp map[string]bool
+		var resp struct {
+			Success    bool   `json:"success"`
+			StageToken string `json:"stageToken"`
+		}
 		err = json.NewDecoder(w.Body).Decode(&resp)
 		require.NoError(t, err)
-		assert.True(t, resp["success"])
+		assert.True(t, resp.Success)
+		require.NotEmpty(t, resp.StageToken)
+		staged, err := srv.decryptStageCredentials(context.Background(), types.SiteIDNone, "enphase", resp.StageToken, time.Now().UTC())
+		require.NoError(t, err)
+		require.NotNil(t, staged.Enphase)
+		assert.Equal(t, "test@example.com", staged.Enphase.Username)
+		mockS.AssertNotCalled(t, "UpdateSettings", mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("Stage failure on other error", func(t *testing.T) {
@@ -6181,11 +6315,11 @@ func TestHandleESSStage(t *testing.T) {
 		assert.True(t, mockES.AssertExpectations(t))
 	})
 
-	t.Run("Stage saves rotated credentials on error while preserving preexisting provider", func(t *testing.T) {
+	t.Run("Stage failure never overwrites preexisting active provider credentials", func(t *testing.T) {
 		srv, mockES, mockS := newAuthServer()
 
 		preexisting := types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "owner@example.com", Token: "frank-tok"},
+			Franklin: &types.FranklinCredentials{Username: "owner@example.com", Token: "mock-frank-tok"},
 		}
 		encPreexisting, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, preexisting)
 		require.NoError(t, err)
@@ -6198,8 +6332,8 @@ func TestHandleESSStage(t *testing.T) {
 		rotatedStage := types.Credentials{
 			Enphase: &types.EnphaseCredentials{
 				Username:     "owner@example.com",
-				SessionID:    "stage-sess",
-				ManagerToken: "stage-mgr",
+				SessionID:    "mock-stage-sess",
+				ManagerToken: "mock-stage-mgr",
 				SystemID:     555,
 			},
 		}
@@ -6232,12 +6366,12 @@ func TestHandleESSStage(t *testing.T) {
 		srv.handleESSStage(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 
+		assert.Equal(t, encPreexisting, savedSettings.EncryptedCredentials, "handleESSStage must never mutate stored EncryptedCredentials")
 		decrypted, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, savedSettings.EncryptedCredentials)
 		require.NoError(t, err)
 		require.NotNil(t, decrypted.Franklin)
-		assert.Equal(t, "frank-tok", decrypted.Franklin.Token)
-		require.NotNil(t, decrypted.Enphase)
-		assert.Equal(t, "stage-sess", decrypted.Enphase.SessionID)
+		assert.Equal(t, "mock-frank-tok", decrypted.Franklin.Token)
+		assert.Nil(t, decrypted.Enphase)
 	})
 
 	t.Run("Stage 0 clears expired Enphase session so fresh OTP can be requested", func(t *testing.T) {
@@ -6349,19 +6483,32 @@ func TestHandleESSStage(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Result().StatusCode, w.Body.String())
 		assert.Empty(t, logBuf.String(), "handleESSStage must emit zero ERROR logs when retrying stale snapshot")
 
+		var stageResp struct {
+			Success    bool   `json:"success"`
+			StageToken string `json:"stageToken"`
+		}
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&stageResp))
+		assert.True(t, stageResp.Success)
+		require.NotEmpty(t, stageResp.StageToken)
+
+		stagedCreds, err := srv.decryptStageCredentials(context.Background(), types.SiteIDNone, "enphase", stageResp.StageToken, fixedNow)
+		require.NoError(t, err)
+		require.NotNil(t, stagedCreds.Enphase)
+		assert.Equal(t, "stage-verified-sess", stagedCreds.Enphase.SessionID)
+
 		finalSettings, _, _, _ := store.snapshot()
 		assert.Equal(t, "franklin", finalSettings.ESS)
 		assert.Equal(t, 45.0, finalSettings.MinBatterySOC)
 		assert.Equal(t, 0, finalSettings.ESSAuthStatus.ConsecutiveFailures)
 		assert.Equal(t, 0, finalSettings.ESSAuthStatus.ConsecutiveUserFailures)
 		assert.True(t, finalSettings.Notifications["member@example.com"].MorningSummaryEnabled)
+		assert.Equal(t, encPreexisting, finalSettings.EncryptedCredentials, "handleESSStage must leave stored EncryptedCredentials untouched")
 
 		decrypted, _, err := srv.decryptCredentials(context.Background(), types.SiteIDNone, finalSettings.EncryptedCredentials)
 		require.NoError(t, err)
 		require.NotNil(t, decrypted.Franklin)
 		assert.Equal(t, "frank-tok", decrypted.Franklin.Token)
-		require.NotNil(t, decrypted.Enphase)
-		assert.Equal(t, "stage-verified-sess", decrypted.Enphase.SessionID)
+		assert.Nil(t, decrypted.Enphase)
 	})
 }
 

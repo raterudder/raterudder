@@ -398,23 +398,6 @@ func (b *baseTesla) enabled() bool {
 	return b.clientID != "" && b.clientSecret != ""
 }
 
-// ConfigureTeslaForTest configures Tesla OAuth and API endpoints on the Map for unit and integration tests.
-func (m *Map) ConfigureTeslaForTest(clientID, clientSecret, baseURL, tokenURL string, client *http.Client) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.baseTesla = &baseTesla{
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		baseURLs:     map[string]string{"NA": baseURL},
-		tokenURL:     tokenURL,
-		authURL:      baseURL + "/oauth2/v3/authorize",
-		client:       client,
-	}
-}
-
 func (b *baseTesla) getRegionBaseURLFromCode(code string) (string, string, error) {
 	// the code starts with the region
 	for region, baseURL := range b.baseURLs {

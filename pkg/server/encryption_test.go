@@ -4,9 +4,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -185,5 +187,95 @@ func TestCredentials(t *testing.T) {
 		assert.False(t, needsUpgrade)
 		assert.Equal(t, creds, decrypted)
 	})
+}
 
+func TestStageCredentials(t *testing.T) {
+	testKey := "01234567890123456789012345678901"
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+	t.Run("Encrypt and Decrypt Stage Token", func(t *testing.T) {
+		srv := &Server{encryptionKey: testKey}
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username: "owner@example.com",
+				Password: "mock-enphase-password",
+			},
+		}
+
+		token, err := srv.encryptStageCredentials(t.Context(), "site-1", "enphase", creds, now.Add(essStageTokenTTL))
+		require.NoError(t, err)
+		require.NotEmpty(t, token)
+
+		decrypted, err := srv.decryptStageCredentials(t.Context(), "site-1", "enphase", token, now.Add(essStageTokenTTL-time.Nanosecond))
+		require.NoError(t, err)
+		assert.Equal(t, creds, decrypted)
+	})
+
+	t.Run("Stage Token Cannot Be Confused With Persisted EncryptedCredentials", func(t *testing.T) {
+		srv := &Server{encryptionKey: testKey}
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username:     "owner@example.com",
+				SessionID:    "mock-session-id",
+				ManagerToken: "mock-manager-token",
+			},
+		}
+
+		// 1. Persisted EncryptedCredentials blob base64-encoded must be rejected as a stageToken
+		persisted, err := srv.encryptCredentials(t.Context(), "site-1", creds)
+		require.NoError(t, err)
+		persistedB64 := base64.StdEncoding.EncodeToString(persisted)
+
+		_, err = srv.decryptStageCredentials(t.Context(), "site-1", "enphase", persistedB64, now)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "failed to decrypt ess stage token")
+
+		// 2. Stage token raw bytes must be rejected by persisted decryptCredentials
+		stageToken, err := srv.encryptStageCredentials(t.Context(), "site-1", "enphase", creds, now.Add(essStageTokenTTL))
+		require.NoError(t, err)
+		stageRaw, err := base64.StdEncoding.DecodeString(stageToken)
+		require.NoError(t, err)
+
+		_, _, err = srv.decryptCredentials(t.Context(), "site-1", stageRaw)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "failed to decrypt credentials")
+	})
+
+	t.Run("Stage Token Enforces Expiration", func(t *testing.T) {
+		srv := &Server{encryptionKey: testKey}
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{Username: "owner@example.com"},
+		}
+		expiresAt := now.Add(essStageTokenTTL)
+		stageToken, err := srv.encryptStageCredentials(t.Context(), "site-1", "enphase", creds, expiresAt)
+		require.NoError(t, err)
+
+		_, err = srv.decryptStageCredentials(t.Context(), "site-1", "enphase", stageToken, expiresAt)
+		assert.ErrorIs(t, err, errESSStageTokenExpired)
+
+		_, err = srv.decryptStageCredentials(t.Context(), "site-1", "enphase", stageToken, expiresAt.Add(time.Minute))
+		assert.ErrorIs(t, err, errESSStageTokenExpired)
+	})
+
+	t.Run("Stage Token Rejects Wrong Site ESS Key Or Malformed Input", func(t *testing.T) {
+		srv1 := &Server{encryptionKey: testKey}
+		srv2 := &Server{encryptionKey: "12345678901234567890123456789012"}
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{Username: "owner@example.com"},
+		}
+		stageToken, err := srv1.encryptStageCredentials(t.Context(), "site-1", "enphase", creds, now.Add(essStageTokenTTL))
+		require.NoError(t, err)
+
+		_, err = srv1.decryptStageCredentials(t.Context(), "site-2", "enphase", stageToken, now)
+		assert.ErrorContains(t, err, "failed to decrypt ess stage token")
+
+		_, err = srv1.decryptStageCredentials(t.Context(), "site-1", "tesla", stageToken, now)
+		assert.ErrorContains(t, err, "ess stage token provider mismatch")
+
+		_, err = srv2.decryptStageCredentials(t.Context(), "site-1", "enphase", stageToken, now)
+		assert.ErrorContains(t, err, "failed to decrypt ess stage token")
+
+		_, err = srv1.decryptStageCredentials(t.Context(), "site-1", "enphase", "not-valid-base64!!!", now)
+		assert.ErrorContains(t, err, "malformed ess stage token")
+	})
 }

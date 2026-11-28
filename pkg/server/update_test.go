@@ -4514,7 +4514,7 @@ func TestSetESSModes(t *testing.T) {
 			EncryptedCredentials: []byte("initial-cipher"),
 		}, types.CurrentSettingsVersion, fixedNow.Add(-time.Hour))
 
-		// Snapshot from ListSitesSettings becomes stale when notifications and credentials update concurrently
+		// Snapshot from ListSitesSettings becomes stale when notifications and battery reserve update concurrently
 		staleSnapshot := settingsWithVersion{
 			Settings: types.Settings{
 				ESS:                  "tesla",
@@ -4529,7 +4529,7 @@ func TestSetESSModes(t *testing.T) {
 			MorningSummaryHour:    7,
 		}))
 		_, _, _, err := store.update(func(cur types.Settings, ver int) (types.Settings, int, bool, error) {
-			cur.EncryptedCredentials = []byte("rotated-tesla-cipher")
+			cur.MinBatterySOC = 45
 			return cur, ver, true, nil
 		})
 		require.NoError(t, err)
@@ -4537,7 +4537,7 @@ func TestSetESSModes(t *testing.T) {
 		var logBuf bytes.Buffer
 		errCtx := log.With(context.Background(), slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
 
-		// 1. Unauthorized failure merges ConsecutiveSetFailures onto latest stored settings without clobbering notifications or credentials
+		// 1. Unauthorized failure merges ConsecutiveSetFailures onto latest stored settings without clobbering notifications or concurrent edits
 		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized).Once()
 		_, err = srv.setESSModes(errCtx, "site-modes-rmw", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, staleSnapshot)
 		require.ErrorIs(t, err, ess.ErrUnauthorized)
@@ -4545,7 +4545,8 @@ func TestSetESSModes(t *testing.T) {
 
 		afterFail, _, _, _ := store.snapshot()
 		assert.Equal(t, 1, afterFail.ESSAuthStatus.ConsecutiveSetFailures)
-		assert.Equal(t, []byte("rotated-tesla-cipher"), afterFail.EncryptedCredentials)
+		assert.Equal(t, 45.0, afterFail.MinBatterySOC)
+		assert.Equal(t, []byte("initial-cipher"), afterFail.EncryptedCredentials)
 		assert.True(t, afterFail.Notifications["member@example.com"].MorningSummaryEnabled)
 
 		// 2. Subsequent recovery with stale snapshot resets ConsecutiveSetFailures while preserving concurrent changes
@@ -4560,7 +4561,8 @@ func TestSetESSModes(t *testing.T) {
 
 		afterRecover, _, _, _ := store.snapshot()
 		assert.Equal(t, 0, afterRecover.ESSAuthStatus.ConsecutiveSetFailures)
-		assert.Equal(t, []byte("rotated-tesla-cipher"), afterRecover.EncryptedCredentials)
+		assert.Equal(t, 45.0, afterRecover.MinBatterySOC)
+		assert.Equal(t, []byte("initial-cipher"), afterRecover.EncryptedCredentials)
 		assert.True(t, afterRecover.Notifications["member@example.com"].MorningSummaryEnabled)
 
 		// 3. If admin switched ESS provider concurrently, setESSModes aborts auth-status write-back
