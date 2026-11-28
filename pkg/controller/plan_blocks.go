@@ -138,6 +138,18 @@ func sameBlockChoice(a, b blockActionChoice) bool {
 		a.useSolarExportPrefix == b.useSolarExportPrefix
 }
 
+// isReserveRecoveryCharge reports whether c is a grid-charge choice targeting only
+// the block's active reserve floor rather than a higher discretionary SOC target.
+func (c blockActionChoice) isReserveRecoveryCharge(blockMinSOC float64) bool {
+	return c.actionType == blockActionCharge && c.targetSOC <= blockMinSOC+socTargetTolerancePct
+}
+
+// canUpgradeToReserveRecovery reports whether c is eligible to be upgraded to a
+// reserve-recovery charge when an unrecovered reserve deficit occurs inside the block.
+func (c blockActionChoice) canUpgradeToReserveRecovery() bool {
+	return c.actionType == blockActionLoad
+}
+
 // getHardOverride checks whether a specific interval is governed by a non-negotiable operational
 // override (grid outage, active VPP event, mandatory 2-hour VPP firmware lock, step-0 active EV
 // charging standby, or negative/free electricity import rate).
@@ -1345,7 +1357,7 @@ func isBlockActionAllowed(
 			return false
 		}
 		// Reserve deficit recovery (targetSOC == minSOC) is allowed in any block whenever SOC is below reserve.
-		if cand.targetSOC <= block.minSOC+socTargetTolerancePct {
+		if cand.isReserveRecoveryCharge(block.minSOC) {
 			return startState.soc < block.minSOC-reserveDeficitChargeTolerancePct
 		}
 		// Discretionary arbitrage charging is forbidden in the horizon's highest-price block.
@@ -1868,12 +1880,7 @@ func validateTrajectoryStates(
 	if len(timeline) > 0 && settings.GridChargeBatteries && !initialState.chargingDisabled {
 		deficitStartIdx := -1
 		for i := 0; i < len(timeline); i++ {
-			if states[i].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct ||
-				states[i+1].soc >= timeline[i].minSOC-reserveDeficitChargeTolerancePct {
-				deficitStartIdx = -1
-				continue
-			}
-			if isReserveDeficitExemptAction(actions[i]) {
+			if !timeline[i].isReserveDeficitStep(states[i], states[i+1], actions[i]) {
 				deficitStartIdx = -1
 				continue
 			}
@@ -1914,6 +1921,26 @@ func isReserveDeficitExemptAction(act actionCandidate) bool {
 		act.reason == types.ActionReasonEVChargingStandby ||
 		act.reason == types.ActionReasonVPPActive ||
 		act.reason == types.ActionReasonVPPPrep
+}
+
+// isReserveDeficitStep reports whether an interval starts and ends below its active
+// reserve deficit floor without an exempt action (grid charging or a hard override).
+func (it planInterval) isReserveDeficitStep(startState, endState planState, act actionCandidate) bool {
+	floorSOC := it.minSOC - reserveDeficitChargeTolerancePct
+	return startState.soc < floorSOC &&
+		endState.soc < floorSOC &&
+		!isReserveDeficitExemptAction(act)
+}
+
+// hasReserveDeficitStep reports whether any interval in b starts and ends in an
+// unexempt reserve deficit across the precomputed actions and states.
+func (b timelineBlock) hasReserveDeficitStep(acts []actionCandidate, states []planState, timeline []planInterval) bool {
+	for tIdx := b.startIdx; tIdx <= b.endIdx; tIdx++ {
+		if timeline[tIdx].isReserveDeficitStep(states[tIdx], states[tIdx+1], acts[tIdx]) {
+			return true
+		}
+	}
+	return false
 }
 
 // isDeficitRecoveredInBuffer reports whether a deficit at actions[stepOffset]
@@ -1962,10 +1989,7 @@ func hasUnrecoveredBlockDeficit(
 	for idx := 0; idx < blockLen; idx++ {
 		tIdx := block.startIdx + idx
 		act := checkActs[idx]
-		floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-		if checkStates[idx].soc >= floorSOC ||
-			checkStates[idx+1].soc >= floorSOC ||
-			isReserveDeficitExemptAction(act) {
+		if !timeline[tIdx].isReserveDeficitStep(checkStates[idx], checkStates[idx+1], act) {
 			deficitStartIdx = -1
 		} else {
 			if deficitStartIdx == -1 {
@@ -2204,23 +2228,10 @@ func critiqueBlockPlan(
 				if k == skipIdxA || k == skipIdxB {
 					continue
 				}
-				if tc[k].actionType == blockActionCharge && tc[k].targetSOC <= blocks[k].minSOC+socTargetTolerancePct {
+				if tc[k].isReserveRecoveryCharge(blocks[k].minSOC) ||
+					(tc[k].canUpgradeToReserveRecovery() && blocks[k].hasReserveDeficitStep(tcActs, tcStates, timeline)) {
 					needCheck = true
 					break
-				}
-				if tc[k].actionType == blockActionLoad {
-					for tIdx := blocks[k].startIdx; tIdx <= blocks[k].endIdx; tIdx++ {
-						floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-						if tcStates[tIdx].soc < floorSOC &&
-							tcStates[tIdx+1].soc < floorSOC &&
-							!isReserveDeficitExemptAction(tcActs[tIdx]) {
-							needCheck = true
-							break
-						}
-					}
-					if needCheck {
-						break
-					}
 				}
 			}
 			if !needCheck {
@@ -2228,10 +2239,27 @@ func critiqueBlockPlan(
 			}
 		}
 
+		simulateBlock := func(block timelineBlock, choice blockActionChoice, startState planState, priorDeficitStartIdx int) ([]actionCandidate, []planState, planState, int) {
+			expanded := expandBlockAction(scratch.blockActs, &scratch.tiedPositions, block, choice, startState, timeline, vppEvents, settings, currentStatus, lastAction, history)
+			scratch.blockActs = expanded
+			stepStates := scratch.stepStatesBuf[:len(expanded)+1]
+			stepStates[0] = startState
+			blockDeficitStartIdx := priorDeficitStartIdx
+			for idx, act := range expanded {
+				tIdx := block.startIdx + idx
+				stepStates[idx+1], _ = stepPhysics(stepStates[idx], act, timeline[tIdx], settings, roundTripEff)
+				if !timeline[tIdx].isReserveDeficitStep(stepStates[idx], stepStates[idx+1], act) {
+					blockDeficitStartIdx = -1
+				} else if blockDeficitStartIdx == -1 {
+					blockDeficitStartIdx = tIdx
+				}
+			}
+			return expanded, stepStates, stepStates[len(expanded)], blockDeficitStartIdx
+		}
+
 		poolStart := scratch.choicePoolUsed
 		tcRec := scratch.cloneChoices(tc)
 		changed := false
-		diverged := !hasPrecomputed
 		blockStartState := initialState
 		hasPriorCharge := false
 		deficitStartIdx := -1
@@ -2240,40 +2268,12 @@ func critiqueBlockPlan(
 			blockEntryStates[k] = blockStartState
 			blockDrainedSOC[k] = 0
 			wasRecoveryCharge := false
-			if k != skipIdxA && k != skipIdxB &&
-				tcRec[k].actionType == blockActionCharge &&
-				tcRec[k].targetSOC <= blocks[k].minSOC+socTargetTolerancePct {
+			if k != skipIdxA && k != skipIdxB && tcRec[k].isReserveRecoveryCharge(blocks[k].minSOC) {
 				tcRec[k] = blockActionChoice{actionType: blockActionLoad}
 				wasRecoveryCharge = true
 			}
-			var expanded []actionCandidate
-			var stepStates []planState
-			if !diverged && !wasRecoveryCharge {
-				expanded = tcActs[blocks[k].startIdx : blocks[k].endIdx+1]
-				stepStates = tcStates[blocks[k].startIdx : blocks[k].endIdx+2]
-			} else {
-				expanded = expandBlockAction(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-				scratch.blockActs = expanded
-				stepStates = scratch.stepStatesBuf[:len(expanded)+1]
-				stepStates[0] = blockStartState
-				for idx, act := range expanded {
-					tIdx := blocks[k].startIdx + idx
-					stepStates[idx+1], _ = stepPhysics(stepStates[idx], act, timeline[tIdx], settings, roundTripEff)
-				}
-			}
-			blockDeficitStartIdx := deficitStartIdx
-			for idx, act := range expanded {
-				tIdx := blocks[k].startIdx + idx
-				floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-				if stepStates[idx].soc >= floorSOC || stepStates[idx+1].soc >= floorSOC || isReserveDeficitExemptAction(act) {
-					blockDeficitStartIdx = -1
-				} else if blockDeficitStartIdx == -1 {
-					blockDeficitStartIdx = tIdx
-				}
-			}
-			endState := stepStates[len(expanded)]
-			restoredExact := false
-			if k != skipIdxA && k != skipIdxB && tcRec[k].actionType == blockActionLoad {
+			expanded, stepStates, endState, blockDeficitStartIdx := simulateBlock(blocks[k], tcRec[k], blockStartState, deficitStartIdx)
+			if k != skipIdxA && k != skipIdxB && tcRec[k].canUpgradeToReserveRecovery() {
 				checkActs := expanded
 				checkStates := stepStates
 				if !hasPriorCharge && blockDeficitStartIdx != -1 && blocks[k].endIdx+1 < len(timeline) {
@@ -2329,47 +2329,13 @@ func critiqueBlockPlan(
 						if !wasRecoveryCharge {
 							changed = true
 						}
-						if !diverged && wasRecoveryCharge && tc[k] == cand {
-							restoredExact = true
-							expanded = tcActs[blocks[k].startIdx : blocks[k].endIdx+1]
-							endState = tcStates[blocks[k].endIdx+1]
-							blockDeficitStartIdx = deficitStartIdx
-							for idx, act := range expanded {
-								tIdx := blocks[k].startIdx + idx
-								floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-								if tcStates[tIdx].soc >= floorSOC || tcStates[tIdx+1].soc >= floorSOC || isReserveDeficitExemptAction(act) {
-									blockDeficitStartIdx = -1
-								} else if blockDeficitStartIdx == -1 {
-									blockDeficitStartIdx = tIdx
-								}
-							}
-						} else {
-							diverged = true
-							expanded = expandBlockAction(scratch.blockActs, &scratch.tiedPositions, blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction, history)
-							scratch.blockActs = expanded
-							endState = blockStartState
-							blockDeficitStartIdx = deficitStartIdx
-							for idx, act := range expanded {
-								tIdx := blocks[k].startIdx + idx
-								nextState, _ := stepPhysics(endState, act, timeline[tIdx], settings, roundTripEff)
-								floorSOC := timeline[tIdx].minSOC - reserveDeficitChargeTolerancePct
-								if endState.soc >= floorSOC || nextState.soc >= floorSOC || isReserveDeficitExemptAction(act) {
-									blockDeficitStartIdx = -1
-								} else if blockDeficitStartIdx == -1 {
-									blockDeficitStartIdx = tIdx
-								}
-								endState = nextState
-							}
-						}
+						expanded, _, endState, blockDeficitStartIdx = simulateBlock(blocks[k], tcRec[k], blockStartState, deficitStartIdx)
 					} else if wasRecoveryCharge {
 						changed = true
 					}
 				} else if wasRecoveryCharge {
 					changed = true
 				}
-			}
-			if wasRecoveryCharge && !restoredExact {
-				diverged = true
 			}
 			if tcRec[k].actionType == blockActionLoad && blockStartState.soc > endState.soc+socTargetTolerancePct {
 				blockDrainedSOC[k] = blockStartState.soc - endState.soc
@@ -2679,7 +2645,7 @@ func critiqueBlockPlan(
 				// reserve deficits.
 				scratch.resetVariants()
 				scratch.variantChoices = append(scratch.variantChoices, baseTrial)
-				if (cand.actionType == blockActionCharge && cand.targetSOC > minSOC+socTargetTolerancePct) ||
+				if (cand.actionType == blockActionCharge && !cand.isReserveRecoveryCharge(minSOC)) ||
 					cand.actionType == blockActionStandby {
 					appendInterveningOffPeakHolds(baseTrial, b, len(blocks))
 				}
@@ -3066,12 +3032,12 @@ func critiqueBlockPlan(
 					}
 					// Also test holding intervening cheaper Load blocks (a+1 .. b-1) in Standby so energy charged or held in a
 					// does not discharge before reaching block b.
-					if (pt[0].actionType == blockActionCharge && pt[0].targetSOC > minSOCA+socTargetTolerancePct) ||
+					if (pt[0].actionType == blockActionCharge && !pt[0].isReserveRecoveryCharge(minSOCA)) ||
 						pt[0].actionType == blockActionStandby {
 						appendInterveningOffPeakHolds(baseTrial, a, b)
 					}
 					// When block b is a Charge or Standby block, also test holding intervening cheaper Load blocks after b.
-					if (pt[1].actionType == blockActionCharge && pt[1].targetSOC > minSOCB+socTargetTolerancePct) ||
+					if (pt[1].actionType == blockActionCharge && !pt[1].isReserveRecoveryCharge(minSOCB)) ||
 						pt[1].actionType == blockActionStandby {
 						appendInterveningOffPeakHolds(baseTrial, b, len(blocks))
 					}

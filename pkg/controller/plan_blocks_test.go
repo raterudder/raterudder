@@ -3105,6 +3105,42 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		assert.Equal(t, wantChoicesB, gotChoicesB)
 		assert.Equal(t, wantScoreB, gotScoreB)
 	})
+
+	t.Run("ReserveRecoveryHelpers_ClassificationAndDeficitDetection", func(t *testing.T) {
+		t.Parallel()
+		assert.True(t, (blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}).isReserveRecoveryCharge(20.0))
+		assert.True(t, (blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0 + socTargetTolerancePct}).isReserveRecoveryCharge(20.0))
+		assert.False(t, (blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0 + socTargetTolerancePct + 0.1}).isReserveRecoveryCharge(20.0))
+		assert.False(t, (blockActionChoice{actionType: blockActionLoad, targetSOC: 20.0}).isReserveRecoveryCharge(20.0))
+
+		assert.True(t, (blockActionChoice{actionType: blockActionLoad}).canUpgradeToReserveRecovery())
+		assert.False(t, (blockActionChoice{actionType: blockActionStandby}).canUpgradeToReserveRecovery())
+		assert.False(t, (blockActionChoice{actionType: blockActionCharge, targetSOC: 20.0}).canUpgradeToReserveRecovery())
+		assert.False(t, (blockActionChoice{actionType: blockActionExport, targetSOC: 20.0}).canUpgradeToReserveRecovery())
+
+		it20 := planInterval{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, minSOC: 20.0}
+		deficitSt := planState{soc: 18.5}
+		withinTolSt := planState{soc: 20.0 - reserveDeficitChargeTolerancePct + 0.05}
+		loadAct := actionCandidate{batteryMode: types.BatteryModeLoad}
+		chargeAct := actionCandidate{batteryMode: types.BatteryModeChargeAny}
+		outageAct := actionCandidate{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonGridUnavailable}
+
+		assert.True(t, it20.isReserveDeficitStep(deficitSt, deficitSt, loadAct))
+		assert.False(t, it20.isReserveDeficitStep(deficitSt, withinTolSt, loadAct), "Recovering into tolerance by end of step clears deficit")
+		assert.False(t, it20.isReserveDeficitStep(withinTolSt, deficitSt, loadAct), "Starting within tolerance is not an entire-step deficit")
+		assert.False(t, it20.isReserveDeficitStep(deficitSt, deficitSt, chargeAct), "Active grid charge is exempt")
+		assert.False(t, it20.isReserveDeficitStep(deficitSt, deficitSt, outageAct), "Hard override reason is exempt")
+
+		blk := timelineBlock{startIdx: 0, endIdx: 1, minSOC: 20.0}
+		tl := []planInterval{it20, it20}
+		actsNoDeficit := []actionCandidate{chargeAct, loadAct}
+		statesRecovered := []planState{deficitSt, withinTolSt, withinTolSt}
+		assert.False(t, blk.hasReserveDeficitStep(actsNoDeficit, statesRecovered, tl))
+
+		actsDeficit := []actionCandidate{loadAct, loadAct}
+		statesDeficit := []planState{withinTolSt, deficitSt, deficitSt}
+		assert.True(t, blk.hasReserveDeficitStep(actsDeficit, statesDeficit, tl))
+	})
 }
 
 func TestOptimizeBlockTargets(t *testing.T) {
