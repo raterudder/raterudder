@@ -528,13 +528,10 @@ export const listUserSites = async (): Promise<UserSite[]> => {
     return response.json();
 };
 
-export const fetchModeling = async (siteID?: string, overrideHomeLoadPredictionStrategy?: string, regeneratePlan?: boolean): Promise<ForecastResponse> => {
+export const fetchModeling = async (siteID?: string, regeneratePlan?: boolean): Promise<ForecastResponse> => {
     const query = new URLSearchParams();
     if (siteID) {
         query.append('siteID', siteID);
-    }
-    if (overrideHomeLoadPredictionStrategy) {
-        query.append('overrideHomeLoadPredictionStrategy', overrideHomeLoadPredictionStrategy);
     }
     if (regeneratePlan) {
         query.append('regeneratePlan', 'true');

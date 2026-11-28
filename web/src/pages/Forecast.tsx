@@ -546,7 +546,6 @@ export const STALE_DASHBOARD_TIMEOUT_MS = STALE_FORECAST_TIMEOUT_MS;
 
 const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
-    const loadStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
     const [loading, setLoading] = useState(true);
     const [regenerating, setRegenerating] = useState(false);
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -560,8 +559,6 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     );
     const lastFetchTimeRef = useRef<number>(Date.now());
     const isRefreshRef = useRef(false);
-    const loadStrategyRef = useRef(loadStrategy);
-    loadStrategyRef.current = loadStrategy;
     const siteIDRef = useRef(siteID);
     siteIDRef.current = siteID;
 
@@ -599,13 +596,13 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    // Initial load on siteID change or settings strategy change: fetch matching forecast.
+    // Initial load on siteID change: fetch forecast.
     useEffect(() => {
         let isCancelled = false;
         const loadInitialData = async () => {
             setLoading(true);
             try {
-                const mod = await fetchModeling(siteID, loadStrategy);
+                const mod = await fetchModeling(siteID);
 
                 if (!isCancelled) {
                     setRawModelingData(mod);
@@ -626,7 +623,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         return () => {
             isCancelled = true;
         };
-    }, [siteID, loadStrategy]);
+    }, [siteID]);
 
     // Refresh forecast when returning to page after timeout
     useEffect(() => {
@@ -638,7 +635,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             setLoading(true);
             setError(null);
             try {
-                const mod = await fetchModeling(siteIDRef.current, loadStrategyRef.current);
+                const mod = await fetchModeling(siteIDRef.current);
                 if (!isCancelled) {
                     setRawModelingData(mod);
                     setNowMs(Date.now());
@@ -665,7 +662,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         setRegenerating(true);
         setError(null);
         try {
-            const mod = await fetchModeling(siteID, loadStrategy, true);
+            const mod = await fetchModeling(siteID, true);
             setRawModelingData(mod);
             setNowMs(Date.now());
             lastFetchTimeRef.current = Date.now();

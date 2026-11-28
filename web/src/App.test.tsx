@@ -93,7 +93,7 @@ describe('App routing and viewSite parameter preservation', () => {
 
         await waitFor(() => {
             expect(window.location.pathname).toBe('/forecast');
-            expect(api.fetchModeling).toHaveBeenLastCalledWith('site1', expect.anything());
+            expect(api.fetchModeling).toHaveBeenLastCalledWith('site1');
         });
     });
 
